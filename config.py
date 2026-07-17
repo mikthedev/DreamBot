@@ -15,7 +15,9 @@ DATABASE_PATH = DATA_DIR / "dream_team.db"
 
 # Optional Netscape cookies file for YouTube (bot-hosting / datacenter IPs)
 _cookies_env = os.getenv("YTDLP_COOKIES", "").strip()
-YTDLP_COOKIES = Path(_cookies_env) if _cookies_env else BASE_DIR / "cookies.txt"
+YTDLP_COOKIES = (Path(_cookies_env) if _cookies_env else BASE_DIR / "cookies.txt").expanduser()
+if not YTDLP_COOKIES.is_absolute():
+    YTDLP_COOKIES = (BASE_DIR / YTDLP_COOKIES).resolve()
 
 # Discord nickname limit
 MAX_NICK_LENGTH = 32

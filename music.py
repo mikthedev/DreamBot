@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import time
 import traceback
@@ -31,14 +32,53 @@ YTDL_OPTS = {
     "default_search": "ytsearch1",
     "noplaylist": True,
     "extract_flat": False,
+    # Prefer clients that are less aggressive about bot checks on shared IPs.
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android_vr", "web", "mweb"],
+        }
+    },
 }
+
+_cookies_logged = False
+
+
+def _cookies_path() -> Path | None:
+    """Return cookies.txt if present (also try common misnamed uploads)."""
+    candidates = [
+        config.YTDLP_COOKIES,
+        config.BASE_DIR / "cookies.txt",
+        config.BASE_DIR / "cookie.txt",
+        config.BASE_DIR / "Cookies.txt",
+    ]
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.expanduser()
+        if not resolved.is_absolute():
+            resolved = (config.BASE_DIR / resolved).resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file() and resolved.stat().st_size > 0:
+            return resolved
+    return None
 
 
 def _ytdl_opts(**extra) -> dict:
+    global _cookies_logged
     opts = {**YTDL_OPTS, **extra}
-    cookies = config.YTDLP_COOKIES
-    if cookies.is_file():
+    cookies = _cookies_path()
+    if cookies is not None:
         opts["cookiefile"] = str(cookies)
+        if not _cookies_logged:
+            log.info("yt-dlp using cookiefile %s (%s bytes)", cookies, cookies.stat().st_size)
+            _cookies_logged = True
+    elif not _cookies_logged:
+        log.warning(
+            "No cookies.txt found at %s — YouTube may block this host IP",
+            config.YTDLP_COOKIES,
+        )
+        _cookies_logged = True
     return opts
 
 _YT_HEADERS = (
@@ -713,7 +753,23 @@ class MusicCog(commands.Cog):
             position = await player.enqueue(track)
         except Exception as exc:
             log.warning("/play failed: %r\n%s", exc, traceback.format_exc())
-            await interaction.followup.send(f"Couldn't play that: {exc}")
+            msg = str(exc)
+            # Strip ANSI color codes from yt-dlp errors for Discord.
+            msg = re.sub(r"\x1b\[[0-9;]*m", "", msg)
+            if "Sign in to confirm" in msg or "not a bot" in msg:
+                cookies = _cookies_path()
+                if cookies is None:
+                    msg = (
+                        "YouTube blocked this server IP. Upload a Netscape "
+                        "`cookies.txt` next to bot.py (see README), then restart."
+                    )
+                else:
+                    msg = (
+                        "YouTube still blocked playback even with cookies. "
+                        "Re-export cookies via private window → youtube.com/robots.txt "
+                        "(throwaway account), replace cookies.txt, restart."
+                    )
+            await interaction.followup.send(f"Couldn't play that: {msg}")
             return
 
         if was_idle:

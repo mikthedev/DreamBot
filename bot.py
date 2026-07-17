@@ -42,7 +42,7 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(PanelCog(self))
 
     async def on_ready(self) -> None:
-        # Guild sync is instant; global sync can take up to ~1 hour.
+        # Sync to each guild only (instant). Clear globals so Discord doesn't show duplicates.
         synced_total = 0
         for guild in self.guilds:
             try:
@@ -53,22 +53,18 @@ class DreamTeamBot(commands.Bot):
             except Exception as exc:
                 log.warning("Guild sync failed for %s: %s", guild.name, exc)
         try:
-            global_synced = await self.tree.sync()
-            log.info(
-                "Logged in as %s (%s) — guild cmds≈%s, global=%s",
-                self.user,
-                self.user.id,
-                synced_total,
-                len(global_synced),
-            )
+            if self.application_id:
+                await self.http.bulk_upsert_global_commands(self.application_id, [])
+                log.info("Cleared global slash commands (avoids duplicates)")
         except Exception as exc:
-            log.warning("Global sync failed: %s", exc)
-            log.info(
-                "Logged in as %s (%s) — guild cmds≈%s",
-                self.user,
-                self.user.id,
-                synced_total,
-            )
+            log.warning("Could not clear global commands: %s", exc)
+
+        log.info(
+            "Logged in as %s (%s) — %s guild command(s) synced",
+            self.user,
+            self.user.id,
+            synced_total,
+        )
         try:
             from rich_presence import presence_idle, update_presence
 

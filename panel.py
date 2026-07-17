@@ -9,13 +9,67 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
-from birthdays import celebration_embed
+from birthdays import Birthday, celebration_embed
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.panel")
 
 BRAND = discord.Color.from_rgb(14, 28, 48)
 ACCENT = discord.Color.from_rgb(46, 230, 166)
+
+
+def birthdays_list_embed(guild: discord.Guild, bot) -> discord.Embed:
+    rows = bot.db.all_birthdays(guild.id)
+    embed = discord.Embed(
+        title="Saved birthdays",
+        color=ACCENT,
+        description=f"**{len(rows)}** birthday(s) in the database for this server.",
+    )
+    embed.set_author(name="Dream Team")
+
+    if not rows:
+        embed.description = (
+            "No birthdays saved yet.\n"
+            "Members use `/setbirthday`, or admins set one with `/setbirthday` + member."
+        )
+        return embed
+
+    # Sort by month, day
+    def sort_key(row) -> tuple:
+        return (int(row["month"]), int(row["day"]), int(row["user_id"]))
+
+    lines: list[str] = []
+    for row in sorted(rows, key=sort_key):
+        bday = Birthday(month=row["month"], day=row["day"], year=row["year"])
+        member = guild.get_member(row["user_id"])
+        real_name = bot.db.get_real_name(guild.id, row["user_id"])
+        who = member.mention if member else f"`user {row['user_id']}`"
+        extra = f" · {real_name}" if real_name else ""
+        lines.append(f"**{bday.display()}** — {who}{extra}")
+
+    # Discord field value max 1024; split across fields if needed
+    chunk: list[str] = []
+    chunk_len = 0
+    field_i = 1
+    for line in lines:
+        add = len(line) + 1
+        if chunk and chunk_len + add > 1000:
+            embed.add_field(
+                name=f"List ({field_i})",
+                value="\n".join(chunk),
+                inline=False,
+            )
+            field_i += 1
+            chunk = []
+            chunk_len = 0
+        chunk.append(line)
+        chunk_len += add
+    if chunk:
+        name = "List" if field_i == 1 else f"List ({field_i})"
+        embed.add_field(name=name, value="\n".join(chunk), inline=False)
+
+    embed.set_footer(text="Dates shown as DD.MM (or DD.MM.YYYY if year was saved)")
+    return embed
 
 
 def help_embed(*, is_admin: bool) -> discord.Embed:
@@ -44,6 +98,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
             name="Admins",
             value=(
                 "`/panel` — **control panel** (recommended)\n"
+                "`/birthdays` — list all saved birthdays\n"
                 "`/setname` `/setwelcome` `/setautorole`\n"
                 "`/setbirthdaychannel` `/setmusicchannel`\n"
                 "`/syncnicks` `/testpresence`"
@@ -226,6 +281,16 @@ class AdminPanelView(discord.ui.View):
         embed.set_footer(text="Preview only — not posted to the birthday channel")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @discord.ui.button(label="View birthdays", style=discord.ButtonStyle.primary, row=0)
+    async def view_birthdays(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.send_message(
+            embed=birthdays_list_embed(interaction.guild, self.bot),
+            ephemeral=True,
+        )
+
     @discord.ui.button(
         label="Announce today's birthdays", style=discord.ButtonStyle.success, row=0
     )
@@ -245,7 +310,7 @@ class AdminPanelView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Bot status", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Bot status", style=discord.ButtonStyle.secondary, row=1)
     async def bot_status(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -274,7 +339,7 @@ class AdminPanelView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Music channel", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Music channel", style=discord.ButtonStyle.secondary, row=2)
     async def set_music_channel(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -356,5 +421,27 @@ class PanelCog(commands.Cog):
         await interaction.response.send_message(
             embed=panel_embed(interaction.guild, self.bot),
             view=AdminPanelView(self.bot),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="birthdays",
+        description="Admin: list all saved birthdays in this server",
+    )
+    async def birthdays_cmd(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message(
+                "Use this inside the server.", ephemeral=True
+            )
+            return
+        if not is_guild_manager(interaction.user):
+            await interaction.response.send_message(
+                "Only the server owner or admins can view all birthdays.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=birthdays_list_embed(interaction.guild, self.bot),
             ephemeral=True,
         )

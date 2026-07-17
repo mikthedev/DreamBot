@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import shutil
 import stat
+import subprocess
 import tempfile
 import urllib.request
 import zipfile
@@ -51,22 +53,42 @@ def deno_bin_path() -> Path:
 
 def _download_file(url: str, dest: Path) -> None:
     """Download url to dest; prefer curl/wget (more reliable SSL on some hosts)."""
-    import subprocess
-
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if shutil_which := __import__("shutil").which:
-        curl = shutil_which("curl")
-        if curl:
+    errors: list[str] = []
+
+    curl = shutil.which("curl")
+    if curl:
+        try:
             subprocess.run(
                 [curl, "-fsSL", url, "-o", str(dest)],
                 check=True,
+                capture_output=True,
+                text=True,
             )
             return
-        wget = shutil_which("wget")
-        if wget:
-            subprocess.run([wget, "-qO", str(dest), url], check=True)
+        except Exception as exc:
+            errors.append(f"curl: {exc}")
+
+    wget = shutil.which("wget")
+    if wget:
+        try:
+            subprocess.run(
+                [wget, "-qO", str(dest), url],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
             return
-    urllib.request.urlretrieve(url, dest)
+        except Exception as exc:
+            errors.append(f"wget: {exc}")
+
+    try:
+        urllib.request.urlretrieve(url, dest)
+        return
+    except Exception as exc:
+        errors.append(f"urllib: {exc}")
+
+    raise RuntimeError("All download methods failed: " + " | ".join(errors))
 
 
 def ensure_deno() -> Path | None:
@@ -83,6 +105,13 @@ def ensure_deno() -> Path | None:
         return dest
 
     target = _deno_target()
+    log.info(
+        "Deno bootstrap: system=%s machine=%s target=%s dest=%s",
+        platform.system(),
+        platform.machine(),
+        target,
+        dest,
+    )
     if target is None:
         log.warning(
             "Cannot auto-install Deno on %s/%s — YouTube may fail",
@@ -100,19 +129,52 @@ def ensure_deno() -> Path | None:
     log.info("Downloading Deno %s for YouTube (%s)…", DENO_VERSION, target)
 
     try:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            zip_path = tmp_path / "deno.zip"
+        # Keep zip + extract on the same filesystem as dest (avoid cross-device rename).
+        zip_path = dest.parent / "deno-download.zip"
+        try:
             _download_file(url, zip_path)
             with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(tmp_path)
-            extracted = tmp_path / "deno"
+                names = zf.namelist()
+                log.info("Deno zip entries: %s", names[:5])
+                zf.extractall(dest.parent)
+            extracted = dest.parent / "deno"
             if not extracted.is_file():
+                # Some zips nest the binary
+                candidates = list(dest.parent.rglob("deno"))
+                extracted = next((p for p in candidates if p.is_file()), None)
+            if extracted is None or not extracted.is_file():
                 raise FileNotFoundError("deno binary missing from release zip")
-            extracted.replace(dest)
+            if extracted.resolve() != dest.resolve():
+                shutil.copy2(extracted, dest)
+                if extracted != dest:
+                    try:
+                        extracted.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        finally:
+            zip_path.unlink(missing_ok=True)
+
+        # Sanity-check the binary runs
+        probe = subprocess.run(
+            [str(dest), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if probe.returncode != 0:
+            raise RuntimeError(
+                f"deno --version failed (code={probe.returncode}): "
+                f"{probe.stderr or probe.stdout}"
+            )
+        log.info("Deno probe OK: %s", (probe.stdout or "").splitlines()[:1])
     except Exception as exc:
         log.exception("Failed to install Deno: %s", exc)
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
         _ensured = None
         return None
 

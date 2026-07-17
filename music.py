@@ -121,11 +121,28 @@ def _ytdl_opts(*, use_cookies: bool = True, **extra) -> dict:
             )
             _deno_logged = True
 
+    if config.YTDLP_PROXY:
+        opts["proxy"] = config.YTDLP_PROXY
+
     cookies = _cookies_path() if use_cookies else None
     if cookies is not None:
         opts["cookiefile"] = str(cookies)
         if not _cookies_logged:
-            log.info("yt-dlp using cookiefile %s (%s bytes)", cookies, cookies.stat().st_size)
+            text = cookies.read_text(encoding="utf-8", errors="ignore")
+            has_login = any(
+                token in text
+                for token in ("LOGIN_INFO", "__Secure-3PSID", "SID\t", "SAPISID")
+            )
+            log.info(
+                "yt-dlp using cookiefile %s (%s bytes, login_cookies=%s)",
+                cookies,
+                cookies.stat().st_size,
+                has_login,
+            )
+            if not has_login:
+                log.warning(
+                    "cookies.txt has no YouTube login cookies — re-export while signed in"
+                )
             _cookies_logged = True
     elif use_cookies and not _cookies_logged:
         log.warning(
@@ -346,7 +363,7 @@ def _clip(text: str, limit: int) -> str:
 async def resolve_track(query: str, requester: discord.Member) -> Track:
     source = _detect_source(query)
 
-    info = await asyncio.to_thread(_extract_info, query, for_stream=False)
+    info = await asyncio.to_thread(_extract_info, query, for_stream=True)
     webpage = info.get("webpage_url") or info.get("original_url") or query
     extractor = (info.get("extractor") or "").lower()
     resolved_source = source
@@ -898,18 +915,27 @@ class MusicCog(commands.Cog):
             msg = str(exc)
             # Strip ANSI color codes from yt-dlp errors for Discord.
             msg = re.sub(r"\x1b\[[0-9;]*m", "", msg)
-            if "Sign in to confirm" in msg or "not a bot" in msg:
-                cookies = _cookies_path()
-                if cookies is None:
+            if (
+                "Sign in to confirm" in msg
+                or "not a bot" in msg
+                or "no playable formats" in msg.lower()
+            ):
+                if config.YTDLP_PROXY:
                     msg = (
-                        "YouTube blocked this server IP. Upload a Netscape "
-                        "`cookies.txt` next to bot.py (see README), then restart."
+                        "YouTube still blocked this host even with proxy/cookies. "
+                        "Try a residential proxy or play SoundCloud instead."
+                    )
+                elif _cookies_path() is None:
+                    msg = (
+                        "YouTube blocked this server’s datacenter IP. "
+                        "Upload a fresh `cookies.txt`, or set `YTDLP_PROXY` "
+                        "to a residential proxy. SoundCloud links still work."
                     )
                 else:
                     msg = (
-                        "YouTube still blocked playback even with cookies. "
-                        "Re-export cookies via private window → youtube.com/robots.txt "
-                        "(throwaway account), replace cookies.txt, restart."
+                        "YouTube blocked this server IP — cookies aren’t enough "
+                        "(common on bot-hosting). Re-export cookies (private window → "
+                        "youtube.com/robots.txt), or set `YTDLP_PROXY`, or use SoundCloud."
                     )
             await interaction.followup.send(f"Couldn't play that: {msg}")
             return

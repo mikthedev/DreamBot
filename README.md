@@ -35,6 +35,14 @@ Optional: set `START_BASH_FILE=start.sh` to install Deno before Python boots.
 
 Keep `cookies.txt` in the server root as before.
 
+If YouTube still says “not a bot” with cookies (common on shared hosting IPs), set a residential proxy in `.env`:
+
+```bash
+YTDLP_PROXY=socks5://user:pass@host:port
+```
+
+SoundCloud URLs work without this.
+
 ## Admin commands
 
 Only the **server owner** or members with **Administrator** / **Manage Server**:

@@ -19,6 +19,9 @@ YTDLP_COOKIES = (Path(_cookies_env) if _cookies_env else BASE_DIR / "cookies.txt
 if not YTDLP_COOKIES.is_absolute():
     YTDLP_COOKIES = (BASE_DIR / YTDLP_COOKIES).resolve()
 
+# Optional HTTP(S)/SOCKS proxy for yt-dlp (residential recommended on bot-hosting)
+YTDLP_PROXY = os.getenv("YTDLP_PROXY", "").strip()
+
 # Discord nickname limit
 MAX_NICK_LENGTH = 32
 

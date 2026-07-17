@@ -51,6 +51,9 @@ Only the **server owner** or members with **Administrator** / **Manage Server**:
 |---|---|
 | `/panel` | **Control panel** — buttons for setup, birthday preview & announce |
 | `/help` | Command guide (admins get a button into the panel) |
+| `/birthdayannounce` | Post a signup panel so members can add their birthday easily |
+| `/birthdayannouncepreview` | Preview that signup panel (only you see it) |
+| `/birthdays` | List all saved birthdays |
 | `/setwelcome #channel` | Where join prompts are posted |
 | `/setautorole @Role` | Role given to new members |
 | `/setname @user Миша` | Set/fix someone’s real name + nickname |

@@ -19,6 +19,15 @@ from database import Database
 from music import MusicCog
 from nicknames import build_nickname, display_base, is_guild_manager
 from panel import PanelCog
+from birthday_signup import (
+    BirthdaySignupView,
+    OpenSignupModalView,
+    SIGNUP_EMOJI,
+    is_signup_message,
+    post_signup_announcement,
+    require_admin as require_signup_admin,
+    signup_embed,
+)
 
 log = logging.getLogger("dream_team")
 
@@ -35,6 +44,8 @@ class DreamTeamBot(commands.Bot):
         self.db = db
 
     async def setup_hook(self) -> None:
+        # Persistent birthday signup button (works after restarts)
+        self.add_view(BirthdaySignupView())
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(MusicCog(self))
@@ -493,6 +504,106 @@ class BirthdayCog(commands.Cog):
 
         self.bot.db.clear_birthday(interaction.guild_id, interaction.user.id)
         await interaction.response.send_message("Birthday removed.", ephemeral=True)
+
+    @app_commands.command(
+        name="birthdayannounce",
+        description="Admin: post a signup panel so members can add their birthday",
+    )
+    @app_commands.describe(
+        channel="Where to post (default: this channel)",
+    )
+    async def birthdayannounce(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | None = None,
+    ) -> None:
+        err = require_signup_admin(interaction)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message(
+                "Pick a text channel.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            msg = await post_signup_announcement(target)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"I can't post in {target.mention}.", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            f"Posted birthday signup in {target.mention}: {msg.jump_url}",
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="birthdayannouncepreview",
+        description="Admin: preview the birthday signup panel (only you see it)",
+    )
+    async def birthdayannouncepreview(self, interaction: discord.Interaction) -> None:
+        err = require_signup_admin(interaction)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            content=(
+                "**Preview** — this is what members will see. "
+                "The button works here too if you want to test the form."
+            ),
+            embed=signup_embed(preview=True),
+            view=BirthdaySignupView(),
+            ephemeral=True,
+        )
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        if payload.user_id == (self.bot.user.id if self.bot.user else None):
+            return
+        if str(payload.emoji) != SIGNUP_EMOJI:
+            return
+        if payload.guild_id is None:
+            return
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+        if self.bot.user is None or not is_signup_message(message, self.bot.user.id):
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        member = guild.get_member(payload.user_id) if guild else None
+        if member is None or member.bot:
+            return
+
+        # Prefer a quiet DM with a form button; fall back to channel mention.
+        view = OpenSignupModalView()
+        prompt = (
+            f"Hey {member.display_name}! Tap the button to add your birthday "
+            f"(format `DD.MM`, example `15.03`)."
+        )
+        try:
+            await member.send(prompt, view=view)
+        except discord.Forbidden:
+            try:
+                await channel.send(
+                    f"{member.mention} tap below to add your birthday:",
+                    view=view,
+                    delete_after=120,
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     @tasks.loop(hours=1)
     async def check_birthdays(self) -> None:

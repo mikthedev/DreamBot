@@ -10,6 +10,11 @@ from discord.ext import commands
 
 import config
 from birthdays import Birthday, celebration_embed
+from birthday_signup import (
+    BirthdaySignupView,
+    post_signup_announcement,
+    signup_embed,
+)
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.panel")
@@ -99,6 +104,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
             value=(
                 "`/panel` — **control panel** (recommended)\n"
                 "`/birthdays` — list all saved birthdays\n"
+                "`/birthdayannounce` — post signup panel for members\n"
                 "`/setname` `/setwelcome` `/setautorole`\n"
                 "`/setbirthdaychannel` `/setmusicchannel`\n"
                 "`/syncnicks` `/testpresence`"
@@ -291,8 +297,22 @@ class AdminPanelView(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(label="Preview signup", style=discord.ButtonStyle.primary, row=0)
+    async def preview_signup(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.send_message(
+            content=(
+                "**Preview** — members will see this panel. "
+                "Try the button to test the form."
+            ),
+            embed=signup_embed(preview=True),
+            view=BirthdaySignupView(),
+            ephemeral=True,
+        )
+
     @discord.ui.button(
-        label="Announce today's birthdays", style=discord.ButtonStyle.success, row=0
+        label="Announce today's birthdays", style=discord.ButtonStyle.success, row=1
     )
     async def announce_today(
         self, interaction: discord.Interaction, button: discord.ui.Button
@@ -310,6 +330,26 @@ class AdminPanelView(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(
+        label="Post signup panel", style=discord.ButtonStyle.success, row=1
+    )
+    async def post_signup(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        assert isinstance(interaction.channel, discord.TextChannel)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            msg = await post_signup_announcement(interaction.channel)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I can't post in this channel.", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            f"Posted here: {msg.jump_url}",
+            ephemeral=True,
+        )
+
     @discord.ui.button(label="Bot status", style=discord.ButtonStyle.secondary, row=1)
     async def bot_status(
         self, interaction: discord.Interaction, button: discord.ui.Button
@@ -319,7 +359,7 @@ class AdminPanelView(discord.ui.View):
         embed.title = "Dream Team — Bot status"
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="Birthday channel", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Birthday channel", style=discord.ButtonStyle.secondary, row=2)
     async def set_bday_channel(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -329,7 +369,7 @@ class AdminPanelView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Welcome channel", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Welcome channel", style=discord.ButtonStyle.secondary, row=2)
     async def set_welcome_channel(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -349,7 +389,7 @@ class AdminPanelView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Auto-role", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Auto-role", style=discord.ButtonStyle.secondary, row=3)
     async def set_auto_role(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:

@@ -19,8 +19,12 @@ YTDLP_COOKIES = (Path(_cookies_env) if _cookies_env else BASE_DIR / "cookies.txt
 if not YTDLP_COOKIES.is_absolute():
     YTDLP_COOKIES = (BASE_DIR / YTDLP_COOKIES).resolve()
 
-# Optional HTTP(S)/SOCKS proxy for yt-dlp (residential recommended on bot-hosting)
-YTDLP_PROXY = os.getenv("YTDLP_PROXY", "").strip()
+# Optional HTTP(S)/SOCKS proxy for yt-dlp (residential recommended on bot-hosting).
+# Example: socks5://user:pass@host:port — must include a URL scheme.
+# Do NOT put the panel/SFTP host (e.g. prem-eu5.bot-hosting.cloud:20790) here.
+_proxy_raw = os.getenv("YTDLP_PROXY", "").strip()
+YTDLP_PROXY_INVALID = bool(_proxy_raw) and "://" not in _proxy_raw
+YTDLP_PROXY = "" if YTDLP_PROXY_INVALID else _proxy_raw
 
 # Discord nickname limit
 MAX_NICK_LENGTH = 32

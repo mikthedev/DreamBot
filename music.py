@@ -123,6 +123,12 @@ def _ytdl_opts(*, use_cookies: bool = True, **extra) -> dict:
 
     if config.YTDLP_PROXY:
         opts["proxy"] = config.YTDLP_PROXY
+        log.info("yt-dlp proxy enabled (%s)", config.YTDLP_PROXY.split("@")[-1])
+    elif config.YTDLP_PROXY_INVALID:
+        log.warning(
+            "YTDLP_PROXY looks invalid (missing http:// or socks5://). "
+            "Panel addresses like prem-eu5.bot-hosting.cloud are NOT proxies — ignored."
+        )
 
     cookies = _cookies_path() if use_cookies else None
     if cookies is not None:

@@ -49,6 +49,26 @@ def deno_bin_path() -> Path:
     return config.BASE_DIR / ".local" / "bin" / "deno"
 
 
+def _download_file(url: str, dest: Path) -> None:
+    """Download url to dest; prefer curl/wget (more reliable SSL on some hosts)."""
+    import subprocess
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if shutil_which := __import__("shutil").which:
+        curl = shutil_which("curl")
+        if curl:
+            subprocess.run(
+                [curl, "-fsSL", url, "-o", str(dest)],
+                check=True,
+            )
+            return
+        wget = shutil_which("wget")
+        if wget:
+            subprocess.run([wget, "-qO", str(dest), url], check=True)
+            return
+    urllib.request.urlretrieve(url, dest)
+
+
 def ensure_deno() -> Path | None:
     """Return path to deno, downloading once into .local/bin if needed."""
     global _ensured
@@ -83,7 +103,7 @@ def ensure_deno() -> Path | None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             zip_path = tmp_path / "deno.zip"
-            urllib.request.urlretrieve(url, zip_path)
+            _download_file(url, zip_path)
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp_path)
             extracted = tmp_path / "deno"

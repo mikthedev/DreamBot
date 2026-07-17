@@ -33,6 +33,14 @@ YTDL_OPTS = {
     "extract_flat": False,
 }
 
+
+def _ytdl_opts(**extra) -> dict:
+    opts = {**YTDL_OPTS, **extra}
+    cookies = config.YTDLP_COOKIES
+    if cookies.is_file():
+        opts["cookiefile"] = str(cookies)
+    return opts
+
 _YT_HEADERS = (
     "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n"
@@ -138,7 +146,7 @@ async def resolve_track(query: str, requester: discord.Member) -> Track:
     source = _detect_source(query)
 
     def extract() -> dict:
-        opts = {**YTDL_OPTS, "skip_download": True}
+        opts = _ytdl_opts(skip_download=True)
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(query, download=False)
             if info is None:
@@ -177,7 +185,7 @@ async def resolve_track(query: str, requester: discord.Member) -> Track:
 
 async def resolve_stream_url(track: Track) -> str:
     def extract_url() -> str:
-        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+        with yt_dlp.YoutubeDL(_ytdl_opts()) as ydl:
             info = ydl.extract_info(track.query, download=False)
             if info is None:
                 raise ValueError("Could not refresh audio stream.")

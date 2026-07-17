@@ -84,6 +84,8 @@ While a track plays, the bot uses a **Discord RPC-style Rich Presence** (`rich_p
 
 Needs **FFmpeg** installed on the machine, plus bot permissions: Connect, Speak, Use Voice Activity.
 
+If YouTube returns “Sign in to confirm you’re not a bot” (common on shared hosting), export cookies from a logged-in browser (Firefox + “Get cookies.txt LOCALLY”), save as `cookies.txt` next to the bot, and restart. Cookies expire periodically — re-export when playback breaks again.
+
 ## Nickname rules
 
 - On join: bot asks for a real name → sets `DiscordName (RealName)`

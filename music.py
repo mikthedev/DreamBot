@@ -26,7 +26,9 @@ import config
 log = logging.getLogger("dream_team.music")
 
 YTDL_OPTS = {
-    "format": "bestaudio[ext=m4a]/bestaudio/best",
+    # Prefer audio-only; fall back broadly — android_vr/web clients expose
+    # different containers, and FFmpeg re-encodes anyway for Discord.
+    "format": "bestaudio/best",
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch1",

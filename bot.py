@@ -42,13 +42,33 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(PanelCog(self))
 
     async def on_ready(self) -> None:
-        synced = await self.tree.sync()
-        log.info(
-            "Logged in as %s (%s) — %s slash command(s)",
-            self.user,
-            self.user.id,
-            len(synced),
-        )
+        # Guild sync is instant; global sync can take up to ~1 hour.
+        synced_total = 0
+        for guild in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                synced_total += len(synced)
+                log.info("Synced %s command(s) to guild %s", len(synced), guild.name)
+            except Exception as exc:
+                log.warning("Guild sync failed for %s: %s", guild.name, exc)
+        try:
+            global_synced = await self.tree.sync()
+            log.info(
+                "Logged in as %s (%s) — guild cmds≈%s, global=%s",
+                self.user,
+                self.user.id,
+                synced_total,
+                len(global_synced),
+            )
+        except Exception as exc:
+            log.warning("Global sync failed: %s", exc)
+            log.info(
+                "Logged in as %s (%s) — guild cmds≈%s",
+                self.user,
+                self.user.id,
+                synced_total,
+            )
         try:
             from rich_presence import presence_idle, update_presence
 

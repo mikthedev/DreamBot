@@ -5,6 +5,7 @@ __pycache__/
 *.db
 .venv/
 venv/
+.local/
 .DS_Store
 data/
 *.log

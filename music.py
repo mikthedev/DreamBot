@@ -35,8 +35,8 @@ YTDL_OPTS = {
     "extract_flat": False,
     # Don't abort when the selector misses — we'll pick a URL ourselves.
     "ignore_no_formats_error": True,
-    # YouTube now requires EJS challenge solving for many formats.
-    "js_runtimes": {"deno": {}, "node": {}},
+    # YouTube challenge solving — Deno path is set in _ytdl_opts() when present.
+    "js_runtimes": {"deno": {}},
     "remote_components": {"ejs:github"},
     "extractor_args": {
         "youtube": {
@@ -78,6 +78,14 @@ def _cookies_path() -> Path | None:
 def _ytdl_opts(**extra) -> dict:
     global _cookies_logged
     opts = {**YTDL_OPTS, **extra}
+
+    # Prefer the Deno binary shipped by start.sh on Python-only hosts.
+    deno_local = config.BASE_DIR / ".local" / "bin" / "deno"
+    if deno_local.is_file():
+        opts["js_runtimes"] = {"deno": {"path": str(deno_local)}}
+    else:
+        opts["js_runtimes"] = {"deno": {}, "node": {}}
+
     cookies = _cookies_path()
     if cookies is not None:
         opts["cookiefile"] = str(cookies)

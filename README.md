@@ -27,13 +27,11 @@ cp .env.example .env
 python bot.py
 ```
 
-### Bot-hosting (Python egg, no Node)
+### Bot-hosting (Python egg)
 
-YouTube needs a tiny **Deno** binary for yt-dlp’s JS challenges (the bot itself stays Python).
+YouTube needs a small **Deno** binary for yt-dlp’s JS challenges. The bot downloads it automatically into `.local/bin/` on first start (no Node required).
 
-1. Set panel **Startup** → `START_BASH_FILE` = `start.sh`
-2. Keep `BOT_PY_FILE` = `bot.py`
-3. Restart once — `start.sh` downloads Deno into `.local/bin/` then launches the bot
+Optional: set `START_BASH_FILE=start.sh` to install Deno before Python boots.
 
 Keep `cookies.txt` in the server root as before.
 

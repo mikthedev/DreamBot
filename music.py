@@ -22,6 +22,7 @@ from rich_presence import (
 import yt_dlp
 
 import config
+from deno_runtime import ensure_deno, deno_bin_path
 
 log = logging.getLogger("dream_team.music")
 
@@ -35,7 +36,7 @@ YTDL_OPTS = {
     "extract_flat": False,
     # Don't abort when the selector misses — we'll pick a URL ourselves.
     "ignore_no_formats_error": True,
-    # YouTube challenge solving — Deno path is set in _ytdl_opts() when present.
+    # YouTube challenge solving — Deno path is set in _ytdl_opts().
     "js_runtimes": {"deno": {}},
     "remote_components": {"ejs:github"},
     "extractor_args": {
@@ -52,6 +53,7 @@ YTDL_OPTS = {
 }
 
 _cookies_logged = False
+_deno_logged = False
 
 
 def _cookies_path() -> Path | None:
@@ -76,15 +78,29 @@ def _cookies_path() -> Path | None:
 
 
 def _ytdl_opts(**extra) -> dict:
-    global _cookies_logged
+    global _cookies_logged, _deno_logged
     opts = {**YTDL_OPTS, **extra}
 
-    # Prefer the Deno binary shipped by start.sh on Python-only hosts.
-    deno_local = config.BASE_DIR / ".local" / "bin" / "deno"
-    if deno_local.is_file():
-        opts["js_runtimes"] = {"deno": {"path": str(deno_local)}}
+    deno = ensure_deno()
+    if deno is not None:
+        opts["js_runtimes"] = {"deno": {"path": str(deno)}}
+        if not _deno_logged:
+            log.info("yt-dlp JS runtime: deno at %s", deno)
+            _deno_logged = True
     else:
-        opts["js_runtimes"] = {"deno": {}, "node": {}}
+        which = shutil.which("deno") or shutil.which("node")
+        if which:
+            name = "deno" if which.endswith("deno") else "node"
+            opts["js_runtimes"] = {name: {"path": which}}
+            if not _deno_logged:
+                log.info("yt-dlp JS runtime: %s at %s", name, which)
+                _deno_logged = True
+        elif not _deno_logged:
+            log.warning(
+                "No Deno/Node for yt-dlp (expected at %s) — YouTube formats may be empty",
+                deno_bin_path(),
+            )
+            _deno_logged = True
 
     cookies = _cookies_path()
     if cookies is not None:
@@ -133,7 +149,7 @@ def _pick_stream_url(info: dict) -> str:
             return direct
         raise ValueError(
             "Could not get an audio stream for that track "
-            "(YouTube returned no playable formats — JS solver/Node may be missing)."
+            "(YouTube returned no playable formats — Deno JS solver may be missing)."
         )
 
     def score(fmt: dict) -> tuple:
@@ -588,7 +604,12 @@ class MusicCog(commands.Cog):
         self._showing_full_idle = True
         self._last_idle_rotate_at = time.time()
         self.idle_watchdog.start()
-        log.info("Music cog loaded (ffmpeg=%s)", FFMPEG_EXECUTABLE)
+        deno = ensure_deno()
+        log.info(
+            "Music cog loaded (ffmpeg=%s, deno=%s)",
+            FFMPEG_EXECUTABLE,
+            deno or "missing",
+        )
 
     def cog_unload(self) -> None:
         self.idle_watchdog.cancel()

@@ -26,23 +26,26 @@ import config
 log = logging.getLogger("dream_team.music")
 
 YTDL_OPTS = {
-    # Progressive mux (18) + audio-only + any best — SABR clients often
-    # skip DASH URLs, leaving only a combined progressive format.
+    # Prefer audio; 18 = progressive mux fallback when DASH URLs are stripped.
     "format": "bestaudio/18/best/worst",
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch1",
     "noplaylist": True,
     "extract_flat": False,
-    # Prefer clients that still expose direct HTTPS URLs (avoid SABR-only web).
+    # Don't abort when the selector misses — we'll pick a URL ourselves.
+    "ignore_no_formats_error": True,
+    # YouTube now requires EJS challenge solving for many formats.
+    "js_runtimes": {"deno": {}, "node": {}},
+    "remote_components": {"ejs:github"},
     "extractor_args": {
         "youtube": {
             "player_client": [
                 "tv_downgraded",
                 "web_embedded",
                 "web_creator",
-                "mweb",
                 "android_vr",
+                "mweb",
             ],
         }
     },
@@ -101,18 +104,29 @@ def _unwrap_info(info: dict) -> dict:
     return info
 
 
-def _pick_stream_url(info: dict) -> str:
-    """Pick any format with a direct URL (audio-only preferred)."""
-    direct = info.get("url")
-    formats = info.get("formats") or []
-    if direct and not formats:
-        return direct
+def _is_playable_format(fmt: dict) -> bool:
+    if not isinstance(fmt, dict) or not fmt.get("url"):
+        return False
+    ext = (fmt.get("ext") or "").lower()
+    if ext in {"mhtml", "storyboard"}:
+        return False
+    protocol = (fmt.get("protocol") or "").lower()
+    if protocol.startswith("mhtml") or "storyboard" in protocol:
+        return False
+    return True
 
-    with_url = [f for f in formats if isinstance(f, dict) and f.get("url")]
-    if not with_url and direct:
-        return direct
-    if not with_url:
-        raise ValueError("Could not get an audio stream for that track.")
+
+def _pick_stream_url(info: dict) -> str:
+    """Pick any playable format with a direct URL (audio-only preferred)."""
+    formats = [f for f in (info.get("formats") or []) if _is_playable_format(f)]
+    direct = info.get("url")
+    if not formats:
+        if direct and not str(direct).endswith((".jpg", ".webp", ".png")):
+            return direct
+        raise ValueError(
+            "Could not get an audio stream for that track "
+            "(YouTube returned no playable formats — JS solver/Node may be missing)."
+        )
 
     def score(fmt: dict) -> tuple:
         vcodec = (fmt.get("vcodec") or "none").lower()
@@ -120,28 +134,37 @@ def _pick_stream_url(info: dict) -> str:
         abr = fmt.get("abr") or fmt.get("tbr") or 0
         return (audio_only, float(abr))
 
-    best = max(with_url, key=score)
-    return best["url"]
+    return max(formats, key=score)["url"]
 
 
 def _extract_info(query: str, *, for_stream: bool) -> dict:
-    """Run yt-dlp with format fallbacks when YouTube omits DASH URLs."""
-    format_tries = (
-        ["bestaudio/18/best/worst", "18/best/worst", "best/worst"]
-        if for_stream
-        else ["bestaudio/18/best/worst", "best/worst"]
-    )
+    """Extract metadata/stream info; never fail solely on format selector misses."""
+    client_tries: list[list[str] | None] = [
+        [
+            "tv_downgraded",
+            "web_embedded",
+            "web_creator",
+            "android_vr",
+            "mweb",
+        ],
+        ["android_vr", "tv_downgraded"],
+        None,  # yt-dlp defaults
+    ]
     last_exc: Exception | None = None
-    for fmt in format_tries:
+    for clients in client_tries:
         try:
-            opts = _ytdl_opts(skip_download=True, format=fmt)
-            if not for_stream:
-                opts["ignore_no_formats_error"] = True
+            opts = _ytdl_opts(skip_download=True)
+            if clients is not None:
+                opts["extractor_args"] = {"youtube": {"player_client": clients}}
             with yt_dlp.YoutubeDL(opts) as ydl:
-                return _unwrap_info(ydl.extract_info(query, download=False))
-        except Exception as exc:  # noqa: BLE001 — try next format selector
+                info = _unwrap_info(ydl.extract_info(query, download=False))
+            if for_stream:
+                # Validate early so we can try the next client set.
+                _pick_stream_url(info)
+            return info
+        except Exception as exc:  # noqa: BLE001 — try next client set
             last_exc = exc
-            log.debug("yt-dlp format %r failed for %s: %s", fmt, query, exc)
+            log.warning("yt-dlp extract failed (clients=%s): %s", clients, exc)
     assert last_exc is not None
     raise last_exc
 

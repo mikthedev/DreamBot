@@ -27,6 +27,8 @@ NICKNAME_SYNC_HOURS = 24
 
 # Rotate idle title every N seconds while nothing is playing
 IDLE_ROTATE_SECONDS = 90
+# Seconds after music stops before restoring full idle presence
+IDLE_AFTER_SECONDS = 120
 
 # Timeout waiting for a new member to type their real name (minutes)
 NAME_PROMPT_TIMEOUT_MINUTES = 30

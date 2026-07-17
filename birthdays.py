@@ -71,3 +71,26 @@ def celebration_message(mention: str, real_name: str | None) -> str:
         ),
     ]
     return random.choice(templates)
+
+
+def celebration_embed(
+    *,
+    mention: str,
+    real_name: str | None,
+    avatar_url: str | None = None,
+) -> "discord.Embed":
+    """Pretty birthday card for channel posts and previews."""
+    import discord
+
+    name = real_name or "friend"
+    embed = discord.Embed(
+        title="Happy Birthday!",
+        description=celebration_message(mention, real_name),
+        color=discord.Color.from_rgb(46, 230, 166),
+    )
+    embed.set_author(name="Dream Team")
+    embed.add_field(name="Celebrating", value=f"**{name}**", inline=True)
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+    embed.set_footer(text="Dream Team · Birthdays")
+    return embed

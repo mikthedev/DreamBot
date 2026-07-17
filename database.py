@@ -237,3 +237,23 @@ class Database:
         if not settings:
             return None, None
         return settings["now_playing_channel_id"], settings["now_playing_message_id"]
+
+    def guild_stats(self, guild_id: int) -> dict[str, int]:
+        with self.connect() as conn:
+            birthdays = conn.execute(
+                "SELECT COUNT(*) AS n FROM birthdays WHERE guild_id = ?",
+                (guild_id,),
+            ).fetchone()["n"]
+            names = conn.execute(
+                "SELECT COUNT(*) AS n FROM real_names WHERE guild_id = ?",
+                (guild_id,),
+            ).fetchone()["n"]
+            announced = conn.execute(
+                "SELECT COUNT(*) AS n FROM birthday_announcements WHERE guild_id = ?",
+                (guild_id,),
+            ).fetchone()["n"]
+        return {
+            "birthdays": int(birthdays),
+            "real_names": int(names),
+            "announcements": int(announced),
+        }

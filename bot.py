@@ -11,13 +11,14 @@ from discord.ext import commands, tasks
 import config
 from birthdays import (
     Birthday,
-    celebration_message,
+    celebration_embed,
     is_birthday_today,
     parse_birthday,
 )
 from database import Database
 from music import MusicCog
 from nicknames import build_nickname, display_base, is_guild_manager
+from panel import PanelCog
 
 log = logging.getLogger("dream_team")
 
@@ -38,6 +39,7 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(MusicCog(self))
         await self.add_cog(AdminCog(self))
+        await self.add_cog(PanelCog(self))
 
     async def on_ready(self) -> None:
         synced = await self.tree.sync()
@@ -310,6 +312,91 @@ class BirthdayCog(commands.Cog):
             return guild.system_channel
         return None
 
+    async def _post_birthday(
+        self,
+        channel: discord.TextChannel,
+        member: discord.Member,
+        *,
+        mark: bool = True,
+    ) -> bool:
+        real_name = self.bot.db.get_real_name(member.guild.id, member.id)
+        embed = celebration_embed(
+            mention=member.mention,
+            real_name=real_name,
+            avatar_url=member.display_avatar.url,
+        )
+        try:
+            await channel.send(content=member.mention, embed=embed)
+            if mark:
+                today = self._local_now().date()
+                self.bot.db.mark_birthday_announced(
+                    member.guild.id, member.id, today.year
+                )
+            return True
+        except discord.Forbidden:
+            log.warning("Cannot post birthday in %s", member.guild.name)
+        except discord.HTTPException as exc:
+            log.warning("Birthday announce failed: %s", exc)
+        return False
+
+    async def announce_member_if_today(
+        self, member: discord.Member, bday: Birthday
+    ) -> str | None:
+        """If bday is today, post celebration (once). Returns status note or None."""
+        today = self._local_now().date()
+        if not is_birthday_today(bday, today):
+            return None
+
+        channel = await self._birthday_channel(member.guild)
+        if channel is None:
+            return (
+                "It's their birthday today, but no birthday/welcome channel is set. "
+                "Use `/panel` → Birthday channel."
+            )
+
+        if self.bot.db.was_birthday_announced(
+            member.guild.id, member.id, today.year
+        ):
+            return f"Birthday already announced this year in {channel.mention}."
+
+        ok = await self._post_birthday(channel, member, mark=True)
+        if ok:
+            return f"Also posted today's celebration in {channel.mention}."
+        return f"Tried to post in {channel.mention} but Discord blocked it."
+
+    async def announce_todays_birthdays(
+        self, guild: discord.Guild, *, force: bool = False
+    ) -> tuple[int, str]:
+        """Post celebrations for everyone whose birthday is today."""
+        channel = await self._birthday_channel(guild)
+        if channel is None:
+            return 0, "No birthday channel (set it in `/panel`)."
+
+        today = self._local_now().date()
+        posted = 0
+        skipped = 0
+        for row in self.bot.db.all_birthdays(guild.id):
+            bday = Birthday(month=row["month"], day=row["day"], year=row["year"])
+            if not is_birthday_today(bday, today):
+                continue
+            if not force and self.bot.db.was_birthday_announced(
+                guild.id, row["user_id"], today.year
+            ):
+                skipped += 1
+                continue
+            member = guild.get_member(row["user_id"])
+            if member is None or member.bot:
+                continue
+            if await self._post_birthday(channel, member, mark=True):
+                posted += 1
+
+        detail = f"Channel: {channel.mention}."
+        if skipped:
+            detail += f" Skipped {skipped} already announced."
+        if posted == 0 and skipped == 0:
+            detail += " Nobody in the DB has a birthday today."
+        return posted, detail
+
     @app_commands.command(
         name="setbirthday",
         description="Save a birthday (DD.MM or DD.MM.YYYY)",
@@ -350,10 +437,13 @@ class BirthdayCog(commands.Cog):
         self.bot.db.set_birthday(
             interaction.guild_id, target.id, bday.month, bday.day, bday.year
         )
-        await interaction.response.send_message(
-            f"Saved birthday for {target.mention}: **{bday.display()}**",
-            ephemeral=True,
-        )
+
+        note = await self.announce_member_if_today(target, bday)
+        text = f"Saved birthday for {target.mention}: **{bday.display()}**"
+        if note:
+            text += f"\n{note}"
+
+        await interaction.response.send_message(text, ephemeral=True)
 
     @app_commands.command(name="mybirthday", description="Show your saved birthday")
     async def mybirthday(self, interaction: discord.Interaction) -> None:
@@ -394,34 +484,15 @@ class BirthdayCog(commands.Cog):
         if now.hour != config.BIRTHDAY_ANNOUNCE_HOUR:
             return
 
-        today = now.date()
         for guild in self.bot.guilds:
-            channel = await self._birthday_channel(guild)
-            if channel is None:
-                continue
-
-            for row in self.bot.db.all_birthdays(guild.id):
-                bday = Birthday(month=row["month"], day=row["day"], year=row["year"])
-                if not is_birthday_today(bday, today):
-                    continue
-                if self.bot.db.was_birthday_announced(guild.id, row["user_id"], today.year):
-                    continue
-
-                member = guild.get_member(row["user_id"])
-                if member is None or member.bot:
-                    continue
-
-                real_name = self.bot.db.get_real_name(guild.id, member.id)
-                message = celebration_message(member.mention, real_name)
-                try:
-                    await channel.send(message)
-                    self.bot.db.mark_birthday_announced(
-                        guild.id, member.id, today.year
-                    )
-                except discord.Forbidden:
-                    log.warning("Cannot post birthday in %s", guild.name)
-                except discord.HTTPException as exc:
-                    log.warning("Birthday announce failed: %s", exc)
+            posted, detail = await self.announce_todays_birthdays(guild, force=False)
+            if posted:
+                log.info(
+                    "Birthday run in %s: posted=%s (%s)",
+                    guild.name,
+                    posted,
+                    detail,
+                )
 
     @check_birthdays.before_loop
     async def before_birthday_check(self) -> None:
@@ -695,6 +766,7 @@ def main() -> None:
         )
 
     db = Database(config.DATABASE_PATH)
+    log.info("Database ready at %s", config.DATABASE_PATH.resolve())
     bot = DreamTeamBot(db)
     bot.run(config.DISCORD_TOKEN, log_handler=None)
 

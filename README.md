@@ -49,6 +49,8 @@ Only the **server owner** or members with **Administrator** / **Manage Server**:
 
 | Command | What it does |
 |---|---|
+| `/panel` | **Control panel** — buttons for setup, birthday preview & announce |
+| `/help` | Command guide (admins get a button into the panel) |
 | `/setwelcome #channel` | Where join prompts are posted |
 | `/setautorole @Role` | Role given to new members |
 | `/setname @user Миша` | Set/fix someone’s real name + nickname |
@@ -59,10 +61,14 @@ Only the **server owner** or members with **Administrator** / **Manage Server**:
 
 | Command | What it does |
 |---|---|
+| `/help` | How to use the bot |
 | `/setbirthday 15.03` | Save your birthday (`DD.MM` or `DD.MM.YYYY`) |
 | `/mybirthday` | Show your saved birthday |
 | `/clearbirthday` | Remove your birthday |
 
+If an admin sets someone’s birthday to **today**, the celebration posts immediately in the birthday channel (and still runs daily at the configured hour).
+
+SQLite database file: `data/dream_team.db` (created automatically; on bot-hosting: `/home/container/data/dream_team.db`). Use `/panel` → **Bot status** to see counts.
 ### Music (YouTube / SoundCloud)
 
 Join a voice channel, then:

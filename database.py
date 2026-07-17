@@ -62,6 +62,9 @@ class Database:
             self._ensure_column(conn, "guild_settings", "birthday_channel_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "now_playing_channel_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "now_playing_message_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "birthday_signup_title", "TEXT")
+            self._ensure_column(conn, "guild_settings", "birthday_signup_body", "TEXT")
+            self._ensure_column(conn, "guild_settings", "birthday_signup_footer", "TEXT")
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -213,6 +216,39 @@ class Database:
                 ON CONFLICT(guild_id) DO UPDATE SET birthday_channel_id = excluded.birthday_channel_id
                 """,
                 (guild_id, channel_id),
+            )
+
+    def get_birthday_signup_copy(self, guild_id: int) -> dict[str, str | None]:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return {"title": None, "body": None, "footer": None}
+        return {
+            "title": settings["birthday_signup_title"],
+            "body": settings["birthday_signup_body"],
+            "footer": settings["birthday_signup_footer"],
+        }
+
+    def set_birthday_signup_copy(
+        self,
+        guild_id: int,
+        *,
+        title: str | None,
+        body: str | None,
+        footer: str | None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id, birthday_signup_title, birthday_signup_body, birthday_signup_footer
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    birthday_signup_title = excluded.birthday_signup_title,
+                    birthday_signup_body = excluded.birthday_signup_body,
+                    birthday_signup_footer = excluded.birthday_signup_footer
+                """,
+                (guild_id, title, body, footer),
             )
 
     def set_now_playing_panel(

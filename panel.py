@@ -11,9 +11,7 @@ from discord.ext import commands
 import config
 from birthdays import Birthday, celebration_embed
 from birthday_signup import (
-    BirthdaySignupView,
-    post_signup_announcement,
-    signup_embed,
+    open_signup_composer,
 )
 from nicknames import is_guild_manager
 
@@ -301,14 +299,8 @@ class AdminPanelView(discord.ui.View):
     async def preview_signup(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        await interaction.response.send_message(
-            content=(
-                "**Preview** — members will see this panel. "
-                "Try the button to test the form."
-            ),
-            embed=signup_embed(preview=True),
-            view=BirthdaySignupView(),
-            ephemeral=True,
+        await open_signup_composer(
+            interaction, self.bot, channel=None, preview_only=True
         )
 
     @discord.ui.button(
@@ -336,18 +328,13 @@ class AdminPanelView(discord.ui.View):
     async def post_signup(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        assert isinstance(interaction.channel, discord.TextChannel)
-        await interaction.response.defer(ephemeral=True)
-        try:
-            msg = await post_signup_announcement(interaction.channel)
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "I can't post in this channel.", ephemeral=True
-            )
-            return
-        await interaction.followup.send(
-            f"Posted here: {msg.jump_url}",
-            ephemeral=True,
+        channel = (
+            interaction.channel
+            if isinstance(interaction.channel, discord.TextChannel)
+            else None
+        )
+        await open_signup_composer(
+            interaction, self.bot, channel=channel, preview_only=False
         )
 
     @discord.ui.button(label="Bot status", style=discord.ButtonStyle.secondary, row=1)

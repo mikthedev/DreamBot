@@ -24,9 +24,8 @@ from birthday_signup import (
     OpenSignupModalView,
     SIGNUP_EMOJI,
     is_signup_message,
-    post_signup_announcement,
+    open_signup_composer,
     require_admin as require_signup_admin,
-    signup_embed,
 )
 
 log = logging.getLogger("dream_team")
@@ -507,7 +506,7 @@ class BirthdayCog(commands.Cog):
 
     @app_commands.command(
         name="birthdayannounce",
-        description="Admin: post a signup panel so members can add their birthday",
+        description="Admin: compose & post a birthday signup panel (@ roles / everyone)",
     )
     @app_commands.describe(
         channel="Where to post (default: this channel)",
@@ -522,29 +521,22 @@ class BirthdayCog(commands.Cog):
             await interaction.response.send_message(err, ephemeral=True)
             return
 
-        target = channel or interaction.channel
-        if not isinstance(target, discord.TextChannel):
+        target = channel
+        if target is None and isinstance(interaction.channel, discord.TextChannel):
+            target = interaction.channel
+        if target is None:
             await interaction.response.send_message(
                 "Pick a text channel.", ephemeral=True
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
-        try:
-            msg = await post_signup_announcement(target)
-        except discord.Forbidden:
-            await interaction.followup.send(
-                f"I can't post in {target.mention}.", ephemeral=True
-            )
-            return
-        await interaction.followup.send(
-            f"Posted birthday signup in {target.mention}: {msg.jump_url}",
-            ephemeral=True,
+        await open_signup_composer(
+            interaction, self.bot, channel=target, preview_only=False
         )
 
     @app_commands.command(
         name="birthdayannouncepreview",
-        description="Admin: preview the birthday signup panel (only you see it)",
+        description="Admin: preview/edit the birthday signup panel (only you see it)",
     )
     async def birthdayannouncepreview(self, interaction: discord.Interaction) -> None:
         err = require_signup_admin(interaction)
@@ -552,14 +544,8 @@ class BirthdayCog(commands.Cog):
             await interaction.response.send_message(err, ephemeral=True)
             return
 
-        await interaction.response.send_message(
-            content=(
-                "**Preview** — this is what members will see. "
-                "The button works here too if you want to test the form."
-            ),
-            embed=signup_embed(preview=True),
-            view=BirthdaySignupView(),
-            ephemeral=True,
+        await open_signup_composer(
+            interaction, self.bot, channel=None, preview_only=True
         )
 
     @commands.Cog.listener()

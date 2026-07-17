@@ -26,18 +26,24 @@ import config
 log = logging.getLogger("dream_team.music")
 
 YTDL_OPTS = {
-    # Prefer audio-only; fall back broadly — android_vr/web clients expose
-    # different containers, and FFmpeg re-encodes anyway for Discord.
-    "format": "bestaudio/best",
+    # Progressive mux (18) + audio-only + any best — SABR clients often
+    # skip DASH URLs, leaving only a combined progressive format.
+    "format": "bestaudio/18/best/worst",
     "quiet": True,
     "no_warnings": True,
     "default_search": "ytsearch1",
     "noplaylist": True,
     "extract_flat": False,
-    # Prefer clients that are less aggressive about bot checks on shared IPs.
+    # Prefer clients that still expose direct HTTPS URLs (avoid SABR-only web).
     "extractor_args": {
         "youtube": {
-            "player_client": ["android_vr", "web", "mweb"],
+            "player_client": [
+                "tv_downgraded",
+                "web_embedded",
+                "web_creator",
+                "mweb",
+                "android_vr",
+            ],
         }
     },
 }
@@ -82,6 +88,62 @@ def _ytdl_opts(**extra) -> dict:
         )
         _cookies_logged = True
     return opts
+
+
+def _unwrap_info(info: dict) -> dict:
+    if info is None:
+        raise ValueError("Nothing found for that link/search.")
+    if "entries" in info:
+        entries = [e for e in info["entries"] if e]
+        if not entries:
+            raise ValueError("Nothing found for that search.")
+        return entries[0]
+    return info
+
+
+def _pick_stream_url(info: dict) -> str:
+    """Pick any format with a direct URL (audio-only preferred)."""
+    direct = info.get("url")
+    formats = info.get("formats") or []
+    if direct and not formats:
+        return direct
+
+    with_url = [f for f in formats if isinstance(f, dict) and f.get("url")]
+    if not with_url and direct:
+        return direct
+    if not with_url:
+        raise ValueError("Could not get an audio stream for that track.")
+
+    def score(fmt: dict) -> tuple:
+        vcodec = (fmt.get("vcodec") or "none").lower()
+        audio_only = 1 if vcodec in {"none", "n/a"} else 0
+        abr = fmt.get("abr") or fmt.get("tbr") or 0
+        return (audio_only, float(abr))
+
+    best = max(with_url, key=score)
+    return best["url"]
+
+
+def _extract_info(query: str, *, for_stream: bool) -> dict:
+    """Run yt-dlp with format fallbacks when YouTube omits DASH URLs."""
+    format_tries = (
+        ["bestaudio/18/best/worst", "18/best/worst", "best/worst"]
+        if for_stream
+        else ["bestaudio/18/best/worst", "best/worst"]
+    )
+    last_exc: Exception | None = None
+    for fmt in format_tries:
+        try:
+            opts = _ytdl_opts(skip_download=True, format=fmt)
+            if not for_stream:
+                opts["ignore_no_formats_error"] = True
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return _unwrap_info(ydl.extract_info(query, download=False))
+        except Exception as exc:  # noqa: BLE001 — try next format selector
+            last_exc = exc
+            log.debug("yt-dlp format %r failed for %s: %s", fmt, query, exc)
+    assert last_exc is not None
+    raise last_exc
 
 _YT_HEADERS = (
     "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -187,20 +249,7 @@ def _clip(text: str, limit: int) -> str:
 async def resolve_track(query: str, requester: discord.Member) -> Track:
     source = _detect_source(query)
 
-    def extract() -> dict:
-        opts = _ytdl_opts(skip_download=True)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(query, download=False)
-            if info is None:
-                raise ValueError("Nothing found for that link/search.")
-            if "entries" in info:
-                entries = [e for e in info["entries"] if e]
-                if not entries:
-                    raise ValueError("Nothing found for that search.")
-                info = entries[0]
-            return info
-
-    info = await asyncio.to_thread(extract)
+    info = await asyncio.to_thread(_extract_info, query, for_stream=False)
     webpage = info.get("webpage_url") or info.get("original_url") or query
     extractor = (info.get("extractor") or "").lower()
     resolved_source = source
@@ -227,19 +276,8 @@ async def resolve_track(query: str, requester: discord.Member) -> Track:
 
 async def resolve_stream_url(track: Track) -> str:
     def extract_url() -> str:
-        with yt_dlp.YoutubeDL(_ytdl_opts()) as ydl:
-            info = ydl.extract_info(track.query, download=False)
-            if info is None:
-                raise ValueError("Could not refresh audio stream.")
-            if "entries" in info:
-                entries = [e for e in info["entries"] if e]
-                if not entries:
-                    raise ValueError("Could not refresh audio stream.")
-                info = entries[0]
-            url = info.get("url")
-            if not url:
-                raise ValueError("Could not get an audio stream for that track.")
-            return url
+        info = _extract_info(track.query, for_stream=True)
+        return _pick_stream_url(info)
 
     return await asyncio.to_thread(extract_url)
 

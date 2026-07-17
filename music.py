@@ -26,27 +26,46 @@ from deno_runtime import ensure_deno, deno_bin_path
 
 log = logging.getLogger("dream_team.music")
 
+
+class _YTDLLogger:
+    """Pipe yt-dlp messages into our logger (JS solve / SABR warnings matter)."""
+
+    def debug(self, msg: str) -> None:
+        if "Solving JS challenges" in msg or "[jsc:" in msg or "PO Token" in msg:
+            log.info("yt-dlp: %s", msg)
+        else:
+            log.debug("yt-dlp: %s", msg)
+
+    def info(self, msg: str) -> None:
+        log.info("yt-dlp: %s", msg)
+
+    def warning(self, msg: str) -> None:
+        log.warning("yt-dlp: %s", msg)
+
+    def error(self, msg: str) -> None:
+        log.error("yt-dlp: %s", msg)
+
+
 YTDL_OPTS = {
     # Prefer audio; 18 = progressive mux fallback when DASH URLs are stripped.
     "format": "bestaudio/18/best/worst",
     "quiet": True,
-    "no_warnings": True,
+    "no_warnings": False,
+    "logger": _YTDLLogger(),
     "default_search": "ytsearch1",
     "noplaylist": True,
     "extract_flat": False,
     # Don't abort when the selector misses — we'll pick a URL ourselves.
     "ignore_no_formats_error": True,
-    # YouTube challenge solving — Deno path is set in _ytdl_opts().
+    # EJS scripts come from yt-dlp-ejs (requirements); Deno path set in _ytdl_opts().
     "js_runtimes": {"deno": {}},
-    "remote_components": {"ejs:github"},
     "extractor_args": {
         "youtube": {
             "player_client": [
+                "android_vr",
                 "tv_downgraded",
                 "web_embedded",
                 "web_creator",
-                "android_vr",
-                "mweb",
             ],
         }
     },
@@ -77,7 +96,7 @@ def _cookies_path() -> Path | None:
     return None
 
 
-def _ytdl_opts(**extra) -> dict:
+def _ytdl_opts(*, use_cookies: bool = True, **extra) -> dict:
     global _cookies_logged, _deno_logged
     opts = {**YTDL_OPTS, **extra}
 
@@ -102,13 +121,13 @@ def _ytdl_opts(**extra) -> dict:
             )
             _deno_logged = True
 
-    cookies = _cookies_path()
+    cookies = _cookies_path() if use_cookies else None
     if cookies is not None:
         opts["cookiefile"] = str(cookies)
         if not _cookies_logged:
             log.info("yt-dlp using cookiefile %s (%s bytes)", cookies, cookies.stat().st_size)
             _cookies_logged = True
-    elif not _cookies_logged:
+    elif use_cookies and not _cookies_logged:
         log.warning(
             "No cookies.txt found at %s — YouTube may block this host IP",
             config.YTDLP_COOKIES,
@@ -128,8 +147,16 @@ def _unwrap_info(info: dict) -> dict:
     return info
 
 
+def _format_media_url(fmt: dict) -> str | None:
+    for key in ("url", "manifest_url"):
+        val = fmt.get(key)
+        if isinstance(val, str) and val.startswith("http"):
+            return val
+    return None
+
+
 def _is_playable_format(fmt: dict) -> bool:
-    if not isinstance(fmt, dict) or not fmt.get("url"):
+    if not isinstance(fmt, dict) or not _format_media_url(fmt):
         return False
     ext = (fmt.get("ext") or "").lower()
     if ext in {"mhtml", "storyboard"}:
@@ -140,16 +167,36 @@ def _is_playable_format(fmt: dict) -> bool:
     return True
 
 
+def _log_format_summary(info: dict, *, label: str) -> None:
+    formats = info.get("formats") or []
+    playable = [f for f in formats if _is_playable_format(f)]
+    sample = [
+        f"{f.get('format_id')}:{f.get('ext')}:{f.get('protocol')}"
+        for f in playable[:6]
+    ]
+    log.warning(
+        "yt-dlp formats (%s): total=%s playable=%s sample=%s",
+        label,
+        len(formats),
+        len(playable),
+        sample,
+    )
+
+
 def _pick_stream_url(info: dict) -> str:
     """Pick any playable format with a direct URL (audio-only preferred)."""
     formats = [f for f in (info.get("formats") or []) if _is_playable_format(f)]
     direct = info.get("url")
     if not formats:
-        if direct and not str(direct).endswith((".jpg", ".webp", ".png")):
+        if (
+            isinstance(direct, str)
+            and direct.startswith("http")
+            and not direct.endswith((".jpg", ".webp", ".png"))
+        ):
             return direct
         raise ValueError(
             "Could not get an audio stream for that track "
-            "(YouTube returned no playable formats — Deno JS solver may be missing)."
+            "(YouTube returned no playable formats)."
         )
 
     def score(fmt: dict) -> tuple:
@@ -158,37 +205,40 @@ def _pick_stream_url(info: dict) -> str:
         abr = fmt.get("abr") or fmt.get("tbr") or 0
         return (audio_only, float(abr))
 
-    return max(formats, key=score)["url"]
+    best = max(formats, key=score)
+    url = _format_media_url(best)
+    assert url is not None
+    return url
 
 
 def _extract_info(query: str, *, for_stream: bool) -> dict:
     """Extract metadata/stream info; never fail solely on format selector misses."""
     client_tries: list[list[str] | None] = [
-        [
-            "tv_downgraded",
-            "web_embedded",
-            "web_creator",
-            "android_vr",
-            "mweb",
-        ],
         ["android_vr", "tv_downgraded"],
+        ["tv_downgraded", "web_embedded", "web_creator", "android_vr"],
+        ["web_safari", "web_embedded"],
         None,  # yt-dlp defaults
     ]
+    # Cookies from a home IP often yield SABR-only empty formats on datacenter hosts.
+    cookie_tries = (False, True) if _cookies_path() else (False,)
+
     last_exc: Exception | None = None
-    for clients in client_tries:
-        try:
-            opts = _ytdl_opts(skip_download=True)
-            if clients is not None:
-                opts["extractor_args"] = {"youtube": {"player_client": clients}}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = _unwrap_info(ydl.extract_info(query, download=False))
-            if for_stream:
-                # Validate early so we can try the next client set.
-                _pick_stream_url(info)
-            return info
-        except Exception as exc:  # noqa: BLE001 — try next client set
-            last_exc = exc
-            log.warning("yt-dlp extract failed (clients=%s): %s", clients, exc)
+    for use_cookies in cookie_tries:
+        for clients in client_tries:
+            label = f"cookies={use_cookies} clients={clients}"
+            try:
+                opts = _ytdl_opts(use_cookies=use_cookies, skip_download=True)
+                if clients is not None:
+                    opts["extractor_args"] = {"youtube": {"player_client": clients}}
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = _unwrap_info(ydl.extract_info(query, download=False))
+                if for_stream:
+                    _log_format_summary(info, label=label)
+                    _pick_stream_url(info)
+                return info
+            except Exception as exc:  # noqa: BLE001 — try next strategy
+                last_exc = exc
+                log.warning("yt-dlp extract failed (%s): %s", label, exc)
     assert last_exc is not None
     raise last_exc
 

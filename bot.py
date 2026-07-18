@@ -19,6 +19,7 @@ from database import Database
 from music import MusicCog
 from nicknames import build_nickname, display_base, is_guild_manager
 from panel import PanelCog
+from anniversary import AnniversaryCog
 from birthday_signup import (
     BirthdaySignupView,
     OpenSignupModalView,
@@ -47,6 +48,7 @@ class DreamTeamBot(commands.Bot):
         self.add_view(BirthdaySignupView())
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
+        await self.add_cog(AnniversaryCog(self))
         await self.add_cog(MusicCog(self))
         await self.add_cog(AdminCog(self))
         await self.add_cog(PanelCog(self))

@@ -13,6 +13,7 @@ from birthdays import Birthday, celebration_embed
 from birthday_signup import (
     open_signup_composer,
 )
+from anniversary import open_anniversary_composer
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.panel")
@@ -109,6 +110,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
                 "`/panel` — **control panel** (recommended)\n"
                 "`/birthdays` — list all saved birthdays\n"
                 "`/birthdayannounce` — post signup panel for members\n"
+                "`/anniversarypreview` `/anniversarypost` — server anniversary\n"
                 "`/setname` `/setwelcome` `/setautorole`\n"
                 "`/setbirthdaychannel` `/setmusicchannel`\n"
                 "`/syncnicks` `/testpresence`"
@@ -164,7 +166,8 @@ def panel_embed(guild: discord.Guild, bot) -> discord.Embed:
         value=(
             f"Timezone **{config.BIRTHDAY_TIMEZONE}** · "
             f"announce at **{config.BIRTHDAY_ANNOUNCE_HOUR:02d}:00** local\n"
-            "Setting someone’s birthday to **today** also posts immediately."
+            "Setting someone’s birthday to **today** also posts immediately.\n"
+            "Server anniversary: **28.06** each year (founded 2017)."
         ),
         inline=False,
     )
@@ -307,6 +310,31 @@ class AdminPanelView(discord.ui.View):
     ) -> None:
         await open_signup_composer(
             interaction, self.bot, channel=None, preview_only=True
+        )
+
+    @discord.ui.button(
+        label="Anniversary", style=discord.ButtonStyle.primary, row=3
+    )
+    async def anniversary_preview(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await open_anniversary_composer(
+            interaction, self.bot, channel=None, preview_only=True
+        )
+
+    @discord.ui.button(
+        label="Post anniversary", style=discord.ButtonStyle.success, row=3
+    )
+    async def anniversary_post(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        channel = (
+            interaction.channel
+            if isinstance(interaction.channel, discord.TextChannel)
+            else None
+        )
+        await open_anniversary_composer(
+            interaction, self.bot, channel=channel, preview_only=False
         )
 
     @discord.ui.button(

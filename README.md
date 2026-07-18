@@ -54,6 +54,8 @@ Only the **server owner** or members with **Administrator** / **Manage Server**:
 | `/birthdayannounce` | Compose & post signup panel (edit text, @everyone / @role) |
 | `/birthdayannouncepreview` | Preview/edit that panel (only you see it) |
 | `/birthdays` | List all saved birthdays |
+| `/anniversarypreview` | Preview/edit yearly Dream Team anniversary (28.06.2017) |
+| `/anniversarypost` | Compose & post anniversary (for testing or manual post) |
 | `/setwelcome #channel` | Where join prompts are posted |
 | `/setautorole @Role` | Role given to new members |
 | `/setname @user Миша` | Set/fix someone’s real name + nickname |

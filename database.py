@@ -66,6 +66,19 @@ class Database:
             self._ensure_column(conn, "guild_settings", "birthday_signup_body", "TEXT")
             self._ensure_column(conn, "guild_settings", "birthday_signup_footer", "TEXT")
             self._ensure_column(conn, "birthdays", "set_by_admin", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "guild_settings", "anniversary_title", "TEXT")
+            self._ensure_column(conn, "guild_settings", "anniversary_body", "TEXT")
+            self._ensure_column(conn, "guild_settings", "anniversary_footer", "TEXT")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS anniversary_announcements (
+                    guild_id INTEGER NOT NULL,
+                    year INTEGER NOT NULL,
+                    announced_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (guild_id, year)
+                )
+                """
+            )
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -278,6 +291,60 @@ class Database:
                     now_playing_message_id = excluded.now_playing_message_id
                 """,
                 (guild_id, channel_id, message_id),
+            )
+
+    def get_anniversary_copy(self, guild_id: int) -> dict[str, str | None]:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return {"title": None, "body": None, "footer": None}
+        return {
+            "title": settings["anniversary_title"],
+            "body": settings["anniversary_body"],
+            "footer": settings["anniversary_footer"],
+        }
+
+    def set_anniversary_copy(
+        self,
+        guild_id: int,
+        *,
+        title: str | None,
+        body: str | None,
+        footer: str | None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id, anniversary_title, anniversary_body, anniversary_footer
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    anniversary_title = excluded.anniversary_title,
+                    anniversary_body = excluded.anniversary_body,
+                    anniversary_footer = excluded.anniversary_footer
+                """,
+                (guild_id, title, body, footer),
+            )
+
+    def was_anniversary_announced(self, guild_id: int, year: int) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM anniversary_announcements
+                WHERE guild_id = ? AND year = ?
+                """,
+                (guild_id, year),
+            ).fetchone()
+        return row is not None
+
+    def mark_anniversary_announced(self, guild_id: int, year: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO anniversary_announcements (guild_id, year)
+                VALUES (?, ?)
+                """,
+                (guild_id, year),
             )
 
     def get_now_playing_panel(self, guild_id: int) -> tuple[int | None, int | None]:

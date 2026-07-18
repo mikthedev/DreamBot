@@ -273,7 +273,12 @@ class WelcomeCog(commands.Cog):
             return
 
         self.bot.db.set_birthday(
-            member.guild.id, member.id, bday.month, bday.day, bday.year
+            member.guild.id,
+            member.id,
+            bday.month,
+            bday.day,
+            bday.year,
+            set_by_admin=False,
         )
         await destination.send(
             f"{member.mention} Birthday saved: **{bday.display()}**. "
@@ -460,16 +465,31 @@ class BirthdayCog(commands.Cog):
             )
             return
 
-        self.bot.db.set_birthday(
-            interaction.guild_id, target.id, bday.month, bday.day, bday.year
+        admin_setting_other = (
+            member is not None and member.id != interaction.user.id
         )
+        if admin_setting_other:
+            self.bot.db.set_birthday(
+                interaction.guild_id,
+                target.id,
+                bday.month,
+                bday.day,
+                bday.year,
+                set_by_admin=True,
+            )
+            note = await self.announce_member_if_today(target, bday)
+            text = (
+                f"Saved birthday for {target.mention}: **{bday.display()}** "
+                "(locked as admin-set — they can still change it if wrong)."
+            )
+            if note:
+                text += f"\n{note}"
+            await interaction.response.send_message(text, ephemeral=True)
+            return
 
-        note = await self.announce_member_if_today(target, bday)
-        text = f"Saved birthday for {target.mention}: **{bday.display()}**"
-        if note:
-            text += f"\n{note}"
+        from birthday_signup import save_own_birthday
 
-        await interaction.response.send_message(text, ephemeral=True)
+        await save_own_birthday(interaction, bday)
 
     @app_commands.command(name="mybirthday", description="Show your saved birthday")
     async def mybirthday(self, interaction: discord.Interaction) -> None:
@@ -488,8 +508,14 @@ class BirthdayCog(commands.Cog):
             return
 
         bday = Birthday(month=row["month"], day=row["day"], year=row["year"])
+        admin_note = ""
+        try:
+            if row["set_by_admin"]:
+                admin_note = " _(set by an admin)_"
+        except (IndexError, KeyError, TypeError):
+            pass
         await interaction.response.send_message(
-            f"Your birthday: **{bday.display()}**",
+            f"Your birthday: **{bday.display()}**{admin_note}",
             ephemeral=True,
         )
 

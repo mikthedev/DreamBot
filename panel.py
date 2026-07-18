@@ -48,7 +48,13 @@ def birthdays_list_embed(guild: discord.Guild, bot) -> discord.Embed:
         real_name = bot.db.get_real_name(guild.id, row["user_id"])
         who = member.mention if member else f"`user {row['user_id']}`"
         extra = f" · {real_name}" if real_name else ""
-        lines.append(f"**{bday.display()}** — {who}{extra}")
+        admin_tag = ""
+        try:
+            if row["set_by_admin"]:
+                admin_tag = " · _admin_"
+        except (IndexError, KeyError, TypeError):
+            pass
+        lines.append(f"**{bday.display()}** — {who}{extra}{admin_tag}")
 
     # Discord field value max 1024; split across fields if needed
     chunk: list[str] = []

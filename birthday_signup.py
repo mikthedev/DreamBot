@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import discord
 
-from birthdays import parse_birthday
+from birthdays import parse_birthday, Birthday
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.birthday_signup")
@@ -114,24 +114,131 @@ class BirthdaySignupModal(discord.ui.Modal, title="Add your birthday"):
             )
             return
 
+        await save_own_birthday(interaction, bday)
+
+
+def _row_admin_locked(row) -> bool:
+    if row is None:
+        return False
+    try:
+        return bool(row["set_by_admin"])
+    except (IndexError, KeyError, TypeError):
+        return False
+
+
+def _birthday_from_row(row) -> Birthday:
+    return Birthday(month=row["month"], day=row["day"], year=row["year"])
+
+
+class ConfirmReplaceAdminBirthdayView(discord.ui.View):
+    """User confirms replacing an admin-set birthday."""
+
+    def __init__(self, pending: Birthday) -> None:
+        super().__init__(timeout=180)
+        self.pending = pending
+
+    @discord.ui.button(
+        label="Yes, change my birthday",
+        style=discord.ButtonStyle.danger,
+    )
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message(
+                "Use this inside the server.", ephemeral=True
+            )
+            return
+
         bot = interaction.client
         bot.db.set_birthday(
             interaction.guild_id,
             interaction.user.id,
-            bday.month,
-            bday.day,
-            bday.year,
+            self.pending.month,
+            self.pending.day,
+            self.pending.year,
+            set_by_admin=False,
         )
-
         note = None
         birthday_cog = bot.get_cog("BirthdayCog")
         if birthday_cog is not None:
-            note = await birthday_cog.announce_member_if_today(interaction.user, bday)
-
-        text = f"Saved — your birthday is **{bday.display()}**. Thanks!"
+            note = await birthday_cog.announce_member_if_today(
+                interaction.user, self.pending
+            )
+        text = (
+            f"Updated — your birthday is now **{self.pending.display()}** "
+            "(no longer locked to the admin entry)."
+        )
         if note:
             text += f"\n{note}"
-        await interaction.response.send_message(text, ephemeral=True)
+        for child in self.children:
+            child.disabled = True  # type: ignore[union-attr]
+        await interaction.response.edit_message(content=text, view=self)
+
+    @discord.ui.button(label="Keep admin date", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        for child in self.children:
+            child.disabled = True  # type: ignore[union-attr]
+        await interaction.response.edit_message(
+            content="Okay — kept the birthday set by an admin.",
+            view=self,
+        )
+
+
+async def save_own_birthday(interaction: discord.Interaction, bday: Birthday) -> None:
+    """Save the interacting user's birthday, respecting admin locks."""
+    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        await interaction.response.send_message(
+            "Use this inside the server.", ephemeral=True
+        )
+        return
+
+    bot = interaction.client
+    existing = bot.db.get_birthday(interaction.guild_id, interaction.user.id)
+    if _row_admin_locked(existing):
+        current = _birthday_from_row(existing)
+        if (
+            current.month == bday.month
+            and current.day == bday.day
+            and current.year == bday.year
+        ):
+            await interaction.response.send_message(
+                f"Your birthday is already **{current.display()}** "
+                "(set by an admin).",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            (
+                f"Your birthday was added by an admin as **{current.display()}**.\n"
+                f"You entered **{bday.display()}**.\n\n"
+                "If the admin date is wrong, you can change it:"
+            ),
+            view=ConfirmReplaceAdminBirthdayView(bday),
+            ephemeral=True,
+        )
+        return
+
+    bot.db.set_birthday(
+        interaction.guild_id,
+        interaction.user.id,
+        bday.month,
+        bday.day,
+        bday.year,
+        set_by_admin=False,
+    )
+    note = None
+    birthday_cog = bot.get_cog("BirthdayCog")
+    if birthday_cog is not None:
+        note = await birthday_cog.announce_member_if_today(interaction.user, bday)
+
+    text = f"Saved — your birthday is **{bday.display()}**. Thanks!"
+    if note:
+        text += f"\n{note}"
+    await interaction.response.send_message(text, ephemeral=True)
 
 
 class BirthdaySignupView(discord.ui.View):

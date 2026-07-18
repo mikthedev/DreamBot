@@ -65,6 +65,7 @@ class Database:
             self._ensure_column(conn, "guild_settings", "birthday_signup_title", "TEXT")
             self._ensure_column(conn, "guild_settings", "birthday_signup_body", "TEXT")
             self._ensure_column(conn, "guild_settings", "birthday_signup_footer", "TEXT")
+            self._ensure_column(conn, "birthdays", "set_by_admin", "INTEGER NOT NULL DEFAULT 0")
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -111,25 +112,33 @@ class Database:
         month: int,
         day: int,
         year: int | None = None,
+        *,
+        set_by_admin: bool = False,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO birthdays (guild_id, user_id, month, day, year, updated_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now'))
+                INSERT INTO birthdays (
+                    guild_id, user_id, month, day, year, set_by_admin, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(guild_id, user_id) DO UPDATE SET
                     month = excluded.month,
                     day = excluded.day,
                     year = excluded.year,
+                    set_by_admin = excluded.set_by_admin,
                     updated_at = datetime('now')
                 """,
-                (guild_id, user_id, month, day, year),
+                (guild_id, user_id, month, day, year, 1 if set_by_admin else 0),
             )
 
     def get_birthday(self, guild_id: int, user_id: int) -> sqlite3.Row | None:
         with self.connect() as conn:
             return conn.execute(
-                "SELECT month, day, year FROM birthdays WHERE guild_id = ? AND user_id = ?",
+                """
+                SELECT month, day, year, set_by_admin
+                FROM birthdays WHERE guild_id = ? AND user_id = ?
+                """,
                 (guild_id, user_id),
             ).fetchone()
 
@@ -144,7 +153,7 @@ class Database:
         with self.connect() as conn:
             return conn.execute(
                 """
-                SELECT user_id, month, day, year FROM birthdays
+                SELECT user_id, month, day, year, set_by_admin FROM birthdays
                 WHERE guild_id = ? AND month = ? AND day = ?
                 """,
                 (guild_id, month, day),
@@ -153,7 +162,10 @@ class Database:
     def all_birthdays(self, guild_id: int) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return conn.execute(
-                "SELECT user_id, month, day, year FROM birthdays WHERE guild_id = ?",
+                """
+                SELECT user_id, month, day, year, set_by_admin
+                FROM birthdays WHERE guild_id = ?
+                """,
                 (guild_id,),
             ).fetchall()
 

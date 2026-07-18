@@ -69,6 +69,7 @@ class Database:
             self._ensure_column(conn, "guild_settings", "anniversary_title", "TEXT")
             self._ensure_column(conn, "guild_settings", "anniversary_body", "TEXT")
             self._ensure_column(conn, "guild_settings", "anniversary_footer", "TEXT")
+            self._ensure_column(conn, "guild_settings", "welcome_message", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS anniversary_announcements (
@@ -324,6 +325,25 @@ class Database:
                     anniversary_footer = excluded.anniversary_footer
                 """,
                 (guild_id, title, body, footer),
+            )
+
+    def get_welcome_message(self, guild_id: int) -> str | None:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return None
+        value = settings["welcome_message"]
+        return value if value else None
+
+    def set_welcome_message(self, guild_id: int, message: str | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, welcome_message)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    welcome_message = excluded.welcome_message
+                """,
+                (guild_id, message),
             )
 
     def was_anniversary_announced(self, guild_id: int, year: int) -> bool:

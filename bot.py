@@ -154,13 +154,10 @@ class WelcomeCog(commands.Cog):
         return None
 
     async def _prompt_for_real_name(self, member: discord.Member) -> None:
-        prompt = (
-            f"Hello {member.mention}, welcome to **Dream Team**!\n"
-            "How should we call you? Reply with your **real name** "
-            "(for example: `Миша` or `Mike`).\n"
-            "Your server nickname will look like: "
-            f"`{display_base(member)} (YourName)`"
-        )
+        from panel import DEFAULT_WELCOME, render_welcome_prompt
+
+        template = self.bot.db.get_welcome_message(member.guild.id) or DEFAULT_WELCOME
+        prompt = render_welcome_prompt(template, member)
 
         channel = await self._resolve_welcome_channel(member.guild)
         destination: discord.abc.Messageable | None = channel
@@ -231,9 +228,8 @@ class WelcomeCog(commands.Cog):
 
         if announce_in:
             await announce_in.send(
-                f"Welcome, **{real_name}**! Your nickname is now `{nick}`.\n"
-                "Optional: reply with your birthday as `DD.MM` (or `skip`). "
-                "You can also set it later with `/setbirthday`."
+                f"You're in, **{real_name}** — nick set to `{nick}`.\n"
+                "Birthday? Reply `DD.MM`, or `skip`."
             )
             await self._prompt_for_birthday(member, announce_in)
         return True

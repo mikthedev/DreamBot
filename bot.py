@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -17,6 +16,7 @@ from birthdays import (
 )
 from database import Database
 from music import MusicCog
+from names import WelcomeNameView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
 from panel import PanelCog
 from anniversary import AnniversaryCog
@@ -31,8 +31,6 @@ from birthday_signup import (
 
 log = logging.getLogger("dream_team")
 
-NAME_PATTERN = re.compile(r"^[\w\s\-'.А-Яа-яЁёІіЇїЄєҐґ]{1,24}$", re.UNICODE)
-
 
 class DreamTeamBot(commands.Bot):
     def __init__(self, db: Database) -> None:
@@ -44,8 +42,9 @@ class DreamTeamBot(commands.Bot):
         self.db = db
 
     async def setup_hook(self) -> None:
-        # Persistent birthday signup button (works after restarts)
+        # Persistent buttons (work after restarts)
         self.add_view(BirthdaySignupView())
+        self.add_view(WelcomeNameView())
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(AnniversaryCog(self))
@@ -169,39 +168,34 @@ class WelcomeCog(commands.Cog):
                 log.warning("No welcome channel and cannot DM %s", member)
                 return
 
+        # Channel welcome gets a button; DMs fall back to a short reply
+        view = WelcomeNameView() if isinstance(destination, discord.TextChannel) else None
         try:
-            await destination.send(prompt)
+            await destination.send(prompt, view=view)
         except discord.Forbidden:
             log.warning("Cannot send welcome prompt in guild %s", member.guild.id)
             return
 
+        if view is not None:
+            return
+
         def check(message: discord.Message) -> bool:
-            if message.author.id != member.id:
-                return False
-            if isinstance(destination, discord.TextChannel):
-                return message.channel.id == destination.id
-            return isinstance(message.channel, discord.DMChannel)
+            return (
+                message.author.id == member.id
+                and isinstance(message.channel, discord.DMChannel)
+            )
 
         timeout = config.NAME_PROMPT_TIMEOUT_MINUTES * 60
         try:
             reply = await self.bot.wait_for("message", check=check, timeout=timeout)
         except asyncio.TimeoutError:
             await destination.send(
-                f"{member.mention} No name received in time. "
-                "An admin can set it later with `/setname`."
+                "No name yet — an admin can set it in `/panel` → Names."
             )
             return
-
-        real_name = reply.content.strip()
-        if not NAME_PATTERN.match(real_name):
-            await destination.send(
-                f"{member.mention} That name looks invalid. "
-                "Use 1–24 letters/numbers (spaces and `- ' .` allowed). "
-                "Ask an admin to run `/setname` if you need help."
-            )
-            return
-
-        await self._apply_real_name(member, real_name, announce_in=destination)
+        await self._apply_real_name(
+            member, reply.content.strip(), announce_in=destination
+        )
 
     async def _apply_real_name(
         self,
@@ -209,30 +203,18 @@ class WelcomeCog(commands.Cog):
         real_name: str,
         announce_in: discord.abc.Messageable | None = None,
     ) -> bool:
-        self.bot.db.set_real_name(member.guild.id, member.id, real_name)
-        nick = build_nickname(display_base(member), real_name)
-
-        try:
-            await member.edit(nick=nick, reason="Dream Team real-name nickname")
-        except discord.Forbidden:
-            msg = (
-                f"Saved **{real_name}**, but I can't change nicknames "
-                "(need **Manage Nicknames** and a role above the member)."
-            )
-            if announce_in:
-                await announce_in.send(f"{member.mention} {msg}")
-            return False
-        except discord.HTTPException as exc:
-            log.warning("Nickname edit failed: %s", exc)
-            return False
-
+        ok, detail = await apply_real_name(
+            self.bot,
+            member,
+            real_name,
+            reason="Dream Team real-name nickname",
+        )
         if announce_in:
-            await announce_in.send(
-                f"You're in, **{real_name}** — nick set to `{nick}`.\n"
-                "Birthday? Reply `DD.MM`, or `skip`."
-            )
-            await self._prompt_for_birthday(member, announce_in)
-        return True
+            await announce_in.send(f"{member.mention} {detail}")
+            if ok:
+                await announce_in.send("Birthday? Reply `DD.MM`, or `skip`.")
+                await self._prompt_for_birthday(member, announce_in)
+        return ok
 
     async def _prompt_for_birthday(
         self,
@@ -666,31 +648,13 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message(err, ephemeral=True)
             return
 
-        real_name = real_name.strip()
-        if not NAME_PATTERN.match(real_name):
-            await interaction.response.send_message(
-                "Invalid name. Use 1–24 letters/numbers (spaces and `- ' .` allowed).",
-                ephemeral=True,
-            )
-            return
-
-        self.bot.db.set_real_name(interaction.guild_id, member.id, real_name)
-        nick = build_nickname(display_base(member), real_name)
-
-        try:
-            await member.edit(nick=nick, reason=f"Set by {interaction.user}")
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "Saved the name, but I can't edit that member's nickname "
-                "(role hierarchy / Manage Nicknames).",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            f"Updated {member.mention} → `{nick}`",
-            ephemeral=True,
+        _ok, detail = await apply_real_name(
+            self.bot,
+            member,
+            real_name,
+            reason=f"Set by {interaction.user}",
         )
+        await interaction.response.send_message(detail, ephemeral=True)
 
     @app_commands.command(
         name="setautorole",

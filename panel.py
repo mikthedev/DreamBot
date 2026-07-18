@@ -20,6 +20,7 @@ from birthday_signup import (
     signup_embed,
 )
 from birthdays import Birthday, celebration_embed
+from names import SetNameModal, names_list_embed
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.panel")
@@ -28,11 +29,10 @@ BRAND = discord.Color.from_rgb(14, 28, 48)
 ACCENT = discord.Color.from_rgb(46, 230, 166)
 MUTED = discord.Color.from_rgb(90, 110, 140)
 
-# Shorter default — editable by admins via the panel
+# Short default — members tap the button; admins edit names in /panel → Names
 DEFAULT_WELCOME = (
     "Hey {mention} — welcome to **Dream Team**!\n"
-    "Reply with your **real name** (example: `Миша`).\n"
-    "Your nick will look like `{example_nick}`."
+    "Tap **Set my name** below (example: `Миша`)."
 )
 
 
@@ -104,7 +104,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
     if is_admin:
         embed.add_field(
             name="Admins",
-            value="`/panel` — one hub for setup, birthdays, anniversary, welcome text",
+            value="`/panel` — setup, names, birthdays, welcome, anniversary",
             inline=False,
         )
     return embed
@@ -192,8 +192,8 @@ def hub_welcome_embed(guild: discord.Guild, bot) -> discord.Embed:
     embed = discord.Embed(
         title="Welcome message",
         description=(
-            "Shown when someone joins (name prompt).\n"
-            "Keep it short — long walls of text feel overwhelming.\n\n"
+            "Shown when someone joins, with a **Set my name** button.\n"
+            "Keep it short — names are edited via the button or **Names** in this panel.\n\n"
             f"**Placeholders:** `{{mention}}` `{{display}}` `{{example_nick}}`"
         ),
         color=MUTED,
@@ -289,6 +289,8 @@ class AdminHubView(discord.ui.View):
             self._add_channel_controls()
         elif self.page == "birthdays":
             self._add_birthday_controls()
+        elif self.page == "names":
+            self._add_names_controls()
         elif self.page == "welcome":
             self._add_welcome_controls()
         elif self.page == "anniversary":
@@ -312,6 +314,12 @@ class AdminHubView(discord.ui.View):
                     value="birthdays",
                     description="List, announce, signup panel",
                     emoji="🎂",
+                ),
+                discord.SelectOption(
+                    label="Names",
+                    value="names",
+                    description="Set someone's real name quickly",
+                    emoji="✏️",
                 ),
                 discord.SelectOption(
                     label="Welcome text",
@@ -354,6 +362,8 @@ class AdminHubView(discord.ui.View):
             return hub_channels_embed(guild, self.bot)
         if self.page == "birthdays":
             return hub_birthdays_embed(guild, self.bot)
+        if self.page == "names":
+            return names_list_embed(guild, self.bot)
         if self.page == "welcome":
             return hub_welcome_embed(guild, self.bot)
         if self.page == "anniversary":
@@ -569,6 +579,50 @@ class AdminHubView(discord.ui.View):
             btn = discord.ui.Button(label=label, style=style, row=row)
             btn.callback = cb
             self.add_item(btn)
+
+    def _add_names_controls(self) -> None:
+        picker = discord.ui.UserSelect(
+            placeholder="Pick a member to set their name…",
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+
+        async def on_pick(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            user = picker.values[0]
+            if not isinstance(user, discord.Member):
+                member = interaction.guild.get_member(user.id) if interaction.guild else None
+            else:
+                member = user
+            if member is None or member.bot:
+                await interaction.response.send_message(
+                    "Pick a real server member (not a bot).",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_modal(
+                SetNameModal(self.bot, member, hub=self)
+            )
+
+        picker.callback = on_pick
+        self.add_item(picker)
+
+        refresh = discord.ui.Button(
+            label="Refresh list", style=discord.ButtonStyle.secondary, row=2
+        )
+
+        async def on_refresh(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            await interaction.response.edit_message(
+                embed=names_list_embed(interaction.guild, self.bot),
+                view=self,
+            )
+
+        refresh.callback = on_refresh
+        self.add_item(refresh)
 
     def _add_welcome_controls(self) -> None:
         edit = discord.ui.Button(label="Edit welcome text", style=discord.ButtonStyle.primary, row=1)

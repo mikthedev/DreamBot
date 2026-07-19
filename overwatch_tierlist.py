@@ -169,7 +169,7 @@ async def fetch_tier_summary(
 
 
 def _hero_stats(hero: TierHero) -> str:
-    return f"{hero.win_rate} win rate · {hero.pick_rate} pick rate"
+    return f"**{hero.win_rate}** win rate · **{hero.pick_rate}** pick rate"
 
 
 def _hero_emoji_key(hero: TierHero) -> str:
@@ -215,14 +215,20 @@ def _hero_line(
     if emoji_map:
         em = emoji_map.get(emoji_name_for_hero(hero))
         if em is not None:
-            return f"{em} {stats}"
-    return f"{hero.name} — {stats}"
+            # Leading emoji + spaced stats (reads clearer in Discord)
+            return f"{em}  {stats}"
+    return f"**{hero.name}** — {stats}"
 
 
 def _tier_body(
     heroes: list[TierHero], emoji_map: dict[str, discord.Emoji] | None = None
 ) -> str:
-    return "\n".join(_hero_line(h, emoji_map) for h in heroes)
+    # Blank line between heroes = a bit more breathing room without huge rows
+    return "\n\n".join(_hero_line(h, emoji_map) for h in heroes)
+
+
+# Slightly larger than emojis: Discord Section thumbnails (circular accessory)
+PORTRAIT_TIERS = frozenset({"S", "A", "B"})
 
 
 def build_tier_layouts(
@@ -231,7 +237,10 @@ def build_tier_layouts(
     preview: bool = False,
     emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> list[discord.ui.LayoutView]:
-    """Compact text + small application emojis — usually one message."""
+    """
+    S/A/B: circular portrait thumbnails (a step up from emoji size) + stats text.
+    C/D/F: compact custom emojis + stats (keeps the post short).
+    """
     date_bit = summary.updated or "latest"
     season_bit = f"S{summary.season}" if summary.season else "OW"
     if preview:
@@ -240,6 +249,7 @@ def build_tier_layouts(
         header = f"**[{season_bit} tier list]({summary.url})** · {date_bit}"
 
     BUDGET = 38
+    HERO_COST = 3
     views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(header))
@@ -256,14 +266,47 @@ def build_tier_layouts(
         heroes = summary.tiers.get(tier) or []
         if not heroes:
             continue
-        if view._total_children + 2 > BUDGET:
-            flush()
-        body = f"**{tier}**\n{_tier_body(heroes, emoji_map)}"
-        container = discord.ui.Container(
-            accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
-        )
-        view.add_item(container)
-        container.add_item(discord.ui.TextDisplay(body))
+
+        colour = TIER_COLOR.get(tier, discord.Color.orange())
+
+        if tier in PORTRAIT_TIERS:
+            def open_tier(*, continued: bool = False) -> discord.ui.Container:
+                if view._total_children + 1 + 1 + HERO_COST > BUDGET:
+                    flush()
+                title = f"## {tier}" + (" ·…" if continued else "")
+                container = discord.ui.Container(accent_colour=colour)
+                view.add_item(container)
+                container.add_item(discord.ui.TextDisplay(title))
+                return container
+
+            container = open_tier()
+            for hero in heroes:
+                if view._total_children + HERO_COST > BUDGET:
+                    container = open_tier(continued=True)
+
+                stats = _hero_stats(hero)
+                icon = _icon_url(hero)
+                # Prefer portrait; fall back to emoji line if no URL
+                if icon:
+                    container.add_item(
+                        discord.ui.Section(
+                            stats,
+                            accessory=discord.ui.Thumbnail(icon),
+                        )
+                    )
+                else:
+                    if view._total_children + 1 > BUDGET:
+                        container = open_tier(continued=True)
+                    container.add_item(
+                        discord.ui.TextDisplay(_hero_line(hero, emoji_map))
+                    )
+        else:
+            if view._total_children + 2 > BUDGET:
+                flush()
+            body = f"## {tier}\n{_tier_body(heroes, emoji_map)}"
+            container = discord.ui.Container(accent_colour=colour)
+            view.add_item(container)
+            container.add_item(discord.ui.TextDisplay(body))
 
     views.append(view)
     return views

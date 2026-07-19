@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import math
 import re
 import ssl
 from dataclasses import dataclass, field
@@ -13,6 +15,7 @@ import aiohttp
 import certifi
 import discord
 from discord.ext import commands, tasks
+from PIL import Image, ImageDraw, ImageFont
 
 import config
 
@@ -31,6 +34,14 @@ TIER_COLOR = {
     "D": discord.Color.from_rgb(232, 140, 60),
     "F": discord.Color.from_rgb(200, 80, 80),
 }
+TIER_RGB = {
+    "S": (255, 176, 32),
+    "A": (80, 200, 120),
+    "B": (64, 156, 255),
+    "C": (180, 180, 80),
+    "D": (232, 140, 60),
+    "F": (200, 80, 80),
+}
 TIER_LABEL = {
     "S": "S Tier",
     "A": "A Tier",
@@ -38,11 +49,6 @@ TIER_LABEL = {
     "C": "C Tier",
     "D": "D Tier",
     "F": "F Tier",
-}
-ROLE_SHORT = {
-    "Tank": "Tank",
-    "Damage": "DPS",
-    "Support": "Support",
 }
 
 
@@ -165,12 +171,10 @@ async def fetch_tier_summary(
 
 
 def _hero_stats(hero: TierHero) -> str:
-    """Caption under each icon tile."""
     return f"{hero.win_rate} win rate · {hero.pick_rate} pick rate"
 
 
 def _hero_line(hero: TierHero) -> str:
-    """Embed / text fallback."""
     return f"{hero.name} — {_hero_stats(hero)}"
 
 
@@ -189,75 +193,138 @@ def _icon_url(hero: TierHero) -> str | None:
     return icon
 
 
-def _gallery_chunks(heroes: list[TierHero], size: int = 10) -> list[list[TierHero]]:
-    return [heroes[i : i + size] for i in range(0, len(heroes), size)]
-
-
-def build_tier_layouts(
-    summary: TierListSummary, *, preview: bool = False
-) -> list[discord.ui.LayoutView]:
-    """
-    Compact single post: icon gallery per tier (grid), not one tall row per hero.
-    Tile caption: "N% win rate · N% pick rate".
-    """
-    date_bit = summary.updated or "latest"
-    season_bit = f"S{summary.season}" if summary.season else "OW"
-    if preview:
-        header = f"🧪 **[{season_bit}]({summary.url})** · {date_bit}"
-    else:
-        header = f"**[{season_bit} tier list]({summary.url})** · {date_bit}"
-
-    BUDGET = 38
-    views: list[discord.ui.LayoutView] = []
-    view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.TextDisplay(header))
-
-    def flush() -> None:
-        nonlocal view
-        views.append(view)
-        view = discord.ui.LayoutView(timeout=None)
-        view.add_item(
-            discord.ui.TextDisplay(f"**[{season_bit}]({summary.url})** · cont.")
-        )
-
-    for tier in TIER_ORDER:
-        heroes = summary.tiers.get(tier) or []
-        if not heroes:
+def _load_font(size: int) -> ImageFont.ImageFont:
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
             continue
+    return ImageFont.load_default()
 
-        chunks = _gallery_chunks(heroes)
-        cost = 2 + max(len(chunks), 1)
-        if view._total_children + cost > BUDGET:
-            flush()
 
-        container = discord.ui.Container(
-            accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
+async def _fetch_icon_bytes(
+    session: aiohttp.ClientSession, url: str
+) -> bytes | None:
+    try:
+        async with session.get(
+            url, ssl=_SSL_CTX, timeout=aiohttp.ClientTimeout(total=20)
+        ) as resp:
+            if resp.status != 200:
+                return None
+            return await resp.read()
+    except Exception:
+        return None
+
+
+async def fetch_hero_icons(
+    session: aiohttp.ClientSession, summary: TierListSummary
+) -> dict[str, bytes]:
+    """Download hero thumbnails keyed by slug/name."""
+    out: dict[str, bytes] = {}
+    seen: set[str] = set()
+    for heroes in summary.tiers.values():
+        for h in heroes:
+            key = h.slug or h.name
+            url = _icon_url(h)
+            if not url or key in seen:
+                continue
+            seen.add(key)
+            data = await _fetch_icon_bytes(session, url)
+            if data:
+                out[key] = data
+    return out
+
+
+def render_tier_strip(
+    tier: str, heroes: list[TierHero], icons: dict[str, bytes]
+) -> io.BytesIO:
+    """
+    Compact grid of small portraits with win rate / pick rate under each.
+    Discord can't shrink Section thumbnails — we control size here.
+    """
+    icon_px = 40
+    cell_w = 92
+    text_h = 28
+    cell_h = icon_px + text_h + 8
+    pad = 8
+    cols = min(5, max(1, len(heroes)))
+    rows = max(1, math.ceil(len(heroes) / cols))
+    header_h = 26
+
+    width = pad * 2 + cols * cell_w
+    height = pad * 2 + header_h + rows * cell_h
+    bg = (22, 24, 32)
+    accent = TIER_RGB.get(tier, (249, 158, 26))
+
+    img = Image.new("RGBA", (width, height), bg + (255,))
+    draw = ImageDraw.Draw(img)
+    title_font = _load_font(16)
+    small_font = _load_font(10)
+
+    # Accent bar + tier title
+    draw.rectangle((0, 0, 4, height), fill=accent + (255,))
+    draw.text((pad + 6, 6), tier, font=title_font, fill=accent + (255,))
+
+    for i, hero in enumerate(heroes):
+        col = i % cols
+        row = i // cols
+        x0 = pad + col * cell_w
+        y0 = pad + header_h + row * cell_h
+
+        key = hero.slug or hero.name
+        portrait = None
+        raw = icons.get(key)
+        if raw:
+            try:
+                portrait = Image.open(io.BytesIO(raw)).convert("RGBA")
+                portrait = portrait.resize((icon_px, icon_px), Image.Resampling.LANCZOS)
+            except Exception:
+                portrait = None
+
+        ix = x0 + (cell_w - icon_px) // 2
+        iy = y0
+        if portrait is not None:
+            # Circular-ish rounded mask for a tighter look
+            mask = Image.new("L", (icon_px, icon_px), 0)
+            ImageDraw.Draw(mask).rounded_rectangle(
+                (0, 0, icon_px - 1, icon_px - 1), radius=8, fill=255
+            )
+            img.paste(portrait, (ix, iy), mask)
+        else:
+            draw.rounded_rectangle(
+                (ix, iy, ix + icon_px, iy + icon_px),
+                radius=8,
+                fill=(50, 54, 68, 255),
+            )
+
+        # Tiny labels under the icon
+        line1 = f"{hero.win_rate} win rate"
+        line2 = f"{hero.pick_rate} pick rate"
+        tw1 = draw.textlength(line1, font=small_font)
+        tw2 = draw.textlength(line2, font=small_font)
+        draw.text(
+            (x0 + (cell_w - tw1) / 2, iy + icon_px + 2),
+            line1,
+            font=small_font,
+            fill=(230, 230, 235, 255),
         )
-        view.add_item(container)
-        container.add_item(discord.ui.TextDisplay(f"**{tier}**"))
+        draw.text(
+            (x0 + (cell_w - tw2) / 2, iy + icon_px + 13),
+            line2,
+            font=small_font,
+            fill=(160, 168, 180, 255),
+        )
 
-        any_gallery = False
-        for chunk in chunks:
-            items: list[discord.MediaGalleryItem] = []
-            for h in chunk:
-                url = _icon_url(h)
-                if not url:
-                    continue
-                items.append(
-                    discord.MediaGalleryItem(
-                        url,
-                        description=_hero_stats(h)[:256],
-                    )
-                )
-            if items:
-                container.add_item(discord.ui.MediaGallery(*items))
-                any_gallery = True
-
-        if not any_gallery:
-            container.add_item(discord.ui.TextDisplay(_tier_body(heroes)))
-
-    views.append(view)
-    return views
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
 
 
 def build_tier_embeds(
@@ -271,7 +338,7 @@ def build_tier_embeds(
         description=(
             ("🧪 **Preview**\n" if preview else "")
             + f"[Counterwatch tier list]({summary.url})\n"
-            "Icon · win rate · pick rate"
+            "Win rate · pick rate"
         ),
         color=color,
         url=summary.url,
@@ -288,6 +355,53 @@ def build_tier_embeds(
         )
         embeds.append(emb)
     return embeds
+
+
+async def build_tier_message(
+    summary: TierListSummary,
+    session: aiohttp.ClientSession,
+    *,
+    preview: bool = False,
+) -> tuple[discord.ui.LayoutView, list[discord.File]]:
+    """One compact message: small rendered icon grids attached as images."""
+    icons = await fetch_hero_icons(session, summary)
+
+    date_bit = summary.updated or "latest"
+    season_bit = f"S{summary.season}" if summary.season else "OW"
+    if preview:
+        header = f"🧪 **[{season_bit} tier list]({summary.url})** · {date_bit}"
+    else:
+        header = f"**[{season_bit} tier list]({summary.url})** · {date_bit}"
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.TextDisplay(header))
+
+    files: list[discord.File] = []
+    gallery_items: list[discord.MediaGalleryItem] = []
+
+    for tier in TIER_ORDER:
+        heroes = summary.tiers.get(tier) or []
+        if not heroes:
+            continue
+        filename = f"tier_{tier.lower()}.png"
+        buf = render_tier_strip(tier, heroes, icons)
+        files.append(discord.File(buf, filename=filename))
+        gallery_items.append(
+            discord.MediaGalleryItem(
+                f"attachment://{filename}",
+                description=f"{TIER_LABEL.get(tier, tier)} · win rate · pick rate",
+            )
+        )
+
+    if gallery_items:
+        # One gallery keeps the post short; Discord shows a compact image stack/grid
+        view.add_item(discord.ui.MediaGallery(*gallery_items))
+    else:
+        view.add_item(
+            discord.ui.TextDisplay("_Could not render tier icons._")
+        )
+
+    return view, files
 
 
 class OverwatchTierCog(commands.Cog):
@@ -319,17 +433,20 @@ class OverwatchTierCog(commands.Cog):
         *,
         preview: bool = False,
     ) -> list[discord.Message]:
-        messages: list[discord.Message] = []
+        session = await self._get_session()
         try:
-            layouts = build_tier_layouts(summary, preview=preview)
-            for layout in layouts:
-                messages.append(await channel.send(view=layout))
+            view, files = await build_tier_message(
+                summary, session, preview=preview
+            )
+            msg = await channel.send(view=view, files=files)
+            return [msg]
         except Exception as exc:
             log.warning("OW tier layout failed, using embeds: %s", exc)
-            messages.append(
-                await channel.send(embeds=build_tier_embeds(summary, preview=preview))
-            )
-        return messages
+            return [
+                await channel.send(
+                    embeds=build_tier_embeds(summary, preview=preview)
+                )
+            ]
 
     async def delete_live_messages(
         self, channel: discord.TextChannel, guild_id: int
@@ -363,11 +480,14 @@ class OverwatchTierCog(commands.Cog):
                 "Could not parse the Counterwatch tier list.", ephemeral=True
             )
             return
+        session = await self._get_session()
         try:
-            layouts = build_tier_layouts(summary, preview=True)
-            await interaction.followup.send(view=layouts[0], ephemeral=True)
-            for layout in layouts[1:]:
-                await interaction.followup.send(view=layout, ephemeral=True)
+            view, files = await build_tier_message(
+                summary, session, preview=True
+            )
+            await interaction.followup.send(
+                view=view, files=files, ephemeral=True
+            )
         except Exception as exc:
             log.warning("OW tier preview failed: %s", exc)
             await interaction.followup.send(

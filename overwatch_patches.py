@@ -204,39 +204,37 @@ def _make_change(
 
 
 
-def _format_ability_line(ability: str, lines: list[ChangeLine]) -> str:
-    """One compact line per ability: Name — ▲ change · ▼ change."""
+def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
+    """Ability name, then each buff/nerf on its own indented line."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
 
-    parts: list[str] = []
+    rows: list[str] = [ability]
     for c in shared:
-        parts.append(f"{c.tone} {c.text}")
+        rows.append(f"{c.tone}  {c.text}")
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                parts.append(f"5v5 {a.text}")
-                parts.append(f"6v6 {b.text}")
+                rows.append(f"{a.tone}  5v5  {a.text}")
+                rows.append(f"{b.tone}  6v6  {b.text}")
         else:
             for c in v5:
-                parts.append(f"5v5 {c.text}")
+                rows.append(f"{c.tone}  5v5  {c.text}")
             for c in v6:
-                parts.append(f"6v6 {c.text}")
+                rows.append(f"{c.tone}  6v6  {c.text}")
 
-    if not parts:
-        return ability
-    return f"{ability} — " + " · ".join(parts)
+    return "\n".join(rows)
 
 
 def _hero_changes_text(hero: HeroChange) -> str:
-    """Compact ability lines for under / beside the hero name."""
+    """Ability blocks with a blank line between them for breathing room."""
     by_ability: dict[str, list[ChangeLine]] = {}
     for ch in hero.changes:
         by_ability.setdefault(ch.ability, []).append(ch)
-    return "\n".join(
-        _format_ability_line(ability, lines)
+    return "\n\n".join(
+        _format_ability_block(ability, lines)
         for ability, lines in by_ability.items()
     )
 

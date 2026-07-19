@@ -17,10 +17,10 @@ log = logging.getLogger("dream_team.ow_render")
 CACHE_DIR = config.DATA_DIR / "ow_icon_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-CARD_W = 580
-PAD = 14
-HERO_PX = 40
-ABIL_PX = 22
+CARD_W = 560
+PAD = 12
+HERO_PX = 36
+ABIL_PX = 18
 GAP = 8
 BG = (18, 22, 30, 255)
 FG = (235, 238, 245, 255)

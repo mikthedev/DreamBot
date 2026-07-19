@@ -176,6 +176,8 @@ def _make_change(
         return None
     label, value, mode = _compact_value(clean)
     tone = _tone_from(clean)
+    if label and len(label) > 36:
+        label = label[:35].rstrip() + "…"
     if label and "→" in value:
         text = f"{label} `{value}`"
     elif "→" in value:
@@ -188,49 +190,52 @@ def _make_change(
 
 
 
-def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
-    """Ability + changes, single-spaced (plain text; only hero name is bold)."""
+def _format_ability_line(ability: str, lines: list[ChangeLine]) -> str:
+    """One compact line per ability: Name — ▲ change · ▼ change."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
 
-    rows: list[str] = [ability]
+    parts: list[str] = []
     for c in shared:
-        rows.append(f"{c.tone} {c.text}")
+        parts.append(f"{c.tone} {c.text}")
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                rows.append(f"  5v5 {a.text}")
-                rows.append(f"  6v6 {b.text}")
+                parts.append(f"5v5 {a.text}")
+                parts.append(f"6v6 {b.text}")
         else:
             for c in v5:
-                rows.append(f"  5v5 {c.text}")
+                parts.append(f"5v5 {c.text}")
             for c in v6:
-                rows.append(f"  6v6 {c.text}")
+                parts.append(f"6v6 {c.text}")
 
-    return "\n".join(rows)
+    if not parts:
+        return ability
+    return f"{ability} — " + " · ".join(parts)
 
 
 def _hero_changes_text(hero: HeroChange) -> str:
-    """Patch details only (sits under the name + portrait row)."""
+    """Compact ability lines for under / beside the hero name."""
     by_ability: dict[str, list[ChangeLine]] = {}
     for ch in hero.changes:
         by_ability.setdefault(ch.ability, []).append(ch)
     return "\n".join(
-        _format_ability_block(ability, lines)
+        _format_ability_line(ability, lines)
         for ability, lines in by_ability.items()
     )
 
 
-def _hero_section_text(hero: HeroChange) -> str:
-    """Fallback single block (embeds): name + changes."""
+def _hero_card_text(hero: HeroChange) -> str:
+    """Single card block: bold name + plain compact changes."""
     changes = _hero_changes_text(hero)
     return f"**{hero.name}**\n{changes}" if changes else f"**{hero.name}**"
 
 
-def _role_header_text(role: str) -> str:
-    return f"## {ROLE_HEADER.get(role, role)}"
+def _hero_section_text(hero: HeroChange) -> str:
+    """Fallback embeds use the same card text."""
+    return _hero_card_text(hero)
 
 
 
@@ -383,7 +388,7 @@ def build_patch_layouts(
     summary: PatchSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
     """
-    Compact portrait + name rows; strong visible dividers between roles.
+    One colour-accented container per role; each hero is a compact portrait card.
     Discord's 40-component cap may split a large patch into multiple messages.
     """
     by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
@@ -392,9 +397,9 @@ def build_patch_layouts(
 
     date_label = summary.date or "Patch"
     if preview:
-        header = f"🧪 **Preview**\n**[{date_label}]({summary.url})**"
+        header = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
     else:
-        header = f"**[{date_label}]({summary.url})**"
+        header = f"**Overwatch** · **[{date_label}]({summary.url})**"
 
     if not summary.heroes:
         view = discord.ui.LayoutView(timeout=None)
@@ -404,6 +409,8 @@ def build_patch_layouts(
         return [view]
 
     BUDGET = 38
+    # Section with 1 text child + thumbnail accessory counts as 3
+    HERO_COST = 3
     views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(header))
@@ -413,60 +420,55 @@ def build_patch_layouts(
         views.append(view)
         view = discord.ui.LayoutView(timeout=None)
         view.add_item(
-            discord.ui.TextDisplay(f"**[{date_label}]({summary.url})** · continued")
+            discord.ui.TextDisplay(f"**Overwatch** · **[{date_label}]({summary.url})** · cont.")
         )
 
-    def add_role_banner(role: str, *, with_divider: bool) -> None:
-        """Visible role break: divider line + heading."""
-        nonlocal view
-        need = 2 if with_divider else 1
-        if view._total_children + need + 3 > BUDGET and view._total_children > 2:
-            flush()
-            with_divider = False
-            need = 1
-        if with_divider:
-            if view._total_children + 2 > BUDGET:
-                flush()
-            else:
-                view.add_item(
-                    discord.ui.Separator(
-                        visible=True,
-                        spacing=discord.SeparatorSpacing.large,
-                    )
-                )
-        if view._total_children + 1 > BUDGET:
-            flush()
-        view.add_item(discord.ui.TextDisplay(_role_header_text(role)))
-
-    first_role = True
     for role in ROLE_ORDER:
         heroes = by_role.get(role, [])
         if not heroes:
             continue
 
-        add_role_banner(role, with_divider=not first_role)
-        first_role = False
+        colour = ROLE_COLOR.get(role, OW_ORANGE)
+        label = ROLE_HEADER.get(role, role)
 
-        for hero in heroes:
-            # Section(3) + TextDisplay(1) — no inter-hero separator (keeps it tight)
-            cost = 4
-            if view._total_children + cost > BUDGET:
+        def open_role_container(*, continued: bool = False) -> discord.ui.Container:
+            # Container(1) + title TextDisplay(1) + at least one hero(3)
+            if view._total_children + 1 + 1 + HERO_COST > BUDGET:
                 flush()
-                add_role_banner(role, with_divider=False)
+            title = f"**{label}**" + (" · cont." if continued else "")
+            container = discord.ui.Container(accent_colour=colour)
+            view.add_item(container)
+            container.add_item(discord.ui.TextDisplay(title))
+            return container
 
+        container = open_role_container()
+
+        for i, hero in enumerate(heroes):
+            if view._total_children + HERO_COST > BUDGET:
+                container = open_role_container(continued=True)
+
+            card = _hero_card_text(hero)
             if hero.icon_url:
-                view.add_item(
+                container.add_item(
                     discord.ui.Section(
-                        f"**{hero.name}**",
+                        card,
                         accessory=discord.ui.Thumbnail(hero.icon_url),
                     )
                 )
             else:
-                view.add_item(discord.ui.TextDisplay(f"**{hero.name}**"))
+                # TextDisplay alone counts as 1; still fine under budget checks
+                if view._total_children + 1 > BUDGET:
+                    container = open_role_container(continued=True)
+                container.add_item(discord.ui.TextDisplay(card))
 
-            changes = _hero_changes_text(hero)
-            if changes:
-                view.add_item(discord.ui.TextDisplay(changes))
+            # Tight hairline between heroes inside the role card
+            if i < len(heroes) - 1 and view._total_children + 1 + HERO_COST <= BUDGET:
+                container.add_item(
+                    discord.ui.Separator(
+                        visible=True,
+                        spacing=discord.SeparatorSpacing.small,
+                    )
+                )
 
     views.append(view)
     return views

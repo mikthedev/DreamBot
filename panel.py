@@ -21,6 +21,7 @@ from birthday_signup import (
 )
 from birthdays import Birthday, celebration_embed
 from names import SetNameModal, WelcomeNameView, names_list_embed
+from overwatch_patches import PATCH_URL, build_patch_embeds
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.panel")
@@ -104,7 +105,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
     if is_admin:
         embed.add_field(
             name="Admins",
-            value="`/panel` — setup, names, birthdays, welcome, anniversary",
+            value="`/panel` — setup, names, birthdays, Overwatch patches, welcome",
             inline=False,
         )
     return embed
@@ -202,6 +203,32 @@ def hub_welcome_embed(guild: discord.Guild, bot) -> discord.Embed:
     return embed
 
 
+def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
+    channel_id = bot.db.get_ow_patch_channel(guild.id)
+    last = bot.db.latest_ow_patch_id(guild.id)
+    embed = discord.Embed(
+        title="Overwatch patches",
+        description=(
+            "Checks [official patch notes]({url}) about once a day.\n"
+            "Posts a **short hero-balance brief** — not the full wall of text.\n\n"
+            "Use **Preview** to see the post style before going live."
+        ).format(url=PATCH_URL),
+        color=discord.Color.from_rgb(249, 158, 26),
+    )
+    embed.add_field(
+        name="Post channel",
+        value=_ch(guild, channel_id),
+        inline=False,
+    )
+    embed.add_field(
+        name="Last announced",
+        value=f"`{last}`" if last else "_none yet_",
+        inline=False,
+    )
+    embed.set_footer(text=f"Scan every {config.OW_PATCH_CHECK_HOURS}h")
+    return embed
+
+
 def hub_status_embed(guild: discord.Guild, bot) -> discord.Embed:
     settings = bot.db.get_settings(guild.id)
     stats = bot.db.guild_stats(guild.id)
@@ -293,6 +320,8 @@ class AdminHubView(discord.ui.View):
             self._add_names_controls()
         elif self.page == "welcome":
             self._add_welcome_controls()
+        elif self.page == "overwatch":
+            self._add_overwatch_controls()
         elif self.page == "anniversary":
             self._add_anniversary_controls()
 
@@ -326,6 +355,12 @@ class AdminHubView(discord.ui.View):
                     value="welcome",
                     description="Edit the join prompt",
                     emoji="👋",
+                ),
+                discord.SelectOption(
+                    label="Overwatch",
+                    value="overwatch",
+                    description="Patch notes channel & preview",
+                    emoji="🎯",
                 ),
                 discord.SelectOption(
                     label="Anniversary",
@@ -366,6 +401,8 @@ class AdminHubView(discord.ui.View):
             return names_list_embed(guild, self.bot)
         if self.page == "welcome":
             return hub_welcome_embed(guild, self.bot)
+        if self.page == "overwatch":
+            return hub_overwatch_embed(guild, self.bot)
         if self.page == "anniversary":
             copy = load_anniversary_copy(self.bot, guild.id)
             embed = anniversary_embed(copy, guild=guild, preview=True)
@@ -718,6 +755,181 @@ class AdminHubView(discord.ui.View):
         self.add_item(reset)
         self.add_item(try_private)
         self.add_item(try_channel)
+
+    def _add_overwatch_controls(self) -> None:
+        channel_pick = discord.ui.ChannelSelect(
+            placeholder="Set Overwatch patch channel…",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+
+        async def on_channel(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            channel = channel_pick.values[0]
+            if not isinstance(channel, discord.TextChannel):
+                await interaction.response.defer()
+                return
+            self.bot.db.set_ow_patch_channel(self.guild_id, channel.id)
+            # Seed current patch as seen so enabling doesn't dump an old patch
+            cog = self.bot.get_cog("OverwatchPatchCog")
+            note = f"Channel set to {channel.mention}."
+            if cog is not None:
+                try:
+                    await interaction.response.defer()
+                    summary = await cog.get_summary()
+                    if summary is not None:
+                        self.bot.db.mark_ow_patch_announced(
+                            self.guild_id, summary.fingerprint
+                        )
+                        note += (
+                            f"\nCurrent patch `{summary.fingerprint}` marked as seen "
+                            "(won't re-post). Use **Post latest** to announce it."
+                        )
+                    embed = hub_overwatch_embed(interaction.guild, self.bot)
+                    embed.add_field(name="Done", value=note, inline=False)
+                    self._rebuild()
+                    await interaction.edit_original_response(embed=embed, view=self)
+                    return
+                except Exception as exc:
+                    note += f"\n_(Could not seed current patch: {exc})_"
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(name="Done", value=note, inline=False)
+            self._rebuild()
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=self)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self)
+
+        channel_pick.callback = on_channel
+        self.add_item(channel_pick)
+
+        preview = discord.ui.Button(
+            label="Preview (only you)",
+            style=discord.ButtonStyle.primary,
+            row=2,
+        )
+        post_test = discord.ui.Button(
+            label="Post test in channel",
+            style=discord.ButtonStyle.secondary,
+            row=2,
+        )
+        post_live = discord.ui.Button(
+            label="Post latest now",
+            style=discord.ButtonStyle.success,
+            row=3,
+        )
+
+        async def on_preview(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            cog = self.bot.get_cog("OverwatchPatchCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "Overwatch cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer(ephemeral=True)
+            try:
+                summary = await cog.get_summary()
+            except Exception as exc:
+                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+                return
+            if summary is None:
+                await interaction.followup.send(
+                    "Could not parse the patch notes page.", ephemeral=True
+                )
+                return
+            embeds = build_patch_embeds(summary, preview=True)
+            await interaction.followup.send(embeds=embeds, ephemeral=True)
+
+        async def on_post_test(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            channel = interaction.channel
+            if not isinstance(channel, discord.TextChannel):
+                await interaction.response.send_message(
+                    "Run `/panel` in a text channel.", ephemeral=True
+                )
+                return
+            cog = self.bot.get_cog("OverwatchPatchCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "Overwatch cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            try:
+                summary = await cog.get_summary()
+            except Exception as exc:
+                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+                return
+            if summary is None:
+                await interaction.followup.send(
+                    "Could not parse the patch notes page.", ephemeral=True
+                )
+                return
+            await cog.post_to_channel(channel, summary, preview=True)
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Test posted",
+                value=f"Preview sent to {channel.mention}.",
+                inline=False,
+            )
+            self._rebuild()
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        async def on_post_live(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            channel_id = self.bot.db.get_ow_patch_channel(self.guild_id)
+            if not channel_id:
+                await interaction.response.send_message(
+                    "Set a patch channel first.", ephemeral=True
+                )
+                return
+            channel = interaction.guild.get_channel(channel_id) if interaction.guild else None
+            if not isinstance(channel, discord.TextChannel):
+                await interaction.response.send_message(
+                    "Patch channel missing.", ephemeral=True
+                )
+                return
+            cog = self.bot.get_cog("OverwatchPatchCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "Overwatch cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            try:
+                summary = await cog.get_summary()
+            except Exception as exc:
+                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+                return
+            if summary is None:
+                await interaction.followup.send(
+                    "Could not parse the patch notes page.", ephemeral=True
+                )
+                return
+            await cog.post_to_channel(channel, summary, preview=False)
+            self.bot.db.mark_ow_patch_announced(self.guild_id, summary.fingerprint)
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Posted",
+                value=f"**{summary.title}** → {channel.mention}",
+                inline=False,
+            )
+            self._rebuild()
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        preview.callback = on_preview
+        post_test.callback = on_post_test
+        post_live.callback = on_post_live
+        self.add_item(preview)
+        self.add_item(post_test)
+        self.add_item(post_live)
 
     def _add_anniversary_controls(self) -> None:
         async def open_composer(

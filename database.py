@@ -70,6 +70,7 @@ class Database:
             self._ensure_column(conn, "guild_settings", "anniversary_body", "TEXT")
             self._ensure_column(conn, "guild_settings", "anniversary_footer", "TEXT")
             self._ensure_column(conn, "guild_settings", "welcome_message", "TEXT")
+            self._ensure_column(conn, "guild_settings", "ow_patch_channel_id", "INTEGER")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS anniversary_announcements (
@@ -77,6 +78,16 @@ class Database:
                     year INTEGER NOT NULL,
                     announced_at TEXT NOT NULL DEFAULT (datetime('now')),
                     PRIMARY KEY (guild_id, year)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ow_patch_announcements (
+                    guild_id INTEGER NOT NULL,
+                    patch_id TEXT NOT NULL,
+                    announced_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (guild_id, patch_id)
                 )
                 """
             )
@@ -372,6 +383,58 @@ class Database:
         if not settings:
             return None, None
         return settings["now_playing_channel_id"], settings["now_playing_message_id"]
+
+    def get_ow_patch_channel(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return None
+        return settings["ow_patch_channel_id"]
+
+    def set_ow_patch_channel(self, guild_id: int, channel_id: int | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_patch_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_patch_channel_id = excluded.ow_patch_channel_id
+                """,
+                (guild_id, channel_id),
+            )
+
+    def was_ow_patch_announced(self, guild_id: int, patch_id: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM ow_patch_announcements
+                WHERE guild_id = ? AND patch_id = ?
+                """,
+                (guild_id, patch_id),
+            ).fetchone()
+        return row is not None
+
+    def mark_ow_patch_announced(self, guild_id: int, patch_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO ow_patch_announcements (guild_id, patch_id)
+                VALUES (?, ?)
+                """,
+                (guild_id, patch_id),
+            )
+
+    def latest_ow_patch_id(self, guild_id: int) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT patch_id FROM ow_patch_announcements
+                WHERE guild_id = ?
+                ORDER BY announced_at DESC
+                LIMIT 1
+                """,
+                (guild_id,),
+            ).fetchone()
+        return row["patch_id"] if row else None
 
     def guild_stats(self, guild_id: int) -> dict[str, int]:
         with self.connect() as conn:

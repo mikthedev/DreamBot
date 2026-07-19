@@ -44,3 +44,7 @@ NAME_PROMPT_TIMEOUT_MINUTES = 30
 BIRTHDAY_TIMEZONE = os.getenv("BIRTHDAY_TIMEZONE", "Europe/Kyiv").strip() or "Europe/Kyiv"
 # Check every hour; announce once when local hour reaches this value
 BIRTHDAY_ANNOUNCE_HOUR = int(os.getenv("BIRTHDAY_ANNOUNCE_HOUR", "10"))
+
+# Overwatch patch notes (official Battle.net page, checked once per day)
+OW_PATCH_URL = "https://overwatch.blizzard.com/en-us/news/patch-notes/"
+OW_PATCH_CHECK_HOURS = max(1, int(os.getenv("OW_PATCH_CHECK_HOURS", "24")))

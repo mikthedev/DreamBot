@@ -177,11 +177,7 @@ def _make_change(
     label, value, mode = _compact_value(clean)
     tone = _tone_from(clean)
     if label and "→" in value:
-        # Keep labels short so ▲ / ▼ lines stay readable
-        if len(label) > 34:
-            text = f"`{value}`"
-        else:
-            text = f"**{label}** `{value}`"
+        text = f"**{label}** `{value}`"
     elif "→" in value:
         text = f"`{value}`"
     else:

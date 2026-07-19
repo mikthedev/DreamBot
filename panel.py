@@ -210,8 +210,9 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Overwatch patches",
         description=(
             "Checks [official patch notes]({url}) about once a day.\n"
-            "Posts hero balance with a **portrait per character**.\n"
-            "Grouped by Tank / Damage / Support.\n\n"
+            "Keeps **one live post** in the channel (old post is deleted when a new "
+            "patch drops). Members can open **Previous patches** for an ephemeral "
+            "archive — only they see it.\n\n"
             "**Preview** shows the exact post style."
         ).format(url=PATCH_URL),
         color=discord.Color.from_rgb(249, 158, 26),
@@ -906,12 +907,11 @@ class AdminHubView(discord.ui.View):
                     "Could not parse the patch notes page.", ephemeral=True
                 )
                 return
-            await cog.post_to_channel(channel, summary, preview=False)
-            self.bot.db.mark_ow_patch_announced(self.guild_id, summary.fingerprint)
+            await cog.publish_live(channel, summary)
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Posted",
-                value=f"**{summary.title}** → {channel.mention}",
+                value=f"**{summary.title}** → {channel.mention}\n_(Replaced any previous live patch post.)_",
                 inline=False,
             )
             self._rebuild()

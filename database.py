@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -87,10 +88,14 @@ class Database:
                     guild_id INTEGER NOT NULL,
                     patch_id TEXT NOT NULL,
                     announced_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    message_ids TEXT,
+                    payload TEXT,
                     PRIMARY KEY (guild_id, patch_id)
                 )
                 """
             )
+            self._ensure_column(conn, "ow_patch_announcements", "message_ids", "TEXT")
+            self._ensure_column(conn, "ow_patch_announcements", "payload", "TEXT")
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -413,15 +418,97 @@ class Database:
             ).fetchone()
         return row is not None
 
-    def mark_ow_patch_announced(self, guild_id: int, patch_id: str) -> None:
+    def mark_ow_patch_announced(
+        self, guild_id: int, patch_id: str, *, payload: str | None = None
+    ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO ow_patch_announcements (guild_id, patch_id)
-                VALUES (?, ?)
+                INSERT INTO ow_patch_announcements (guild_id, patch_id, payload)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, patch_id) DO UPDATE SET
+                    payload = COALESCE(excluded.payload, ow_patch_announcements.payload)
+                """,
+                (guild_id, patch_id, payload),
+            )
+
+    def save_ow_patch_live(
+        self,
+        guild_id: int,
+        patch_id: str,
+        message_ids: list[int],
+        payload: str,
+    ) -> None:
+        """Mark this patch as the live channel post; clear message ids on older rows."""
+        ids_json = json.dumps(message_ids)
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE ow_patch_announcements
+                SET message_ids = NULL
+                WHERE guild_id = ?
+                """,
+                (guild_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO ow_patch_announcements (
+                    guild_id, patch_id, message_ids, payload, announced_at
+                )
+                VALUES (?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(guild_id, patch_id) DO UPDATE SET
+                    message_ids = excluded.message_ids,
+                    payload = excluded.payload,
+                    announced_at = datetime('now')
+                """,
+                (guild_id, patch_id, ids_json, payload),
+            )
+
+    def get_ow_live_message_ids(self, guild_id: int) -> list[int]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT message_ids FROM ow_patch_announcements
+                WHERE guild_id = ? AND message_ids IS NOT NULL
+                ORDER BY announced_at DESC
+                LIMIT 1
+                """,
+                (guild_id,),
+            ).fetchone()
+        if not row or not row["message_ids"]:
+            return []
+        try:
+            raw = json.loads(row["message_ids"])
+        except json.JSONDecodeError:
+            return []
+        return [int(x) for x in raw if str(x).isdigit() or isinstance(x, int)]
+
+    def list_ow_patch_history(self, guild_id: int, *, limit: int = 15) -> list[sqlite3.Row]:
+        """Past patches with saved payloads (excludes the currently live post)."""
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT patch_id, payload, announced_at
+                FROM ow_patch_announcements
+                WHERE guild_id = ?
+                  AND payload IS NOT NULL
+                  AND message_ids IS NULL
+                ORDER BY announced_at DESC
+                LIMIT ?
+                """,
+                (guild_id, limit),
+            ).fetchall()
+
+    def get_ow_patch_payload(self, guild_id: int, patch_id: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM ow_patch_announcements
+                WHERE guild_id = ? AND patch_id = ?
                 """,
                 (guild_id, patch_id),
-            )
+            ).fetchone()
+        return row["payload"] if row and row["payload"] else None
 
     def latest_ow_patch_id(self, guild_id: int) -> str | None:
         with self.connect() as conn:

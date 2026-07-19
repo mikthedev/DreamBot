@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import ssl
@@ -22,6 +23,7 @@ OW_ORANGE = discord.Color.from_rgb(249, 158, 26)
 OW_BLUE = discord.Color.from_rgb(33, 143, 254)
 USER_AGENT = "DreamTeamBot/1.0 (+discord; patch-notes monitor)"
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+OW_HISTORY_BUTTON_ID = "ow_patch:history"
 
 ROLE_ORDER = ("Tank", "Damage", "Support")
 ROLE_COLOR = {
@@ -395,9 +397,186 @@ async def fetch_latest_summary() -> PatchSummary | None:
     return parse_latest_patch(html)
 
 
+def summary_to_payload(summary: PatchSummary) -> str:
+    return json.dumps(
+        {
+            "patch_id": summary.patch_id,
+            "date": summary.date,
+            "title": summary.title,
+            "url": summary.url,
+            "heroes": [
+                {
+                    "name": h.name,
+                    "role": h.role,
+                    "icon_url": h.icon_url,
+                    "changes": [
+                        {
+                            "ability": c.ability,
+                            "text": c.text,
+                            "mode": c.mode,
+                            "tone": c.tone,
+                        }
+                        for c in h.changes
+                    ],
+                }
+                for h in summary.heroes
+            ],
+        }
+    )
+
+
+def summary_from_payload(raw: str) -> PatchSummary | None:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    heroes: list[HeroChange] = []
+    for h in data.get("heroes") or []:
+        changes = [
+            ChangeLine(
+                ability=c.get("ability") or "General",
+                text=c.get("text") or "",
+                mode=c.get("mode"),
+                tone=c.get("tone") or "•",
+            )
+            for c in (h.get("changes") or [])
+        ]
+        heroes.append(
+            HeroChange(
+                name=h.get("name") or "Hero",
+                role=h.get("role") or "Damage",
+                icon_url=h.get("icon_url"),
+                changes=changes,
+            )
+        )
+    return PatchSummary(
+        patch_id=data.get("patch_id") or data.get("title") or "patch",
+        date=data.get("date") or "",
+        title=data.get("title") or "Overwatch Patch Notes",
+        heroes=heroes,
+        url=data.get("url") or PATCH_URL,
+    )
+
+
+async def send_summary_ephemeral(
+    interaction: discord.Interaction,
+    summary: PatchSummary,
+    *,
+    archive: bool = False,
+) -> None:
+    try:
+        layouts = build_patch_layouts(summary, preview=False, archive=archive)
+        await interaction.followup.send(view=layouts[0], ephemeral=True)
+        for layout in layouts[1:]:
+            await interaction.followup.send(view=layout, ephemeral=True)
+    except Exception as exc:
+        log.warning("OW ephemeral layout failed: %s", exc)
+        embeds = build_patch_embeds(summary, preview=archive)
+        if archive:
+            embeds[0].title = f"Archive · {summary.date or summary.title}"
+        await interaction.followup.send(embeds=embeds, ephemeral=True)
+
+
+class OwArchiveSelect(discord.ui.Select):
+    def __init__(self, options: list[discord.SelectOption]) -> None:
+        super().__init__(
+            placeholder="Choose a previous patch…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This only works in a server.", ephemeral=True
+            )
+            return
+        patch_id = self.values[0]
+        raw = interaction.client.db.get_ow_patch_payload(guild.id, patch_id)
+        summary = summary_from_payload(raw) if raw else None
+        if summary is None:
+            await interaction.response.send_message(
+                "That archived patch could not be loaded.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        await send_summary_ephemeral(interaction, summary, archive=True)
+
+
+class OwArchiveSelectView(discord.ui.View):
+    def __init__(self, options: list[discord.SelectOption]) -> None:
+        super().__init__(timeout=120)
+        self.add_item(OwArchiveSelect(options))
+
+
+class OwPatchHistoryView(discord.ui.View):
+    """Persistent button under the live patch post — opens earlier notes privately."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Previous patches",
+        style=discord.ButtonStyle.secondary,
+        custom_id=OW_HISTORY_BUTTON_ID,
+    )
+    async def previous_patches(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This only works in a server.", ephemeral=True
+            )
+            return
+
+        rows = interaction.client.db.list_ow_patch_history(guild.id)
+        if not rows:
+            await interaction.response.send_message(
+                "No previous patches saved yet.", ephemeral=True
+            )
+            return
+
+        if len(rows) == 1:
+            summary = summary_from_payload(rows[0]["payload"])
+            if summary is None:
+                await interaction.response.send_message(
+                    "Could not load the archived patch.", ephemeral=True
+                )
+                return
+            await interaction.response.defer(ephemeral=True)
+            await send_summary_ephemeral(interaction, summary, archive=True)
+            return
+
+        options: list[discord.SelectOption] = []
+        for row in rows[:25]:
+            summary = summary_from_payload(row["payload"])
+            label = (summary.date if summary and summary.date else row["patch_id"])[
+                :100
+            ]
+            desc = (summary.title if summary else row["patch_id"])[:100]
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=row["patch_id"][:100],
+                    description=desc,
+                )
+            )
+        await interaction.response.send_message(
+            "Pick a previous patch to view (only you will see it):",
+            view=OwArchiveSelectView(options),
+            ephemeral=True,
+        )
+
+
 
 def build_patch_layouts(
-    summary: PatchSummary, *, preview: bool = False
+    summary: PatchSummary,
+    *,
+    preview: bool = False,
+    archive: bool = False,
 ) -> list[discord.ui.LayoutView]:
     """
     One colour-accented container per role; each hero is a compact portrait card.
@@ -410,6 +589,8 @@ def build_patch_layouts(
     date_label = summary.date or "Patch"
     if preview:
         header = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
+    elif archive:
+        header = f"📜 **Archive** · **[{date_label}]({summary.url})**"
     else:
         header = f"**Overwatch** · **[{date_label}]({summary.url})**"
 
@@ -431,8 +612,11 @@ def build_patch_layouts(
         nonlocal view
         views.append(view)
         view = discord.ui.LayoutView(timeout=None)
+        prefix = "📜 **Archive**" if archive else "**Overwatch**"
         view.add_item(
-            discord.ui.TextDisplay(f"**Overwatch** · **[{date_label}]({summary.url})** · cont.")
+            discord.ui.TextDisplay(
+                f"{prefix} · **[{date_label}]({summary.url})** · cont."
+            )
         )
 
     for role in ROLE_ORDER:
@@ -544,21 +728,52 @@ class OverwatchPatchCog(commands.Cog):
         summary: PatchSummary,
         *,
         preview: bool = False,
-    ) -> discord.Message:
+    ) -> list[discord.Message]:
+        messages: list[discord.Message] = []
         try:
             layouts = build_patch_layouts(summary, preview=preview)
-            first: discord.Message | None = None
             for layout in layouts:
-                msg = await channel.send(view=layout)
-                if first is None:
-                    first = msg
-            assert first is not None
-            return first
+                messages.append(await channel.send(view=layout))
         except Exception as exc:
             log.warning("OW layout failed, using embeds: %s", exc)
-            return await channel.send(
-                embeds=build_patch_embeds(summary, preview=preview)
+            messages.append(
+                await channel.send(embeds=build_patch_embeds(summary, preview=preview))
             )
+        return messages
+
+    async def delete_live_messages(
+        self, channel: discord.TextChannel, guild_id: int
+    ) -> None:
+        for mid in self.bot.db.get_ow_live_message_ids(guild_id):
+            try:
+                msg = await channel.fetch_message(mid)
+                await msg.delete()
+            except discord.NotFound:
+                pass
+            except discord.HTTPException as exc:
+                log.warning("Could not delete old OW patch message %s: %s", mid, exc)
+
+    async def publish_live(
+        self, channel: discord.TextChannel, summary: PatchSummary
+    ) -> list[discord.Message]:
+        """Delete the previous live post, post the new one, archive payload for history."""
+        guild_id = channel.guild.id
+        await self.delete_live_messages(channel, guild_id)
+
+        messages = await self.post_to_channel(channel, summary, preview=False)
+        history_msg = await channel.send(
+            "Earlier balance notes:",
+            view=OwPatchHistoryView(),
+        )
+        messages.append(history_msg)
+
+        self.bot.db.save_ow_patch_live(
+            guild_id,
+            summary.fingerprint,
+            [m.id for m in messages],
+            summary_to_payload(summary),
+        )
+        return messages
 
     async def send_preview_ephemeral(self, interaction: discord.Interaction) -> None:
         summary = await self.get_summary()
@@ -599,8 +814,7 @@ class OverwatchPatchCog(commands.Cog):
         if self.bot.db.was_ow_patch_announced(guild.id, summary.fingerprint):
             return False, f"Already posted `{summary.fingerprint}`."
 
-        await self.post_to_channel(channel, summary, preview=False)
-        self.bot.db.mark_ow_patch_announced(guild.id, summary.fingerprint)
+        await self.publish_live(channel, summary)
         return True, summary.title
 
     @tasks.loop(hours=config.OW_PATCH_CHECK_HOURS)

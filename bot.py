@@ -18,7 +18,7 @@ from database import Database
 from music import MusicCog
 from names import WelcomeNameView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
-from overwatch_patches import OverwatchPatchCog
+from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
 from panel import PanelCog
 from anniversary import AnniversaryCog
 from birthday_signup import (
@@ -46,6 +46,7 @@ class DreamTeamBot(commands.Bot):
         # Persistent buttons (work after restarts)
         self.add_view(BirthdaySignupView())
         self.add_view(WelcomeNameView())
+        self.add_view(OwPatchHistoryView())
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(AnniversaryCog(self))

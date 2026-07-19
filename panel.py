@@ -449,16 +449,20 @@ class AdminHubView(discord.ui.View):
             ) -> None:
                 if not await self._admin_ok(interaction):
                     return
-                channel = select.values[0]
-                if not isinstance(channel, discord.TextChannel):
-                    await interaction.response.defer()
+                selected = select.values[0]
+                channel_id = getattr(selected, "id", None)
+                if channel_id is None:
+                    await interaction.response.send_message(
+                        "Could not read that channel.", ephemeral=True
+                    )
                     return
+                channel_id = int(channel_id)
                 if kind == "welcome":
-                    self.bot.db.set_welcome_channel(self.guild_id, channel.id)
+                    self.bot.db.set_welcome_channel(self.guild_id, channel_id)
                 elif kind == "birthday":
-                    self.bot.db.set_birthday_channel(self.guild_id, channel.id)
+                    self.bot.db.set_birthday_channel(self.guild_id, channel_id)
                 else:
-                    self.bot.db.set_now_playing_panel(self.guild_id, channel.id, None)
+                    self.bot.db.set_now_playing_panel(self.guild_id, channel_id, None)
                     music = self.bot.get_cog("MusicCog")
                     if music is not None:
                         player = music.get_player(self.guild_id)
@@ -770,14 +774,27 @@ class AdminHubView(discord.ui.View):
         async def on_channel(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
-            channel = channel_pick.values[0]
-            if not isinstance(channel, discord.TextChannel):
-                await interaction.response.defer()
+            selected = channel_pick.values[0]
+            channel_id = getattr(selected, "id", None)
+            if channel_id is None:
+                await interaction.response.send_message(
+                    "Could not read that channel.", ephemeral=True
+                )
                 return
-            self.bot.db.set_ow_patch_channel(self.guild_id, channel.id)
+            channel = (
+                interaction.guild.get_channel(channel_id)
+                if interaction.guild
+                else None
+            )
+            mention = (
+                channel.mention
+                if isinstance(channel, discord.abc.GuildChannel)
+                else f"<#{channel_id}>"
+            )
+            self.bot.db.set_ow_patch_channel(self.guild_id, int(channel_id))
             # Seed current patch as seen so enabling doesn't dump an old patch
             cog = self.bot.get_cog("OverwatchPatchCog")
-            note = f"Channel set to {channel.mention}."
+            note = f"Channel set to {mention}."
             if cog is not None:
                 try:
                     await interaction.response.defer()
@@ -884,10 +901,18 @@ class AdminHubView(discord.ui.View):
                     "Set a patch channel first.", ephemeral=True
                 )
                 return
-            channel = interaction.guild.get_channel(channel_id) if interaction.guild else None
+            channel = (
+                interaction.guild.get_channel(channel_id) if interaction.guild else None
+            )
+            if channel is None and interaction.guild is not None:
+                try:
+                    channel = await interaction.guild.fetch_channel(channel_id)
+                except discord.HTTPException:
+                    channel = None
             if not isinstance(channel, discord.TextChannel):
                 await interaction.response.send_message(
-                    "Patch channel missing.", ephemeral=True
+                    "Patch channel missing — pick it again in the dropdown.",
+                    ephemeral=True,
                 )
                 return
             cog = self.bot.get_cog("OverwatchPatchCog")

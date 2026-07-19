@@ -35,9 +35,9 @@ ROLE_LABEL = {
     "Support": "SUPPORT",
 }
 ROLE_HEADER = {
-    "Tank": "───  🛡️  TANK  ───",
-    "Damage": "───  ⚔️  DAMAGE  ───",
-    "Support": "───  💚  SUPPORT  ───",
+    "Tank": "🛡️  TANK",
+    "Damage": "⚔️  DAMAGE",
+    "Support": "💚  SUPPORT",
 }
 
 
@@ -189,25 +189,25 @@ def _make_change(
 
 
 def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
-    """Ability name + each buff/nerf on its own line (plain text; only hero name is bold)."""
+    """Ability + changes, single-spaced (plain text; only hero name is bold)."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
 
     rows: list[str] = [ability]
     for c in shared:
-        rows.append(f"{c.tone}  {c.text}")
+        rows.append(f"{c.tone} {c.text}")
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                rows.append(f"┣ 5v5  {a.text}")
-                rows.append(f"┗ 6v6  {b.text}")
+                rows.append(f"  5v5 {a.text}")
+                rows.append(f"  6v6 {b.text}")
         else:
             for c in v5:
-                rows.append(f"┣ 5v5  {c.text}")
+                rows.append(f"  5v5 {c.text}")
             for c in v6:
-                rows.append(f"┗ 6v6  {c.text}")
+                rows.append(f"  6v6 {c.text}")
 
     return "\n".join(rows)
 
@@ -217,7 +217,7 @@ def _hero_changes_text(hero: HeroChange) -> str:
     by_ability: dict[str, list[ChangeLine]] = {}
     for ch in hero.changes:
         by_ability.setdefault(ch.ability, []).append(ch)
-    return "\n\n".join(
+    return "\n".join(
         _format_ability_block(ability, lines)
         for ability, lines in by_ability.items()
     )
@@ -226,7 +226,12 @@ def _hero_changes_text(hero: HeroChange) -> str:
 def _hero_section_text(hero: HeroChange) -> str:
     """Fallback single block (embeds): name + changes."""
     changes = _hero_changes_text(hero)
-    return f"**{hero.name}**\n\n{changes}" if changes else f"**{hero.name}**"
+    return f"**{hero.name}**\n{changes}" if changes else f"**{hero.name}**"
+
+
+def _role_header_text(role: str) -> str:
+    return f"## {ROLE_HEADER.get(role, role)}"
+
 
 
 def parse_latest_patch(html: str) -> PatchSummary | None:
@@ -378,8 +383,8 @@ def build_patch_layouts(
     summary: PatchSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
     """
-    Text layout with a portrait thumbnail per hero and breathing room between them.
-    Discord's 40-component cap may split a large patch into 2 messages.
+    Compact portrait + name rows; strong visible dividers between roles.
+    Discord's 40-component cap may split a large patch into multiple messages.
     """
     by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
     for h in summary.heroes:
@@ -411,22 +416,17 @@ def build_patch_layouts(
             discord.ui.TextDisplay(f"**[{date_label}]({summary.url})** · continued")
         )
 
-    first_role = True
-    for role in ROLE_ORDER:
-        heroes = by_role.get(role, [])
-        if not heroes:
-            continue
-
-        # Clear break between roles (divider + space)
-        role_overhead = 3 if not first_role else 1  # seps + header
-        if view._total_children + role_overhead + 3 > BUDGET and view._total_children > 2:
+    def add_role_banner(role: str, *, with_divider: bool) -> None:
+        """Visible role break: divider line + heading."""
+        nonlocal view
+        need = 2 if with_divider else 1
+        if view._total_children + need + 3 > BUDGET and view._total_children > 2:
             flush()
-            first_role = True
-
-        if not first_role:
+            with_divider = False
+            need = 1
+        if with_divider:
             if view._total_children + 2 > BUDGET:
                 flush()
-                first_role = True
             else:
                 view.add_item(
                     discord.ui.Separator(
@@ -434,32 +434,25 @@ def build_patch_layouts(
                         spacing=discord.SeparatorSpacing.large,
                     )
                 )
-                view.add_item(
-                    discord.ui.Separator(
-                        visible=False,
-                        spacing=discord.SeparatorSpacing.large,
-                    )
-                )
-
         if view._total_children + 1 > BUDGET:
             flush()
-            first_role = True
+        view.add_item(discord.ui.TextDisplay(_role_header_text(role)))
 
-        view.add_item(
-            discord.ui.TextDisplay(f"**{ROLE_HEADER.get(role, role)}**")
-        )
+    first_role = True
+    for role in ROLE_ORDER:
+        heroes = by_role.get(role, [])
+        if not heroes:
+            continue
+
+        add_role_banner(role, with_divider=not first_role)
         first_role = False
 
-        for i, hero in enumerate(heroes):
-            # Portrait aligns with name only; patch text sits underneath
-            # Section(3) + TextDisplay(1) + optional Separator(1)
-            want_sep = i < len(heroes) - 1
-            cost = 4 + (1 if want_sep else 0)
+        for hero in heroes:
+            # Section(3) + TextDisplay(1) — no inter-hero separator (keeps it tight)
+            cost = 4
             if view._total_children + cost > BUDGET:
                 flush()
-                view.add_item(
-                    discord.ui.TextDisplay(f"**{ROLE_HEADER.get(role, role)}**")
-                )
+                add_role_banner(role, with_divider=False)
 
             if hero.icon_url:
                 view.add_item(
@@ -474,19 +467,6 @@ def build_patch_layouts(
             changes = _hero_changes_text(hero)
             if changes:
                 view.add_item(discord.ui.TextDisplay(changes))
-
-            if want_sep and view._total_children + 1 <= BUDGET:
-                view.add_item(
-                    discord.ui.Separator(
-                        visible=False,
-                        spacing=discord.SeparatorSpacing.large,
-                    )
-                )
-            elif want_sep:
-                flush()
-                view.add_item(
-                    discord.ui.TextDisplay(f"**{ROLE_HEADER.get(role, role)}**")
-                )
 
     views.append(view)
     return views

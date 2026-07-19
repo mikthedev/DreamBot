@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -72,6 +73,10 @@ class Database:
             self._ensure_column(conn, "guild_settings", "anniversary_footer", "TEXT")
             self._ensure_column(conn, "guild_settings", "welcome_message", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_patch_channel_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "ow_tier_channel_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "ow_tier_last_posted_at", "TEXT")
+            self._ensure_column(conn, "guild_settings", "ow_tier_message_ids", "TEXT")
+            self._ensure_column(conn, "guild_settings", "ow_tier_last_id", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS anniversary_announcements (
@@ -522,6 +527,93 @@ class Database:
                 (guild_id,),
             ).fetchone()
         return row["patch_id"] if row else None
+
+    def get_ow_tier_channel(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return None
+        return settings["ow_tier_channel_id"]
+
+    def set_ow_tier_channel(self, guild_id: int, channel_id: int | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_tier_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_tier_channel_id = excluded.ow_tier_channel_id
+                """,
+                (guild_id, channel_id),
+            )
+
+    def get_ow_tier_last_posted(self, guild_id: int) -> datetime | None:
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["ow_tier_last_posted_at"]:
+            return None
+        raw = settings["ow_tier_last_posted_at"]
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def get_ow_tier_message_ids(self, guild_id: int) -> list[int]:
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["ow_tier_message_ids"]:
+            return []
+        try:
+            raw = json.loads(settings["ow_tier_message_ids"])
+        except json.JSONDecodeError:
+            return []
+        return [int(x) for x in raw if str(x).isdigit() or isinstance(x, int)]
+
+    def get_ow_tier_last_id(self, guild_id: int) -> str | None:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return None
+        return settings["ow_tier_last_id"]
+
+    def save_ow_tier_live(
+        self,
+        guild_id: int,
+        tier_id: str,
+        message_ids: list[int],
+    ) -> None:
+        ids_json = json.dumps(message_ids)
+        stamped = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id,
+                    ow_tier_message_ids,
+                    ow_tier_last_posted_at,
+                    ow_tier_last_id
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_tier_message_ids = excluded.ow_tier_message_ids,
+                    ow_tier_last_posted_at = excluded.ow_tier_last_posted_at,
+                    ow_tier_last_id = excluded.ow_tier_last_id
+                """,
+                (guild_id, ids_json, stamped, tier_id),
+            )
+
+    def touch_ow_tier_schedule(self, guild_id: int) -> None:
+        """Reset the biweekly timer without posting (e.g. when enabling the channel)."""
+        stamped = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_tier_last_posted_at)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_tier_last_posted_at = excluded.ow_tier_last_posted_at
+                """,
+                (guild_id, stamped),
+            )
 
     def guild_stats(self, guild_id: int) -> dict[str, int]:
         with self.connect() as conn:

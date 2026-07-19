@@ -19,6 +19,7 @@ from music import MusicCog
 from names import WelcomeNameView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
 from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
+from overwatch_tierlist import OverwatchTierCog
 from panel import PanelCog
 from anniversary import AnniversaryCog
 from birthday_signup import (
@@ -54,6 +55,7 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(AdminCog(self))
         await self.add_cog(PanelCog(self))
         await self.add_cog(OverwatchPatchCog(self))
+        await self.add_cog(OverwatchTierCog(self))
 
     async def on_ready(self) -> None:
         # Sync to each guild only (instant). Clear globals so Discord doesn't show duplicates.

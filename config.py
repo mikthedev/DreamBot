@@ -48,3 +48,8 @@ BIRTHDAY_ANNOUNCE_HOUR = int(os.getenv("BIRTHDAY_ANNOUNCE_HOUR", "10"))
 # Overwatch patch notes (official Battle.net page, checked once per day)
 OW_PATCH_URL = "https://overwatch.blizzard.com/en-us/news/patch-notes/"
 OW_PATCH_CHECK_HOURS = max(1, int(os.getenv("OW_PATCH_CHECK_HOURS", "24")))
+
+# Counterwatch tier list (announce about once every 2 weeks)
+OW_TIER_URL = "https://www.counterwatch.gg/stats/overwatch/tier-list"
+OW_TIER_INTERVAL_DAYS = max(1, int(os.getenv("OW_TIER_INTERVAL_DAYS", "14")))
+OW_TIER_CHECK_HOURS = max(1, int(os.getenv("OW_TIER_CHECK_HOURS", "24")))

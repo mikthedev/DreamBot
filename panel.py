@@ -22,6 +22,7 @@ from birthday_signup import (
 from birthdays import Birthday, celebration_embed
 from names import SetNameModal, WelcomeNameView, names_list_embed
 from overwatch_patches import PATCH_URL, build_patch_embeds
+from overwatch_tierlist import TIER_URL
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.panel")
@@ -204,30 +205,50 @@ def hub_welcome_embed(guild: discord.Guild, bot) -> discord.Embed:
 
 
 def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
-    channel_id = bot.db.get_ow_patch_channel(guild.id)
-    last = bot.db.latest_ow_patch_id(guild.id)
+    patch_ch = bot.db.get_ow_patch_channel(guild.id)
+    last_patch = bot.db.latest_ow_patch_id(guild.id)
+    tier_ch = bot.db.get_ow_tier_channel(guild.id)
+    last_tier = bot.db.get_ow_tier_last_id(guild.id)
+    last_tier_at = bot.db.get_ow_tier_last_posted(guild.id)
+    tier_when = (
+        last_tier_at.strftime("%Y-%m-%d")
+        if last_tier_at
+        else "_never_"
+    )
     embed = discord.Embed(
-        title="Overwatch patches",
+        title="Overwatch",
         description=(
-            "Checks [official patch notes]({url}) about once a day.\n"
-            "Keeps **one live post** in the channel (old post is deleted when a new "
-            "patch drops). Members can open **Previous patches** for an ephemeral "
-            "archive — only they see it.\n\n"
-            "**Preview** shows the exact post style."
-        ).format(url=PATCH_URL),
+            "**Patches** — [official notes]({patch_url}), checked daily. "
+            "One live post (old deleted on new patch); **Previous patches** is ephemeral.\n\n"
+            "**Tier list** — [Counterwatch]({tier_url}), about every "
+            "**{days} days**. Hero / win rate / pick rate only."
+        ).format(
+            patch_url=PATCH_URL,
+            tier_url=TIER_URL,
+            days=config.OW_TIER_INTERVAL_DAYS,
+        ),
         color=discord.Color.from_rgb(249, 158, 26),
     )
     embed.add_field(
-        name="Post channel",
-        value=_ch(guild, channel_id),
+        name="Patch channel",
+        value=f"{_ch(guild, patch_ch)}\nLast: `{last_patch}`" if last_patch else _ch(guild, patch_ch),
         inline=False,
     )
     embed.add_field(
-        name="Last announced",
-        value=f"`{last}`" if last else "_none yet_",
+        name="Tier-list channel",
+        value=(
+            f"{_ch(guild, tier_ch)}\n"
+            f"Last post: {tier_when}"
+            + (f" · `{last_tier}`" if last_tier else "")
+        ),
         inline=False,
     )
-    embed.set_footer(text=f"Scan every {config.OW_PATCH_CHECK_HOURS}h")
+    embed.set_footer(
+        text=(
+            f"Patches every {config.OW_PATCH_CHECK_HOURS}h · "
+            f"Tier check every {config.OW_TIER_CHECK_HOURS}h"
+        )
+    )
     return embed
 
 
@@ -361,7 +382,7 @@ class AdminHubView(discord.ui.View):
                 discord.SelectOption(
                     label="Overwatch",
                     value="overwatch",
-                    description="Patch notes channel & preview",
+                    description="Patches & Counterwatch tier list",
                     emoji="🎯",
                 ),
                 discord.SelectOption(
@@ -763,18 +784,25 @@ class AdminHubView(discord.ui.View):
         self.add_item(try_channel)
 
     def _add_overwatch_controls(self) -> None:
-        channel_pick = discord.ui.ChannelSelect(
-            placeholder="Set Overwatch patch channel…",
+        patch_pick = discord.ui.ChannelSelect(
+            placeholder="Set patch notes channel…",
             channel_types=[discord.ChannelType.text],
             min_values=1,
             max_values=1,
             row=1,
         )
+        tier_pick = discord.ui.ChannelSelect(
+            placeholder="Set tier-list channel…",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=2,
+        )
 
-        async def on_channel(interaction: discord.Interaction) -> None:
+        async def on_patch_channel(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
-            selected = channel_pick.values[0]
+            selected = patch_pick.values[0]
             channel_id = getattr(selected, "id", None)
             if channel_id is None:
                 await interaction.response.send_message(
@@ -792,9 +820,8 @@ class AdminHubView(discord.ui.View):
                 else f"<#{channel_id}>"
             )
             self.bot.db.set_ow_patch_channel(self.guild_id, int(channel_id))
-            # Seed current patch as seen so enabling doesn't dump an old patch
             cog = self.bot.get_cog("OverwatchPatchCog")
-            note = f"Channel set to {mention}."
+            note = f"Patch channel set to {mention}."
             if cog is not None:
                 try:
                     await interaction.response.defer()
@@ -805,7 +832,7 @@ class AdminHubView(discord.ui.View):
                         )
                         note += (
                             f"\nCurrent patch `{summary.fingerprint}` marked as seen "
-                            "(won't re-post). Use **Post latest** to announce it."
+                            "(won't auto-post). Use **Post patch** to announce it."
                         )
                     embed = hub_overwatch_embed(interaction.guild, self.bot)
                     embed.add_field(name="Done", value=note, inline=False)
@@ -822,32 +849,75 @@ class AdminHubView(discord.ui.View):
             else:
                 await interaction.response.edit_message(embed=embed, view=self)
 
-        channel_pick.callback = on_channel
-        self.add_item(channel_pick)
+        async def on_tier_channel(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            selected = tier_pick.values[0]
+            channel_id = getattr(selected, "id", None)
+            if channel_id is None:
+                await interaction.response.send_message(
+                    "Could not read that channel.", ephemeral=True
+                )
+                return
+            channel = (
+                interaction.guild.get_channel(channel_id)
+                if interaction.guild
+                else None
+            )
+            mention = (
+                channel.mention
+                if isinstance(channel, discord.abc.GuildChannel)
+                else f"<#{channel_id}>"
+            )
+            self.bot.db.set_ow_tier_channel(self.guild_id, int(channel_id))
+            # Start the 2-week clock so enabling doesn't instantly dump a post
+            self.bot.db.touch_ow_tier_schedule(self.guild_id)
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Done",
+                value=(
+                    f"Tier-list channel set to {mention}.\n"
+                    f"Auto-posts about every **{config.OW_TIER_INTERVAL_DAYS} days** "
+                    "from now. Use **Post tier list** to announce immediately."
+                ),
+                inline=False,
+            )
+            self._rebuild()
+            await interaction.response.edit_message(embed=embed, view=self)
 
-        preview = discord.ui.Button(
-            label="Preview (only you)",
+        patch_pick.callback = on_patch_channel
+        tier_pick.callback = on_tier_channel
+        self.add_item(patch_pick)
+        self.add_item(tier_pick)
+
+        preview_patch = discord.ui.Button(
+            label="Preview patch",
             style=discord.ButtonStyle.primary,
-            row=2,
+            row=3,
         )
-        post_test = discord.ui.Button(
-            label="Post test in channel",
-            style=discord.ButtonStyle.secondary,
-            row=2,
-        )
-        post_live = discord.ui.Button(
-            label="Post latest now",
+        post_patch = discord.ui.Button(
+            label="Post patch",
             style=discord.ButtonStyle.success,
             row=3,
         )
+        preview_tier = discord.ui.Button(
+            label="Preview tier list",
+            style=discord.ButtonStyle.primary,
+            row=4,
+        )
+        post_tier = discord.ui.Button(
+            label="Post tier list",
+            style=discord.ButtonStyle.success,
+            row=4,
+        )
 
-        async def on_preview(interaction: discord.Interaction) -> None:
+        async def on_preview_patch(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             cog = self.bot.get_cog("OverwatchPatchCog")
             if cog is None:
                 await interaction.response.send_message(
-                    "Overwatch cog not loaded.", ephemeral=True
+                    "Overwatch patch cog not loaded.", ephemeral=True
                 )
                 return
             await interaction.response.defer(ephemeral=True)
@@ -856,43 +926,7 @@ class AdminHubView(discord.ui.View):
             except Exception as exc:
                 await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
 
-        async def on_post_test(interaction: discord.Interaction) -> None:
-            if not await self._admin_ok(interaction):
-                return
-            channel = interaction.channel
-            if not isinstance(channel, discord.TextChannel):
-                await interaction.response.send_message(
-                    "Run `/panel` in a text channel.", ephemeral=True
-                )
-                return
-            cog = self.bot.get_cog("OverwatchPatchCog")
-            if cog is None:
-                await interaction.response.send_message(
-                    "Overwatch cog not loaded.", ephemeral=True
-                )
-                return
-            await interaction.response.defer()
-            try:
-                summary = await cog.get_summary()
-            except Exception as exc:
-                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
-                return
-            if summary is None:
-                await interaction.followup.send(
-                    "Could not parse the patch notes page.", ephemeral=True
-                )
-                return
-            await cog.post_to_channel(channel, summary, preview=True)
-            embed = hub_overwatch_embed(interaction.guild, self.bot)
-            embed.add_field(
-                name="Test posted",
-                value=f"Preview sent to {channel.mention}.",
-                inline=False,
-            )
-            self._rebuild()
-            await interaction.edit_original_response(embed=embed, view=self)
-
-        async def on_post_live(interaction: discord.Interaction) -> None:
+        async def on_post_patch(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             channel_id = self.bot.db.get_ow_patch_channel(self.guild_id)
@@ -918,7 +952,7 @@ class AdminHubView(discord.ui.View):
             cog = self.bot.get_cog("OverwatchPatchCog")
             if cog is None:
                 await interaction.response.send_message(
-                    "Overwatch cog not loaded.", ephemeral=True
+                    "Overwatch patch cog not loaded.", ephemeral=True
                 )
                 return
             await interaction.response.defer()
@@ -936,18 +970,91 @@ class AdminHubView(discord.ui.View):
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Posted",
-                value=f"**{summary.title}** → {channel.mention}\n_(Replaced any previous live patch post.)_",
+                value=(
+                    f"**{summary.title}** → {channel.mention}\n"
+                    "_(Replaced any previous live patch post.)_"
+                ),
                 inline=False,
             )
             self._rebuild()
             await interaction.edit_original_response(embed=embed, view=self)
 
-        preview.callback = on_preview
-        post_test.callback = on_post_test
-        post_live.callback = on_post_live
-        self.add_item(preview)
-        self.add_item(post_test)
-        self.add_item(post_live)
+        async def on_preview_tier(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            cog = self.bot.get_cog("OverwatchTierCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "Tier-list cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer(ephemeral=True)
+            try:
+                await cog.send_preview_ephemeral(interaction)
+            except Exception as exc:
+                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+
+        async def on_post_tier(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            channel_id = self.bot.db.get_ow_tier_channel(self.guild_id)
+            if not channel_id:
+                await interaction.response.send_message(
+                    "Set a tier-list channel first.", ephemeral=True
+                )
+                return
+            channel = (
+                interaction.guild.get_channel(channel_id) if interaction.guild else None
+            )
+            if channel is None and interaction.guild is not None:
+                try:
+                    channel = await interaction.guild.fetch_channel(channel_id)
+                except discord.HTTPException:
+                    channel = None
+            if not isinstance(channel, discord.TextChannel):
+                await interaction.response.send_message(
+                    "Tier-list channel missing — pick it again in the dropdown.",
+                    ephemeral=True,
+                )
+                return
+            cog = self.bot.get_cog("OverwatchTierCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "Tier-list cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            try:
+                summary = await cog.get_summary()
+            except Exception as exc:
+                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+                return
+            if summary is None:
+                await interaction.followup.send(
+                    "Could not parse the Counterwatch tier list.", ephemeral=True
+                )
+                return
+            await cog.publish_live(channel, summary)
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Posted",
+                value=(
+                    f"**{summary.title}** → {channel.mention}\n"
+                    "_(Replaced any previous live tier-list post.)_"
+                ),
+                inline=False,
+            )
+            self._rebuild()
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        preview_patch.callback = on_preview_patch
+        post_patch.callback = on_post_patch
+        preview_tier.callback = on_preview_tier
+        post_tier.callback = on_post_tier
+        self.add_item(preview_patch)
+        self.add_item(post_patch)
+        self.add_item(preview_tier)
+        self.add_item(post_tier)
 
     def _add_anniversary_controls(self) -> None:
         async def open_composer(

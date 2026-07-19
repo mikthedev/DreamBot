@@ -168,6 +168,15 @@ def _compact_value(raw: str) -> tuple[str, str, str | None]:
     return "", text, mode
 
 
+def _short_label(label: str, limit: int = 34) -> str:
+    """Trim long Blizzard labels at a word boundary."""
+    label = label.strip()
+    if len(label) <= limit:
+        return label
+    cut = label[:limit].rsplit(" ", 1)[0].rstrip(".,;:-")
+    return (cut or label[: limit - 1]) + "…"
+
+
 def _make_change(
     ability: str, raw_li: str, *, icon_url: str | None = None
 ) -> ChangeLine | None:
@@ -176,8 +185,13 @@ def _make_change(
         return None
     label, value, mode = _compact_value(clean)
     tone = _tone_from(clean)
-    if label and len(label) > 36:
-        label = label[:35].rstrip() + "…"
+    # Drop ability name if Blizzard repeats it in the label
+    if label and ability and label.lower().startswith(ability.lower()):
+        trimmed = label[len(ability) :].lstrip(" :-–—")
+        if trimmed:
+            label = trimmed
+    if label:
+        label = _short_label(label)
     if label and "→" in value:
         text = f"{label} `{value}`"
     elif "→" in value:

@@ -20,7 +20,7 @@ from birthday_signup import (
     signup_embed,
 )
 from birthdays import Birthday, celebration_embed
-from names import SetNameModal, names_list_embed
+from names import SetNameModal, WelcomeNameView, names_list_embed
 from nicknames import is_guild_manager
 
 log = logging.getLogger("dream_team.panel")
@@ -193,7 +193,7 @@ def hub_welcome_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Welcome message",
         description=(
             "Shown when someone joins, with a **Set my name** button.\n"
-            "Keep it short — names are edited via the button or **Names** in this panel.\n\n"
+            "Use **Try welcome** to see it as a member would — privately or in this channel.\n\n"
             f"**Placeholders:** `{{mention}}` `{{display}}` `{{example_nick}}`"
         ),
         color=MUTED,
@@ -625,8 +625,22 @@ class AdminHubView(discord.ui.View):
         self.add_item(refresh)
 
     def _add_welcome_controls(self) -> None:
-        edit = discord.ui.Button(label="Edit welcome text", style=discord.ButtonStyle.primary, row=1)
-        reset = discord.ui.Button(label="Reset to short default", style=discord.ButtonStyle.secondary, row=1)
+        edit = discord.ui.Button(
+            label="Edit text", style=discord.ButtonStyle.primary, row=1
+        )
+        reset = discord.ui.Button(
+            label="Reset default", style=discord.ButtonStyle.secondary, row=1
+        )
+        try_private = discord.ui.Button(
+            label="Try welcome (only you)",
+            style=discord.ButtonStyle.success,
+            row=2,
+        )
+        try_channel = discord.ui.Button(
+            label="Post test in channel",
+            style=discord.ButtonStyle.secondary,
+            row=2,
+        )
 
         async def on_edit(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
@@ -642,10 +656,68 @@ class AdminHubView(discord.ui.View):
                 view=self,
             )
 
+        async def _welcome_body(member: discord.Member) -> str:
+            template = self.bot.db.get_welcome_message(self.guild_id) or DEFAULT_WELCOME
+            return render_welcome_prompt(template, member)
+
+        async def on_try_private(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            assert isinstance(interaction.user, discord.Member)
+            body = await _welcome_body(interaction.user)
+            await interaction.response.send_message(
+                content=(
+                    "**Test welcome** — only you see this.\n"
+                    "Tap **Set my name** to try the full flow.\n\n"
+                    f"{body}"
+                ),
+                view=WelcomeNameView(),
+                ephemeral=True,
+            )
+
+        async def on_try_channel(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            assert isinstance(interaction.user, discord.Member)
+            channel = interaction.channel
+            if not isinstance(channel, discord.TextChannel):
+                await interaction.response.send_message(
+                    "Run `/panel` in a text channel to post a test there.",
+                    ephemeral=True,
+                )
+                return
+            body = await _welcome_body(interaction.user)
+            try:
+                await channel.send(
+                    content=(
+                        f"🧪 **Test welcome** (by {interaction.user.mention})\n\n"
+                        f"{body}"
+                    ),
+                    view=WelcomeNameView(),
+                )
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    "I can't post in this channel.",
+                    ephemeral=True,
+                )
+                return
+
+            embed = hub_welcome_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Test posted",
+                value=f"Check {channel.mention} — same look as a real join.",
+                inline=False,
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+
         edit.callback = on_edit
         reset.callback = on_reset
+        try_private.callback = on_try_private
+        try_channel.callback = on_try_channel
         self.add_item(edit)
         self.add_item(reset)
+        self.add_item(try_private)
+        self.add_item(try_channel)
 
     def _add_anniversary_controls(self) -> None:
         async def open_composer(

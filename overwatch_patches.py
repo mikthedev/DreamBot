@@ -177,7 +177,7 @@ def _make_change(
     label, value, mode = _compact_value(clean)
     tone = _tone_from(clean)
     if label and "→" in value:
-        text = f"**{label}** `{value}`"
+        text = f"{label} `{value}`"
     elif "→" in value:
         text = f"`{value}`"
     else:
@@ -189,25 +189,25 @@ def _make_change(
 
 
 def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
-    """Ability name + each buff/nerf on its own line (no · clutter)."""
+    """Ability name + each buff/nerf on its own line (plain text; only hero name is bold)."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
 
-    rows: list[str] = [f"**{ability}**"]
+    rows: list[str] = [ability]
     for c in shared:
         rows.append(f"{c.tone}  {c.text}")
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                rows.append(f"┣ **5v5**  {a.text}")
-                rows.append(f"┗ **6v6**  {b.text}")
+                rows.append(f"┣ 5v5  {a.text}")
+                rows.append(f"┗ 6v6  {b.text}")
         else:
             for c in v5:
-                rows.append(f"┣ **5v5**  {c.text}")
+                rows.append(f"┣ 5v5  {c.text}")
             for c in v6:
-                rows.append(f"┗ **6v6**  {c.text}")
+                rows.append(f"┗ 6v6  {c.text}")
 
     return "\n".join(rows)
 

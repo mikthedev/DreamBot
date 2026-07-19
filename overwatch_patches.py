@@ -44,6 +44,7 @@ class ChangeLine:
     text: str
     mode: str | None = None  # "5v5" | "6v6" | None
     tone: str = "•"  # ▲ ▼ •
+    icon_url: str | None = None  # ability / utility icon from Blizzard
 
 
 @dataclass
@@ -162,7 +163,9 @@ def _compact_value(raw: str) -> tuple[str, str, str | None]:
     return "", text, mode
 
 
-def _make_change(ability: str, raw_li: str) -> ChangeLine | None:
+def _make_change(
+    ability: str, raw_li: str, *, icon_url: str | None = None
+) -> ChangeLine | None:
     clean = _strip_tags(raw_li)
     if not clean:
         return None
@@ -174,8 +177,29 @@ def _make_change(ability: str, raw_li: str) -> ChangeLine | None:
         text = f"`{value}`"
     else:
         text = value
-    # Avoid repeating ability name inside the line
-    return ChangeLine(ability=ability, text=text, mode=mode, tone=tone)
+    return ChangeLine(
+        ability=ability, text=text, mode=mode, tone=tone, icon_url=icon_url
+    )
+
+
+def _format_ability_lines(lines: list[ChangeLine]) -> str:
+    shared = [c for c in lines if not c.mode]
+    v5 = [c for c in lines if c.mode == "5v5"]
+    v6 = [c for c in lines if c.mode == "6v6"]
+    parts: list[str] = []
+    for c in shared:
+        parts.append(f"{c.tone} {c.text}")
+    if v5 or v6:
+        if v5 and v6 and len(v5) == len(v6):
+            for a, b in zip(v5, v6):
+                parts.append(f"┣ **5v5**  {a.tone} {a.text}")
+                parts.append(f"┗ **6v6**  {b.tone} {b.text}")
+        else:
+            for c in v5:
+                parts.append(f"┣ **5v5**  {c.tone} {c.text}")
+            for c in v6:
+                parts.append(f"┗ **6v6**  {c.tone} {c.text}")
+    return "\n".join(parts)
 
 
 def _format_hero_body(hero: HeroChange) -> str:
@@ -186,27 +210,7 @@ def _format_hero_body(hero: HeroChange) -> str:
 
     blocks: list[str] = []
     for ability, lines in by_ability.items():
-        shared = [c for c in lines if not c.mode]
-        v5 = [c for c in lines if c.mode == "5v5"]
-        v6 = [c for c in lines if c.mode == "6v6"]
-
-        parts = [f"**{ability}**"]
-        for c in shared:
-            parts.append(f"{c.tone} {c.text}")
-
-        if v5 or v6:
-            # Pair modes for easy scanning
-            if v5 and v6 and len(v5) == len(v6):
-                for a, b in zip(v5, v6):
-                    # Strip mode from already-compact text; show badges
-                    parts.append(f"┣ **5v5**  {a.tone} {a.text}")
-                    parts.append(f"┗ **6v6**  {b.tone} {b.text}")
-            else:
-                for c in v5:
-                    parts.append(f"┣ **5v5**  {c.tone} {c.text}")
-                for c in v6:
-                    parts.append(f"┗ **6v6**  {c.tone} {c.text}")
-
+        parts = [f"**{ability}**", _format_ability_lines(lines)]
         blocks.append("\n".join(parts))
 
     body = "\n\n".join(blocks)
@@ -278,21 +282,26 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
             body = hm.group(3)
             changes: list[ChangeLine] = []
 
-            for ability in re.finditer(
-                r'PatchNotesAbilityUpdate-name">([^<]+)</div>'
-                r'.*?PatchNotesAbilityUpdate-detailList">(.*?)</div>',
-                body,
-                re.S,
-            ):
-                ability_name = ability.group(1).strip()
+            for ab_html in re.split(r'<div class="PatchNotesAbilityUpdate">', body)[1:]:
+                ability_icon = _first(
+                    r'PatchNotesAbilityUpdate-icon" src="([^"]+)"', ab_html
+                ) or None
+                ability_name = _first(
+                    r'PatchNotesAbilityUpdate-name">([^<]+)', ab_html
+                )
+                if not ability_name:
+                    continue
                 ability_name = re.sub(
                     r"\s*[–—-]\s*(Major|Minor)\s+Perk\s*$",
                     "",
                     ability_name,
                     flags=re.I,
                 )
-                for li in re.findall(r"<li>(.*?)</li>", ability.group(2), re.S):
-                    ch = _make_change(ability_name, li)
+                detail = _first(
+                    r'PatchNotesAbilityUpdate-detailList">(.*?)</div>', ab_html, re.S
+                )
+                for li in re.findall(r"<li>(.*?)</li>", detail or "", re.S):
+                    ch = _make_change(ability_name, li, icon_url=ability_icon)
                     if ch:
                         changes.append(ch)
                     if len(changes) >= 6:
@@ -302,7 +311,7 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
 
             if not changes:
                 for li in re.findall(r"<li>(.*?)</li>", body, re.S)[:4]:
-                    ch = _make_change("General", li)
+                    ch = _make_change("General", li, icon_url=None)
                     if ch:
                         changes.append(ch)
 
@@ -354,8 +363,125 @@ async def fetch_latest_summary() -> PatchSummary | None:
     return parse_latest_patch(html)
 
 
+def _ability_rows(summary: PatchSummary):
+    """Yield (role, hero, ability_name, lines) in display order."""
+    by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
+    for h in summary.heroes:
+        by_role.setdefault(h.role, []).append(h)
+
+    for role in ROLE_ORDER:
+        heroes = by_role.get(role, [])
+        if not heroes:
+            continue
+        yield ("role", role, None, None, None)
+        for hero in heroes:
+            by_ability: dict[str, list[ChangeLine]] = {}
+            for ch in hero.changes:
+                by_ability.setdefault(ch.ability, []).append(ch)
+            for ability, lines in by_ability.items():
+                yield ("ability", role, hero, ability, lines)
+
+
+def build_patch_layouts(
+    summary: PatchSummary, *, preview: bool = False
+) -> list[discord.ui.LayoutView]:
+    """
+    Role-grouped layout with official ability icons (Section + Thumbnail).
+    Discord caps a message at 40 components; large patches may use 2 messages.
+    """
+    n = len(summary.heroes)
+    head = (
+        ("🧪 **Preview** — not a live announce\n" if preview else "")
+        + f"**Overwatch** · {summary.date or 'patch'}\n"
+        + (
+            f"**{n} heroes** balanced · [full notes]({summary.url})"
+            if n != 1
+            else f"**1 hero** balanced · [full notes]({summary.url})"
+        )
+    )
+    if not summary.heroes:
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(
+            discord.ui.TextDisplay(
+                ("🧪 **Preview**\n" if preview else "")
+                + f"_No retail hero balance in this drop._ · [notes]({summary.url})"
+            )
+        )
+        return [view]
+
+    # Each Section ≈ 3 toward the 40 limit; leave a little headroom.
+    BUDGET = 38
+    views: list[discord.ui.LayoutView] = []
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.TextDisplay(head))
+    used = view._total_children
+    open_role: str | None = None
+
+    def flush() -> None:
+        nonlocal view, used, open_role
+        views.append(view)
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(
+            discord.ui.TextDisplay(
+                f"**Overwatch** · continued · [notes]({summary.url})"
+            )
+        )
+        used = view._total_children
+        open_role = None
+
+    for kind, role, hero, ability, lines in _ability_rows(summary):
+        if kind == "role":
+            cost = 2  # label + separator
+            if used + cost > BUDGET:
+                flush()
+            view.add_item(
+                discord.ui.TextDisplay(f"**{ROLE_LABEL.get(role, role)}**")
+            )
+            view.add_item(discord.ui.Separator(visible=True))
+            used = view._total_children
+            open_role = role
+            continue
+
+        assert hero is not None and ability is not None and lines is not None
+        body = f"**{hero.name}** · {ability}\n{_format_ability_lines(lines)}"
+        if len(body) > 500:
+            body = body[:497].rstrip() + "…"
+        icon = next((c.icon_url for c in lines if c.icon_url), None) or hero.icon_url
+
+        # Ensure role label is present on a continued message
+        need_role = 2 if open_role != role else 0
+        cost = 3 + need_role  # Section≈3
+        if used + cost > BUDGET:
+            flush()
+            view.add_item(
+                discord.ui.TextDisplay(f"**{ROLE_LABEL.get(role, role)}**")
+            )
+            view.add_item(discord.ui.Separator(visible=True))
+            used = view._total_children
+            open_role = role
+
+        if icon:
+            view.add_item(
+                discord.ui.Section(body, accessory=discord.ui.Thumbnail(icon))
+            )
+        else:
+            view.add_item(discord.ui.TextDisplay(body))
+        used = view._total_children
+        open_role = role
+
+    views.append(view)
+    return views
+
+
+def build_patch_layout(
+    summary: PatchSummary, *, preview: bool = False
+) -> discord.ui.LayoutView:
+    """Back-compat: first layout page only."""
+    return build_patch_layouts(summary, preview=preview)[0]
+
+
 def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
-    """Header + one embed per role (Tank / Damage / Support) — single Discord message."""
+    """Fallback classic embeds if Components V2 layout fails."""
     n = len(summary.heroes)
     color = OW_BLUE if preview else OW_ORANGE
     head = discord.Embed(
@@ -370,11 +496,6 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
     )
     head.set_author(name="Overwatch  ·  Balance brief")
     if not summary.heroes:
-        head.description = (
-            ("🧪 **Preview**\n\n" if preview else "")
-            + "_No retail hero balance in this drop._\n"
-            + f"[Official notes]({summary.url})"
-        )
         return [head]
 
     by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
@@ -386,40 +507,15 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
         heroes = by_role.get(role, [])
         if not heroes:
             continue
-
         emb = discord.Embed(color=ROLE_COLOR.get(role, color))
         emb.set_author(name=f"{ROLE_LABEL.get(role, role)}  ·  {len(heroes)}")
-        if heroes[0].icon_url:
-            emb.set_thumbnail(url=heroes[0].icon_url)
-
         chunks: list[str] = []
         for hero in heroes:
-            body = _format_hero_body(hero)
-            # Portrait link on the hero title (opens official icon)
-            if hero.icon_url:
-                title = f"**[{hero.name}]({hero.icon_url})**"
-            else:
-                title = f"**{hero.name}**"
-            chunks.append(f"{title}\n{body}")
-
-        # Fit into description (4096) or spill into fields
+            chunks.append(f"**{hero.name}**\n{_format_hero_body(hero)}")
         joined = "\n\n﹒﹒﹒\n\n".join(chunks)
-        if len(joined) <= 4000:
-            emb.description = joined
-        else:
-            for hero in heroes:
-                body = _format_hero_body(hero)
-                if len(body) > 1024:
-                    body = body[:1021].rstrip() + "…"
-                emb.add_field(name=hero.name, value=body, inline=False)
-
+        emb.description = joined[:4000]
         embeds.append(emb)
-
     return embeds
-
-
-def _chunk_embeds(embeds: list[discord.Embed], size: int = 10) -> list[list[discord.Embed]]:
-    return [embeds[i : i + size] for i in range(0, len(embeds), size)]
 
 
 class OverwatchPatchCog(commands.Cog):
@@ -452,28 +548,36 @@ class OverwatchPatchCog(commands.Cog):
         *,
         preview: bool = False,
     ) -> discord.Message:
-        embeds = build_patch_embeds(summary, preview=preview)
-        first: discord.Message | None = None
-        for batch in _chunk_embeds(embeds, 10):
-            msg = await channel.send(embeds=batch)
-            if first is None:
-                first = msg
-        assert first is not None
-        return first
+        try:
+            layouts = build_patch_layouts(summary, preview=preview)
+            first: discord.Message | None = None
+            for layout in layouts:
+                msg = await channel.send(view=layout)
+                if first is None:
+                    first = msg
+            assert first is not None
+            return first
+        except Exception as exc:
+            log.warning("OW layout post failed, falling back to embeds: %s", exc)
+            embeds = build_patch_embeds(summary, preview=preview)
+            return await channel.send(embeds=embeds[:10])
 
     async def send_preview_ephemeral(self, interaction: discord.Interaction) -> None:
-        """Ephemeral preview (may use multiple followups for many heroes)."""
         summary = await self.get_summary()
         if summary is None:
             await interaction.followup.send(
                 "Could not parse the patch notes page.", ephemeral=True
             )
             return
-        embeds = build_patch_embeds(summary, preview=True)
-        batches = _chunk_embeds(embeds, 10)
-        await interaction.followup.send(embeds=batches[0], ephemeral=True)
-        for batch in batches[1:]:
-            await interaction.followup.send(embeds=batch, ephemeral=True)
+        try:
+            layouts = build_patch_layouts(summary, preview=True)
+            await interaction.followup.send(view=layouts[0], ephemeral=True)
+            for layout in layouts[1:]:
+                await interaction.followup.send(view=layout, ephemeral=True)
+        except Exception as exc:
+            log.warning("OW layout preview failed: %s", exc)
+            embeds = build_patch_embeds(summary, preview=True)
+            await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
 
     async def announce_if_new(self, guild: discord.Guild) -> tuple[bool, str]:
         channel_id = self.bot.db.get_ow_patch_channel(guild.id)

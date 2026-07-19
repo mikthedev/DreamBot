@@ -165,12 +165,12 @@ async def fetch_tier_summary(
 
 
 def _hero_stats(hero: TierHero) -> str:
-    """One compact line beside the portrait."""
+    """Caption under each icon tile."""
     return f"{hero.win_rate} win rate · {hero.pick_rate} pick rate"
 
 
 def _hero_line(hero: TierHero) -> str:
-    """Embed fallback when layouts aren't available."""
+    """Embed / text fallback."""
     return f"{hero.name} — {_hero_stats(hero)}"
 
 
@@ -178,21 +178,36 @@ def _tier_body(heroes: list[TierHero]) -> str:
     return "\n".join(_hero_line(h) for h in heroes)
 
 
+def _icon_url(hero: TierHero) -> str | None:
+    icon = hero.icon_url
+    if not icon:
+        return None
+    if "?" in icon:
+        icon = icon.split("?", 1)[0]
+    if "/full/" in icon:
+        icon = icon.replace("/full/", "/thumb/")
+    return icon
+
+
+def _gallery_chunks(heroes: list[TierHero], size: int = 10) -> list[list[TierHero]]:
+    return [heroes[i : i + size] for i in range(0, len(heroes), size)]
+
+
 def build_tier_layouts(
     summary: TierListSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
     """
-    Compact rows: portrait + "N% win rate · N% pick rate" (no hero name).
+    Compact single post: icon gallery per tier (grid), not one tall row per hero.
+    Tile caption: "N% win rate · N% pick rate".
     """
     date_bit = summary.updated or "latest"
     season_bit = f"S{summary.season}" if summary.season else "OW"
     if preview:
-        header = f"🧪 **[{season_bit} tier list]({summary.url})** · {date_bit}"
+        header = f"🧪 **[{season_bit}]({summary.url})** · {date_bit}"
     else:
         header = f"**[{season_bit} tier list]({summary.url})** · {date_bit}"
 
     BUDGET = 38
-    HERO_COST = 3
     views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(header))
@@ -210,46 +225,36 @@ def build_tier_layouts(
         if not heroes:
             continue
 
-        colour = TIER_COLOR.get(tier, discord.Color.orange())
-        # Short tier tag — less vertical chrome
-        label = f"**{tier}**"
+        chunks = _gallery_chunks(heroes)
+        cost = 2 + max(len(chunks), 1)
+        if view._total_children + cost > BUDGET:
+            flush()
 
-        def open_tier(*, continued: bool = False) -> discord.ui.Container:
-            if view._total_children + 1 + 1 + HERO_COST > BUDGET:
-                flush()
-            title = label + (" ·…" if continued else "")
-            container = discord.ui.Container(accent_colour=colour)
-            view.add_item(container)
-            container.add_item(discord.ui.TextDisplay(title))
-            return container
+        container = discord.ui.Container(
+            accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
+        )
+        view.add_item(container)
+        container.add_item(discord.ui.TextDisplay(f"**{tier}**"))
 
-        container = open_tier()
-
-        for hero in heroes:
-            if view._total_children + HERO_COST > BUDGET:
-                container = open_tier(continued=True)
-
-            stats = _hero_stats(hero)
-            icon = hero.icon_url
-            if icon and "?" in icon:
-                icon = icon.split("?", 1)[0]
-            # Prefer full portrait when Counterwatch serves thumb/full paths
-            if icon and "/thumb/" in icon:
-                icon = icon.replace("/thumb/", "/full/")
-
-            if icon:
-                container.add_item(
-                    discord.ui.Section(
-                        stats,
-                        accessory=discord.ui.Thumbnail(icon),
+        any_gallery = False
+        for chunk in chunks:
+            items: list[discord.MediaGalleryItem] = []
+            for h in chunk:
+                url = _icon_url(h)
+                if not url:
+                    continue
+                items.append(
+                    discord.MediaGalleryItem(
+                        url,
+                        description=_hero_stats(h)[:256],
                     )
                 )
-            else:
-                if view._total_children + 1 > BUDGET:
-                    container = open_tier(continued=True)
-                container.add_item(
-                    discord.ui.TextDisplay(f"{hero.name} — {stats}")
-                )
+            if items:
+                container.add_item(discord.ui.MediaGallery(*items))
+                any_gallery = True
+
+        if not any_gallery:
+            container.add_item(discord.ui.TextDisplay(_tier_body(heroes)))
 
     views.append(view)
     return views

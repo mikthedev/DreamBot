@@ -183,50 +183,65 @@ def _make_change(
 
 
 def _format_ability_lines(lines: list[ChangeLine]) -> str:
+    """Compact tweak line(s) for one ability."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
-    parts: list[str] = []
+
+    bits: list[str] = []
     for c in shared:
-        parts.append(f"{c.tone} {c.text}")
+        bits.append(f"{c.tone} {c.text}")
+
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
+            mode_bits = []
             for a, b in zip(v5, v6):
-                parts.append(f"┣ **5v5**  {a.tone} {a.text}")
-                parts.append(f"┗ **6v6**  {b.tone} {b.text}")
+                mode_bits.append(f"**5v5** {a.text}")
+                mode_bits.append(f"**6v6** {b.text}")
+            bits.append(" · ".join(mode_bits))
         else:
             for c in v5:
-                parts.append(f"┣ **5v5**  {c.tone} {c.text}")
+                bits.append(f"**5v5** {c.text}")
             for c in v6:
-                parts.append(f"┗ **6v6**  {c.tone} {c.text}")
-    return "\n".join(parts)
+                bits.append(f"**6v6** {c.text}")
+
+    return " · ".join(bits)
 
 
-def _format_hero_body(hero: HeroChange) -> str:
-    """Ability lines with linked utility icons."""
+def _format_hero_block(hero: HeroChange) -> str:
+    """Compact hero row: portrait link + abilities inline."""
+    if hero.icon_url:
+        name = f"**[{hero.name}]({hero.icon_url})**"
+    else:
+        name = f"**{hero.name}**"
+
     by_ability: dict[str, list[ChangeLine]] = {}
     for ch in hero.changes:
         by_ability.setdefault(ch.ability, []).append(ch)
 
-    blocks: list[str] = []
+    parts: list[str] = []
     for ability, lines in by_ability.items():
-        icon = next((c.icon_url for c in lines if c.icon_url), None)
-        title = f"**[{ability}]({icon})**" if icon else f"**{ability}**"
-        blocks.append(f"{title}\n{_format_ability_lines(lines)}")
+        tweaks = _format_ability_lines(lines)
+        if tweaks:
+            parts.append(f"*{ability}* — {tweaks}")
+        else:
+            parts.append(f"*{ability}*")
 
-    body = "\n\n".join(blocks)
-    if len(body) > 3900:
-        body = body[:3899].rstrip() + "…"
-    return body
+    if len(parts) == 1:
+        return f"{name} · {parts[0]}"
+    return name + "\n" + "\n".join(f"  {p}" for p in parts)
 
 
-def _format_hero_block(hero: HeroChange) -> str:
-    """Hero portrait link + ability icon links + tweaks."""
-    if hero.icon_url:
-        head = f"**[{hero.name}]({hero.icon_url})**"
-    else:
-        head = f"**{hero.name}**"
-    return f"{head}\n{_format_hero_body(hero)}"
+def _format_hero_body(hero: HeroChange) -> str:
+    """Field fallback — same content without the name line."""
+    by_ability: dict[str, list[ChangeLine]] = {}
+    for ch in hero.changes:
+        by_ability.setdefault(ch.ability, []).append(ch)
+    parts: list[str] = []
+    for ability, lines in by_ability.items():
+        tweaks = _format_ability_lines(lines)
+        parts.append(f"*{ability}* — {tweaks}" if tweaks else f"*{ability}*")
+    return "\n".join(parts)[:1024]
 
 
 def parse_latest_patch(html: str) -> PatchSummary | None:
@@ -405,21 +420,19 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
         if not heroes:
             continue
         emb = discord.Embed(color=ROLE_COLOR.get(role, color))
-        emb.set_author(name=f"{ROLE_LABEL.get(role, role)}  ·  {len(heroes)}")
+        emb.set_author(name=ROLE_LABEL.get(role, role))
         if heroes[0].icon_url:
             emb.set_thumbnail(url=heroes[0].icon_url)
 
+        # Tight spacing between heroes
         chunks = [_format_hero_block(h) for h in heroes]
-        joined = "\n\n﹒﹒﹒\n\n".join(chunks)
+        joined = "\n".join(chunks)
         if len(joined) <= 4096:
             emb.description = joined
         else:
-            emb.description = f"_{len(heroes)} heroes — details below_"
             for h in heroes:
-                body = _format_hero_body(h)
-                if len(body) > 1024:
-                    body = body[:1021].rstrip() + "…"
-                emb.add_field(name=h.name[:256], value=body or "—", inline=False)
+                body = _format_hero_body(h) or "—"
+                emb.add_field(name=h.name[:256], value=body, inline=False)
         embeds.append(emb)
 
     return embeds

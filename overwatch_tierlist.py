@@ -248,14 +248,14 @@ def render_tier_strip(
     Compact grid of small portraits with win rate / pick rate under each.
     Discord can't shrink Section thumbnails — we control size here.
     """
-    icon_px = 40
-    cell_w = 92
-    text_h = 28
-    cell_h = icon_px + text_h + 8
-    pad = 8
-    cols = min(5, max(1, len(heroes)))
+    icon_px = 32
+    cell_w = 86
+    text_h = 26
+    cell_h = icon_px + text_h + 6
+    pad = 6
+    cols = min(6, max(1, len(heroes)))
     rows = max(1, math.ceil(len(heroes) / cols))
-    header_h = 26
+    header_h = 22
 
     width = pad * 2 + cols * cell_w
     height = pad * 2 + header_h + rows * cell_h
@@ -264,8 +264,8 @@ def render_tier_strip(
 
     img = Image.new("RGBA", (width, height), bg + (255,))
     draw = ImageDraw.Draw(img)
-    title_font = _load_font(16)
-    small_font = _load_font(10)
+    title_font = _load_font(15)
+    small_font = _load_font(9)
 
     # Accent bar + tier title
     draw.rectangle((0, 0, 4, height), fill=accent + (255,))

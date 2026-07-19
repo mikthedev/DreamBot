@@ -210,8 +210,8 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Overwatch patches",
         description=(
             "Checks [official patch notes]({url}) about once a day.\n"
-            "Posts a **short hero-balance brief** — not the full wall of text.\n\n"
-            "Use **Preview** to see the post style before going live."
+            "Posts **hero balance cards** with portraits — no event spam.\n\n"
+            "**Preview** shows the exact post style."
         ).format(url=PATCH_URL),
         color=discord.Color.from_rgb(249, 158, 26),
     )
@@ -833,17 +833,9 @@ class AdminHubView(discord.ui.View):
                 return
             await interaction.response.defer(ephemeral=True)
             try:
-                summary = await cog.get_summary()
+                await cog.send_preview_ephemeral(interaction)
             except Exception as exc:
                 await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
-                return
-            if summary is None:
-                await interaction.followup.send(
-                    "Could not parse the patch notes page.", ephemeral=True
-                )
-                return
-            embeds = build_patch_embeds(summary, preview=True)
-            await interaction.followup.send(embeds=embeds, ephemeral=True)
 
         async def on_post_test(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):

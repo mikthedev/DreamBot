@@ -1,4 +1,4 @@
-"""Overwatch patch notes monitor — daily fetch, concise hero summary, styled embeds."""
+"""Overwatch patch notes monitor — daily fetch, concise hero cards, styled embeds."""
 
 from __future__ import annotations
 
@@ -24,22 +24,30 @@ USER_AGENT = "DreamTeamBot/1.0 (+discord; patch-notes monitor)"
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 ROLE_ORDER = ("Tank", "Damage", "Support")
-ROLE_EMOJI = {"Tank": "🛡️", "Damage": "⚔️", "Support": "💚"}
-SKIP_GENERIC = {
-    "hero updates",
-    "stadium updates",
-    "bug fixes",
-    "custom game updates",
-    "hotfixes",
-    "hotfix update",
+ROLE_COLOR = {
+    "Tank": discord.Color.from_rgb(242, 166, 50),
+    "Damage": discord.Color.from_rgb(232, 84, 84),
+    "Support": discord.Color.from_rgb(45, 190, 140),
 }
+ROLE_LABEL = {"Tank": "TANK", "Damage": "DAMAGE", "Support": "SUPPORT"}
+
+
+@dataclass
+class ChangeLine:
+    """One balance tweak, optionally mode-specific."""
+
+    ability: str
+    text: str
+    mode: str | None = None  # "5v5" | "6v6" | None
+    tone: str = "•"  # ▲ ▼ •
 
 
 @dataclass
 class HeroChange:
     name: str
     role: str
-    bullets: list[str] = field(default_factory=list)
+    icon_url: str | None = None
+    changes: list[ChangeLine] = field(default_factory=list)
 
 
 @dataclass
@@ -47,9 +55,7 @@ class PatchSummary:
     patch_id: str
     date: str
     title: str
-    events: list[str] = field(default_factory=list)
     heroes: list[HeroChange] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)  # short extras
     url: str = PATCH_URL
 
     @property
@@ -69,49 +75,140 @@ def _first(pattern: str, text: str, flags: int = 0) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _shorten_bullet(text: str, limit: int = 110) -> str:
-    text = text.strip().rstrip(".")
-    # Prefer arrow form for common phrasing
-    text = re.sub(
-        r"\breduced from ([^ ]+) to ([^ .]+)",
-        r"\1 → \2",
-        text,
-        flags=re.I,
-    )
-    text = re.sub(
-        r"\bincreased from ([^ ]+) to ([^ .]+)",
-        r"\1 → \2",
-        text,
-        flags=re.I,
-    )
-    text = re.sub(
-        r"\breduced (\d+%?) to (\d+%?)",
-        r"\1 → \2",
-        text,
-        flags=re.I,
-    )
-    text = re.sub(r"\breduced to ([^ .]+) \(Down from ([^)]+)\)", r"\2 → \1", text, flags=re.I)
-    text = re.sub(r"\bincreased to ([^ .]+) \(Up from ([^)]+)\)", r"\2 → \1", text, flags=re.I)
-    if len(text) > limit:
-        text = text[: limit - 1].rstrip() + "…"
-    return text
-
-
-def _tone(bullet: str) -> str:
-    low = bullet.lower()
+def _tone_from(text: str) -> str:
+    low = text.lower()
     buff = any(
         w in low
-        for w in ("increased", "up from", "buff", "now grants", "heal increased", "damage increased")
+        for w in (
+            "increased",
+            "up from",
+            "buff",
+            "now grants",
+            "added",
+            "restores",
+        )
     )
     nerf = any(
         w in low
-        for w in ("reduced", "down from", "nerf", "decreased", "removed")
+        for w in ("reduced", "down from", "nerf", "decreased", "removed", "lower")
     )
     if buff and not nerf:
         return "▲"
     if nerf and not buff:
         return "▼"
     return "•"
+
+
+def _compact_value(raw: str) -> tuple[str, str, str | None]:
+    """Turn verbose Blizzard phrasing into a short readable line."""
+    text = raw.strip().rstrip(".")
+    mode = None
+    m = re.search(r"\((5v5|6v6)\)\s*$", text, re.I)
+    if m:
+        mode = m.group(1).lower()
+        text = text[: m.start()].strip().rstrip(".")
+
+    def _sec(v: str) -> str:
+        return re.sub(r"\s*seconds?$", "s", v.strip(), flags=re.I)
+
+    # Cooldown reduced from 12 to 10 seconds
+    m = re.search(
+        r"^(?P<label>.+?)\s+(?:reduced|increased)\s+from\s+(?P<a>.+?)\s+to\s+(?P<b>.+)$",
+        text,
+        re.I,
+    )
+    if m:
+        label = m.group("label").strip()
+        a, b = m.group("a").strip(), m.group("b").strip()
+        if re.search(r"seconds?$", b, re.I) or re.search(r"seconds?$", a, re.I):
+            a = re.sub(r"\s*seconds?$", "", a, flags=re.I) + "s"
+            b = re.sub(r"\s*seconds?$", "", b, flags=re.I) + "s"
+        else:
+            a, b = _sec(a), _sec(b)
+        return label, f"{a} → {b}", mode
+
+    m = re.search(
+        r"^(?P<label>.+?)\s+reduced\s+(?P<a>\d+%?)\s+to\s+(?P<b>\d+%?)",
+        text,
+        re.I,
+    )
+    if m:
+        return m.group("label").strip(), f"{m.group('a')} → {m.group('b')}", mode
+
+    m = re.search(
+        r"reduced to (?P<b>.+?) \(Down from (?P<a>.+?)\)",
+        text,
+        re.I,
+    )
+    if m:
+        label = re.split(r"\s+reduced\s+to\s+", text, maxsplit=1, flags=re.I)[0].strip()
+        return label or "Value", f"{_sec(m.group('a'))} → {_sec(m.group('b'))}", mode
+
+    m = re.search(
+        r"increased to (?P<b>.+?) \(Up from (?P<a>.+?)\)",
+        text,
+        re.I,
+    )
+    if m:
+        label = re.split(r"\s+increased\s+to\s+", text, maxsplit=1, flags=re.I)[0].strip()
+        return label or "Value", f"{_sec(m.group('a'))} → {_sec(m.group('b'))}", mode
+
+    if len(text) > 90:
+        text = text[:89].rstrip() + "…"
+    return "", text, mode
+
+
+def _make_change(ability: str, raw_li: str) -> ChangeLine | None:
+    clean = _strip_tags(raw_li)
+    if not clean:
+        return None
+    label, value, mode = _compact_value(clean)
+    tone = _tone_from(clean)
+    if label and "→" in value:
+        text = f"**{label}** `{value}`"
+    elif "→" in value:
+        text = f"`{value}`"
+    else:
+        text = value
+    # Avoid repeating ability name inside the line
+    return ChangeLine(ability=ability, text=text, mode=mode, tone=tone)
+
+
+def _format_hero_body(hero: HeroChange) -> str:
+    """Group by ability; put 5v5 / 6v6 on their own lines."""
+    by_ability: dict[str, list[ChangeLine]] = {}
+    for ch in hero.changes:
+        by_ability.setdefault(ch.ability, []).append(ch)
+
+    blocks: list[str] = []
+    for ability, lines in by_ability.items():
+        shared = [c for c in lines if not c.mode]
+        v5 = [c for c in lines if c.mode == "5v5"]
+        v6 = [c for c in lines if c.mode == "6v6"]
+
+        parts = [f"**{ability}**"]
+        for c in shared:
+            parts.append(f"{c.tone} {c.text}")
+
+        if v5 or v6:
+            # Pair modes for easy scanning
+            if v5 and v6 and len(v5) == len(v6):
+                for a, b in zip(v5, v6):
+                    # Strip mode from already-compact text; show badges
+                    parts.append(f"┣ **5v5**  {a.tone} {a.text}")
+                    parts.append(f"┗ **6v6**  {b.tone} {b.text}")
+            else:
+                for c in v5:
+                    parts.append(f"┣ **5v5**  {c.tone} {c.text}")
+                for c in v6:
+                    parts.append(f"┗ **6v6**  {c.tone} {c.text}")
+
+        blocks.append("\n".join(parts))
+
+    body = "\n\n".join(blocks)
+    if len(body) > 3900:
+        body = body[:3899].rstrip() + "…"
+    return body
 
 
 def parse_latest_patch(html: str) -> PatchSummary | None:
@@ -121,7 +218,6 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
         re.S,
     )
     if not m:
-        # last/only patch on page
         m = re.search(
             r'<div class="PatchNotes-patch PatchNotes-live">(.*)$',
             html,
@@ -141,9 +237,8 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
 
     summary = PatchSummary(patch_id=patch_id or title, date=date, title=title)
 
-    # Split into sections
     sections = re.split(r'<div class="PatchNotes-section ', block)[1:]
-    mode = "retail"  # until Stadium / Bug Fixes
+    mode = "retail"
     current_role = ""
 
     for sec in sections:
@@ -151,82 +246,73 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
         low = sec_title.lower()
 
         if low in ("stadium updates", "bug fixes", "custom game updates"):
-            if low == "stadium updates":
-                summary.notes.append("Stadium powers/items also adjusted")
             mode = "skip"
             continue
-
         if mode == "skip":
             continue
 
-        is_hero_section = "PatchNotes-section-hero_update" in sec[:80] or sec.startswith(
-            "PatchNotes-section-hero_update"
+        is_hero_section = sec.startswith("PatchNotes-section-hero_update") or (
+            "hero_update" in sec[:60]
         )
-        # After split, class remains at start: `PatchNotes-section-hero_update">...`
-        if sec.startswith("PatchNotes-section-hero_update") or "hero_update" in sec[:60]:
-            is_hero_section = True
-
         if sec_title in ROLE_ORDER:
             current_role = sec_title
 
-        if is_hero_section or sec_title in ROLE_ORDER:
-            heroes = re.finditer(
-                r'<div class="PatchNotesHeroUpdate">'
-                r'.*?<h5 class="PatchNotesHeroUpdate-name">([^<]+)</h5>'
-                r'(.*?)</div>\s*</div>\s*(?=<div class="PatchNotesHeroUpdate">|<div class="PatchNotes-section|$)',
-                sec,
-                re.S,
-            )
-            for hm in heroes:
-                name = hm.group(1).strip()
-                body = hm.group(2)
-                bullets: list[str] = []
-                for ability in re.finditer(
-                    r'PatchNotesAbilityUpdate-name">([^<]+)</div>'
-                    r'.*?PatchNotesAbilityUpdate-detailList">(.*?)</div>',
-                    body,
-                    re.S,
-                ):
-                    ability_name = ability.group(1).strip()
-                    # Drop long perk suffixes for space
-                    ability_name = re.sub(
-                        r"\s*[–—-]\s*(Major|Minor)\s+Perk\s*$",
-                        "",
-                        ability_name,
-                        flags=re.I,
-                    )
-                    lis = re.findall(r"<li>(.*?)</li>", ability.group(2), re.S)
-                    for li in lis:
-                        tip = _shorten_bullet(_strip_tags(li))
-                        if tip:
-                            bullets.append(f"{ability_name}: {tip}")
-                        if len(bullets) >= 3:
-                            break
-                    if len(bullets) >= 3:
-                        break
-                if not bullets:
-                    for li in re.findall(r"<li>(.*?)</li>", body, re.S):
-                        tip = _shorten_bullet(_strip_tags(li))
-                        if tip:
-                            bullets.append(tip)
-                        if len(bullets) >= 3:
-                            break
-                if bullets:
-                    summary.heroes.append(
-                        HeroChange(
-                            name=name,
-                            role=current_role or "Hero",
-                            bullets=bullets[:3],
-                        )
-                    )
+        if not (is_hero_section or sec_title in ROLE_ORDER):
             continue
 
-        # Generic events — titles only
-        if low and low not in SKIP_GENERIC and sec_title not in ROLE_ORDER:
-            if "generic_update" in sec[:120]:
-                summary.events.append(sec_title)
+        heroes = re.finditer(
+            r'<div class="PatchNotesHeroUpdate">'
+            r'.*?<img class="PatchNotesHeroUpdate-icon" src="([^"]+)"[^>]*>'
+            r'.*?<h5 class="PatchNotesHeroUpdate-name">([^<]+)</h5>'
+            r"(.*?)</div>\s*</div>\s*(?=<div class=\"PatchNotesHeroUpdate\">|<div class=\"PatchNotes-section|$)",
+            sec,
+            re.S,
+        )
+        for hm in heroes:
+            icon_url = hm.group(1).strip()
+            name = hm.group(2).strip()
+            body = hm.group(3)
+            changes: list[ChangeLine] = []
 
-    # Deduplicate heroes keeping first (retail) occurrence
+            for ability in re.finditer(
+                r'PatchNotesAbilityUpdate-name">([^<]+)</div>'
+                r'.*?PatchNotesAbilityUpdate-detailList">(.*?)</div>',
+                body,
+                re.S,
+            ):
+                ability_name = ability.group(1).strip()
+                ability_name = re.sub(
+                    r"\s*[–—-]\s*(Major|Minor)\s+Perk\s*$",
+                    "",
+                    ability_name,
+                    flags=re.I,
+                )
+                for li in re.findall(r"<li>(.*?)</li>", ability.group(2), re.S):
+                    ch = _make_change(ability_name, li)
+                    if ch:
+                        changes.append(ch)
+                    if len(changes) >= 6:
+                        break
+                if len(changes) >= 6:
+                    break
+
+            if not changes:
+                for li in re.findall(r"<li>(.*?)</li>", body, re.S)[:4]:
+                    ch = _make_change("General", li)
+                    if ch:
+                        changes.append(ch)
+
+            if changes:
+                summary.heroes.append(
+                    HeroChange(
+                        name=name,
+                        role=current_role or "Hero",
+                        icon_url=icon_url or None,
+                        changes=changes,
+                    )
+                )
+
+    # Retail only (first occurrence per hero name in role)
     seen: set[str] = set()
     unique: list[HeroChange] = []
     for h in summary.heroes:
@@ -265,76 +351,53 @@ async def fetch_latest_summary() -> PatchSummary | None:
 
 
 def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
+    """Header + one card per hero (portrait as author icon)."""
+    n = len(summary.heroes)
+    color = OW_BLUE if preview else OW_ORANGE
     head = discord.Embed(
-        title=summary.date or "New Overwatch patch",
+        title=summary.date or "Overwatch patch",
         description=(
-            f"**{summary.title}**\n"
-            + ("🧪 **Preview** — not a live announce\n" if preview else "")
-            + f"[Official patch notes]({summary.url})"
+            ("🧪 **Preview** — not a live announce\n\n" if preview else "")
+            + (f"**{n} heroes** balanced\n" if n != 1 else "**1 hero** balanced\n")
+            + f"[Full official notes]({summary.url})"
         ),
-        color=OW_ORANGE if not preview else OW_BLUE,
+        color=color,
         url=summary.url,
     )
-    head.set_author(name="Overwatch · Patch brief")
-    if summary.events:
-        head.add_field(
-            name="Also live",
-            value=" · ".join(f"**{e}**" for e in summary.events[:4]),
-            inline=False,
-        )
-    if summary.notes:
-        head.add_field(name="Note", value=" · ".join(summary.notes), inline=False)
+    head.set_author(name="Overwatch  ·  Balance brief")
     if not summary.heroes:
-        head.add_field(
-            name="Hero balance",
-            value="_No retail hero tweaks in this drop (hotfix / events only)._",
-            inline=False,
+        head.description = (
+            ("🧪 **Preview**\n\n" if preview else "")
+            + "_No retail hero balance in this drop._\n"
+            + f"[Official notes]({summary.url})"
         )
-    head.set_footer(text="Dream Team · checked daily · heroes only")
+        return [head]
 
     embeds: list[discord.Embed] = [head]
-    if not summary.heroes:
-        return embeds
 
+    # Role divider order
     by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
-    other: list[HeroChange] = []
     for h in summary.heroes:
-        if h.role in by_role:
-            by_role[h.role].append(h)
-        else:
-            other.append(h)
+        by_role.setdefault(h.role, []).append(h)
 
     for role in ROLE_ORDER:
-        heroes = by_role[role]
-        if not heroes:
-            continue
-        lines: list[str] = []
-        for h in heroes:
-            tips = "\n".join(f"  {_tone(b)} {b}" for b in h.bullets)
-            lines.append(f"**{h.name}**\n{tips}")
-        chunk = "\n\n".join(lines)
-        # Split if too long for one field
-        while chunk:
-            part, chunk = chunk[:1000], chunk[1000:]
-            if chunk:
-                # break on hero boundary if possible
-                cut = part.rfind("\n\n**")
-                if cut > 400:
-                    chunk = part[cut + 2 :] + chunk
-                    part = part[:cut]
-            emb = discord.Embed(color=OW_ORANGE if not preview else OW_BLUE)
-            emb.add_field(
-                name=f"{ROLE_EMOJI.get(role, '•')} {role}",
-                value=part,
-                inline=False,
+        for hero in by_role.get(role, []):
+            emb = discord.Embed(
+                description=_format_hero_body(hero),
+                color=ROLE_COLOR.get(role, color),
+            )
+            label = ROLE_LABEL.get(role, role.upper())
+            emb.set_author(
+                name=f"{hero.name}  ·  {label}",
+                icon_url=hero.icon_url,
             )
             embeds.append(emb)
 
-    # Discord allows 10 embeds per message — keep first 8 role chunks + head
-    if len(embeds) > 8:
-        embeds = embeds[:8]
-        embeds[-1].set_footer(text="…truncated — see full notes on Battle.net")
     return embeds
+
+
+def _chunk_embeds(embeds: list[discord.Embed], size: int = 10) -> list[list[discord.Embed]]:
+    return [embeds[i : i + size] for i in range(0, len(embeds), size)]
 
 
 class OverwatchPatchCog(commands.Cog):
@@ -368,7 +431,27 @@ class OverwatchPatchCog(commands.Cog):
         preview: bool = False,
     ) -> discord.Message:
         embeds = build_patch_embeds(summary, preview=preview)
-        return await channel.send(embeds=embeds)
+        first: discord.Message | None = None
+        for batch in _chunk_embeds(embeds, 10):
+            msg = await channel.send(embeds=batch)
+            if first is None:
+                first = msg
+        assert first is not None
+        return first
+
+    async def send_preview_ephemeral(self, interaction: discord.Interaction) -> None:
+        """Ephemeral preview (may use multiple followups for many heroes)."""
+        summary = await self.get_summary()
+        if summary is None:
+            await interaction.followup.send(
+                "Could not parse the patch notes page.", ephemeral=True
+            )
+            return
+        embeds = build_patch_embeds(summary, preview=True)
+        batches = _chunk_embeds(embeds, 10)
+        await interaction.followup.send(embeds=batches[0], ephemeral=True)
+        for batch in batches[1:]:
+            await interaction.followup.send(embeds=batch, ephemeral=True)
 
     async def announce_if_new(self, guild: discord.Guild) -> tuple[bool, str]:
         channel_id = self.bot.db.get_ow_patch_channel(guild.id)

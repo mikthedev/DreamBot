@@ -29,7 +29,11 @@ ROLE_COLOR = {
     "Damage": discord.Color.from_rgb(232, 84, 84),
     "Support": discord.Color.from_rgb(45, 190, 140),
 }
-ROLE_LABEL = {"Tank": "TANK", "Damage": "DAMAGE", "Support": "SUPPORT"}
+ROLE_LABEL = {
+    "Tank": "🛡️  TANK",
+    "Damage": "⚔️  DAMAGE",
+    "Support": "💚  SUPPORT",
+}
 
 
 @dataclass
@@ -351,7 +355,7 @@ async def fetch_latest_summary() -> PatchSummary | None:
 
 
 def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
-    """Header + one card per hero (portrait as author icon)."""
+    """Header + one embed per role (Tank / Damage / Support) — single Discord message."""
     n = len(summary.heroes)
     color = OW_BLUE if preview else OW_ORANGE
     head = discord.Embed(
@@ -373,25 +377,43 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
         )
         return [head]
 
-    embeds: list[discord.Embed] = [head]
-
-    # Role divider order
     by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
     for h in summary.heroes:
         by_role.setdefault(h.role, []).append(h)
 
+    embeds: list[discord.Embed] = [head]
     for role in ROLE_ORDER:
-        for hero in by_role.get(role, []):
-            emb = discord.Embed(
-                description=_format_hero_body(hero),
-                color=ROLE_COLOR.get(role, color),
-            )
-            label = ROLE_LABEL.get(role, role.upper())
-            emb.set_author(
-                name=f"{hero.name}  ·  {label}",
-                icon_url=hero.icon_url,
-            )
-            embeds.append(emb)
+        heroes = by_role.get(role, [])
+        if not heroes:
+            continue
+
+        emb = discord.Embed(color=ROLE_COLOR.get(role, color))
+        emb.set_author(name=f"{ROLE_LABEL.get(role, role)}  ·  {len(heroes)}")
+        if heroes[0].icon_url:
+            emb.set_thumbnail(url=heroes[0].icon_url)
+
+        chunks: list[str] = []
+        for hero in heroes:
+            body = _format_hero_body(hero)
+            # Portrait link on the hero title (opens official icon)
+            if hero.icon_url:
+                title = f"**[{hero.name}]({hero.icon_url})**"
+            else:
+                title = f"**{hero.name}**"
+            chunks.append(f"{title}\n{body}")
+
+        # Fit into description (4096) or spill into fields
+        joined = "\n\n﹒﹒﹒\n\n".join(chunks)
+        if len(joined) <= 4000:
+            emb.description = joined
+        else:
+            for hero in heroes:
+                body = _format_hero_body(hero)
+                if len(body) > 1024:
+                    body = body[:1021].rstrip() + "…"
+                emb.add_field(name=hero.name, value=body, inline=False)
+
+        embeds.append(emb)
 
     return embeds
 

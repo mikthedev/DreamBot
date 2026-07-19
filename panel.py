@@ -221,7 +221,8 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "**Patches** — [official notes]({patch_url}), checked daily. "
             "One live post (old deleted on new patch); **Previous patches** is ephemeral.\n\n"
             "**Tier list** — [Counterwatch]({tier_url}), about every "
-            "**{days} days**. Hero / win rate / pick rate only."
+            "**{days} days**. Small **app emojis** + win rate / pick rate "
+            "(first post may take a minute while icons upload)."
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,

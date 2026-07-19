@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import ssl
+import io
 from dataclasses import dataclass, field
 from html import unescape
 
@@ -363,125 +364,10 @@ async def fetch_latest_summary() -> PatchSummary | None:
     return parse_latest_patch(html)
 
 
-def _ability_rows(summary: PatchSummary):
-    """Yield (role, hero, ability_name, lines) in display order."""
-    by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
-    for h in summary.heroes:
-        by_role.setdefault(h.role, []).append(h)
-
-    for role in ROLE_ORDER:
-        heroes = by_role.get(role, [])
-        if not heroes:
-            continue
-        yield ("role", role, None, None, None)
-        for hero in heroes:
-            by_ability: dict[str, list[ChangeLine]] = {}
-            for ch in hero.changes:
-                by_ability.setdefault(ch.ability, []).append(ch)
-            for ability, lines in by_ability.items():
-                yield ("ability", role, hero, ability, lines)
-
-
-def build_patch_layouts(
-    summary: PatchSummary, *, preview: bool = False
-) -> list[discord.ui.LayoutView]:
-    """
-    Role-grouped layout with official ability icons (Section + Thumbnail).
-    Discord caps a message at 40 components; large patches may use 2 messages.
-    """
-    n = len(summary.heroes)
-    head = (
-        ("🧪 **Preview** — not a live announce\n" if preview else "")
-        + f"**Overwatch** · {summary.date or 'patch'}\n"
-        + (
-            f"**{n} heroes** balanced · [full notes]({summary.url})"
-            if n != 1
-            else f"**1 hero** balanced · [full notes]({summary.url})"
-        )
-    )
-    if not summary.heroes:
-        view = discord.ui.LayoutView(timeout=None)
-        view.add_item(
-            discord.ui.TextDisplay(
-                ("🧪 **Preview**\n" if preview else "")
-                + f"_No retail hero balance in this drop._ · [notes]({summary.url})"
-            )
-        )
-        return [view]
-
-    # Each Section ≈ 3 toward the 40 limit; leave a little headroom.
-    BUDGET = 38
-    views: list[discord.ui.LayoutView] = []
-    view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.TextDisplay(head))
-    used = view._total_children
-    open_role: str | None = None
-
-    def flush() -> None:
-        nonlocal view, used, open_role
-        views.append(view)
-        view = discord.ui.LayoutView(timeout=None)
-        view.add_item(
-            discord.ui.TextDisplay(
-                f"**Overwatch** · continued · [notes]({summary.url})"
-            )
-        )
-        used = view._total_children
-        open_role = None
-
-    for kind, role, hero, ability, lines in _ability_rows(summary):
-        if kind == "role":
-            cost = 2  # label + separator
-            if used + cost > BUDGET:
-                flush()
-            view.add_item(
-                discord.ui.TextDisplay(f"**{ROLE_LABEL.get(role, role)}**")
-            )
-            view.add_item(discord.ui.Separator(visible=True))
-            used = view._total_children
-            open_role = role
-            continue
-
-        assert hero is not None and ability is not None and lines is not None
-        body = f"**{hero.name}** · {ability}\n{_format_ability_lines(lines)}"
-        if len(body) > 500:
-            body = body[:497].rstrip() + "…"
-        icon = next((c.icon_url for c in lines if c.icon_url), None) or hero.icon_url
-
-        # Ensure role label is present on a continued message
-        need_role = 2 if open_role != role else 0
-        cost = 3 + need_role  # Section≈3
-        if used + cost > BUDGET:
-            flush()
-            view.add_item(
-                discord.ui.TextDisplay(f"**{ROLE_LABEL.get(role, role)}**")
-            )
-            view.add_item(discord.ui.Separator(visible=True))
-            used = view._total_children
-            open_role = role
-
-        if icon:
-            view.add_item(
-                discord.ui.Section(body, accessory=discord.ui.Thumbnail(icon))
-            )
-        else:
-            view.add_item(discord.ui.TextDisplay(body))
-        used = view._total_children
-        open_role = role
-
-    views.append(view)
-    return views
-
-
-def build_patch_layout(
-    summary: PatchSummary, *, preview: bool = False
-) -> discord.ui.LayoutView:
-    """Back-compat: first layout page only."""
-    return build_patch_layouts(summary, preview=preview)[0]
-
-
-def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
-    """Fallback classic embeds if Components V2 layout fails."""
+def build_patch_embeds(
+    summary: PatchSummary, *, preview: bool = False, with_images: bool = True
+) -> list[discord.Embed]:
+    """Header + one embed per role (images attached separately)."""
     n = len(summary.heroes)
     color = OW_BLUE if preview else OW_ORANGE
     head = discord.Embed(
@@ -496,6 +382,11 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
     )
     head.set_author(name="Overwatch  ·  Balance brief")
     if not summary.heroes:
+        head.description = (
+            ("🧪 **Preview**\n\n" if preview else "")
+            + "_No retail hero balance in this drop._\n"
+            + f"[Official notes]({summary.url})"
+        )
         return [head]
 
     by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
@@ -509,13 +400,40 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
             continue
         emb = discord.Embed(color=ROLE_COLOR.get(role, color))
         emb.set_author(name=f"{ROLE_LABEL.get(role, role)}  ·  {len(heroes)}")
-        chunks: list[str] = []
-        for hero in heroes:
-            chunks.append(f"**{hero.name}**\n{_format_hero_body(hero)}")
-        joined = "\n\n﹒﹒﹒\n\n".join(chunks)
-        emb.description = joined[:4000]
+        if with_images:
+            # Image carries icons + tweaks; keep a light name list above it
+            emb.description = " · ".join(h.name for h in heroes)
+            emb.set_image(url=f"attachment://ow_{role.lower()}.png")
+        else:
+            chunks = [f"**{h.name}**\n{_format_hero_body(h)}" for h in heroes]
+            emb.description = ("\n\n".join(chunks))[:4000]
         embeds.append(emb)
     return embeds
+
+
+async def build_patch_files(
+    session: aiohttp.ClientSession, summary: PatchSummary
+) -> list[discord.File]:
+    """Render one compact PNG per role (small hero + ability icons)."""
+    from overwatch_patches_render import render_role_card
+
+    by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
+    for h in summary.heroes:
+        by_role.setdefault(h.role, []).append(h)
+
+    files: list[discord.File] = []
+    for role in ROLE_ORDER:
+        heroes = by_role.get(role, [])
+        if not heroes:
+            continue
+        try:
+            png = await render_role_card(session, heroes, ssl_ctx=_SSL_CTX)
+        except Exception as exc:
+            log.warning("Role card render failed for %s: %s", role, exc)
+            continue
+        fname = f"ow_{role.lower()}.png"
+        files.append(discord.File(io.BytesIO(png), filename=fname))
+    return files
 
 
 class OverwatchPatchCog(commands.Cog):
@@ -532,7 +450,7 @@ class OverwatchPatchCog(commands.Cog):
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                headers={"User-Agent": USER_AGENT, "Accept": "text/html"}
+                headers={"User-Agent": USER_AGENT, "Accept": "text/html,image/*"}
             )
         return self._session
 
@@ -548,19 +466,18 @@ class OverwatchPatchCog(commands.Cog):
         *,
         preview: bool = False,
     ) -> discord.Message:
+        session = await self._get_session()
         try:
-            layouts = build_patch_layouts(summary, preview=preview)
-            first: discord.Message | None = None
-            for layout in layouts:
-                msg = await channel.send(view=layout)
-                if first is None:
-                    first = msg
-            assert first is not None
-            return first
+            files = await build_patch_files(session, summary)
         except Exception as exc:
-            log.warning("OW layout post failed, falling back to embeds: %s", exc)
-            embeds = build_patch_embeds(summary, preview=preview)
-            return await channel.send(embeds=embeds[:10])
+            log.warning("OW card render failed: %s", exc)
+            files = []
+        embeds = build_patch_embeds(
+            summary, preview=preview, with_images=bool(files)
+        )
+        if files:
+            return await channel.send(embeds=embeds, files=files)
+        return await channel.send(embeds=embeds)
 
     async def send_preview_ephemeral(self, interaction: discord.Interaction) -> None:
         summary = await self.get_summary()
@@ -569,15 +486,17 @@ class OverwatchPatchCog(commands.Cog):
                 "Could not parse the patch notes page.", ephemeral=True
             )
             return
+        session = await self._get_session()
         try:
-            layouts = build_patch_layouts(summary, preview=True)
-            await interaction.followup.send(view=layouts[0], ephemeral=True)
-            for layout in layouts[1:]:
-                await interaction.followup.send(view=layout, ephemeral=True)
+            files = await build_patch_files(session, summary)
         except Exception as exc:
-            log.warning("OW layout preview failed: %s", exc)
-            embeds = build_patch_embeds(summary, preview=True)
-            await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
+            log.warning("OW preview render failed: %s", exc)
+            files = []
+        embeds = build_patch_embeds(summary, preview=True, with_images=bool(files))
+        if files:
+            await interaction.followup.send(embeds=embeds, files=files, ephemeral=True)
+        else:
+            await interaction.followup.send(embeds=embeds, ephemeral=True)
 
     async def announce_if_new(self, guild: discord.Guild) -> tuple[bool, str]:
         channel_id = self.bot.db.get_ow_patch_channel(guild.id)

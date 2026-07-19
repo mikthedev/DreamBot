@@ -376,15 +376,13 @@ async def fetch_latest_summary() -> PatchSummary | None:
 
 def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
     """Single text message: header + Tank / Damage / Support (all heroes)."""
-    n = len(summary.heroes)
     color = OW_BLUE if preview else OW_ORANGE
     head = discord.Embed(
         title=summary.date or "Overwatch patch",
         description=(
-            ("🧪 **Preview** — not a live announce\n\n" if preview else "")
-            + (f"**{n} heroes** balanced\n" if n != 1 else "**1 hero** balanced\n")
-            + f"[Full official notes]({summary.url})\n"
-            + "_Tap a hero or ability name to see its icon._"
+            "🧪 **Preview** — not a live announce"
+            if preview
+            else None
         ),
         color=color,
         url=summary.url,
@@ -393,8 +391,7 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
     if not summary.heroes:
         head.description = (
             ("🧪 **Preview**\n\n" if preview else "")
-            + "_No retail hero balance in this drop._\n"
-            + f"[Official notes]({summary.url})"
+            + "_No retail hero balance in this drop._"
         )
         return [head]
 

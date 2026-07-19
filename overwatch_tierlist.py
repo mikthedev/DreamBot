@@ -228,7 +228,7 @@ def _tier_body(
 
 
 # Slightly larger than emojis: Discord Section thumbnails (circular accessory)
-PORTRAIT_TIERS = frozenset({"S", "A", "B"})
+PORTRAIT_TIERS = frozenset({"S", "A"})
 
 
 def build_tier_layouts(
@@ -238,8 +238,8 @@ def build_tier_layouts(
     emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> list[discord.ui.LayoutView]:
     """
-    S/A/B: circular portrait thumbnails (a step up from emoji size) + stats text.
-    C/D/F: compact custom emojis + stats (keeps the post short).
+    S/A: circular portrait thumbnails (a step up from emoji size) + stats text.
+    B–F: compact custom emojis + stats (keeps the post ~2 messages).
     """
     date_bit = summary.updated or "latest"
     season_bit = f"S{summary.season}" if summary.season else "OW"

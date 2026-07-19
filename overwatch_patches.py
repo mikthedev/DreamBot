@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 import ssl
-import io
 from dataclasses import dataclass, field
 from html import unescape
 
@@ -204,20 +203,30 @@ def _format_ability_lines(lines: list[ChangeLine]) -> str:
 
 
 def _format_hero_body(hero: HeroChange) -> str:
-    """Group by ability; put 5v5 / 6v6 on their own lines."""
+    """Ability lines with linked utility icons."""
     by_ability: dict[str, list[ChangeLine]] = {}
     for ch in hero.changes:
         by_ability.setdefault(ch.ability, []).append(ch)
 
     blocks: list[str] = []
     for ability, lines in by_ability.items():
-        parts = [f"**{ability}**", _format_ability_lines(lines)]
-        blocks.append("\n".join(parts))
+        icon = next((c.icon_url for c in lines if c.icon_url), None)
+        title = f"**[{ability}]({icon})**" if icon else f"**{ability}**"
+        blocks.append(f"{title}\n{_format_ability_lines(lines)}")
 
     body = "\n\n".join(blocks)
     if len(body) > 3900:
         body = body[:3899].rstrip() + "…"
     return body
+
+
+def _format_hero_block(hero: HeroChange) -> str:
+    """Hero portrait link + ability icon links + tweaks."""
+    if hero.icon_url:
+        head = f"**[{hero.name}]({hero.icon_url})**"
+    else:
+        head = f"**{hero.name}**"
+    return f"{head}\n{_format_hero_body(hero)}"
 
 
 def parse_latest_patch(html: str) -> PatchSummary | None:
@@ -364,10 +373,9 @@ async def fetch_latest_summary() -> PatchSummary | None:
     return parse_latest_patch(html)
 
 
-def build_patch_embeds(
-    summary: PatchSummary, *, preview: bool = False, with_images: bool = True
-) -> list[discord.Embed]:
-    """Header + one embed per role (images attached separately)."""
+
+def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
+    """Single text message: header + Tank / Damage / Support (all heroes)."""
     n = len(summary.heroes)
     color = OW_BLUE if preview else OW_ORANGE
     head = discord.Embed(
@@ -375,7 +383,8 @@ def build_patch_embeds(
         description=(
             ("🧪 **Preview** — not a live announce\n\n" if preview else "")
             + (f"**{n} heroes** balanced\n" if n != 1 else "**1 hero** balanced\n")
-            + f"[Full official notes]({summary.url})"
+            + f"[Full official notes]({summary.url})\n"
+            + "_Tap a hero or ability name to see its icon._"
         ),
         color=color,
         url=summary.url,
@@ -400,40 +409,23 @@ def build_patch_embeds(
             continue
         emb = discord.Embed(color=ROLE_COLOR.get(role, color))
         emb.set_author(name=f"{ROLE_LABEL.get(role, role)}  ·  {len(heroes)}")
-        if with_images:
-            # Image carries icons + tweaks; keep a light name list above it
-            emb.description = " · ".join(h.name for h in heroes)
-            emb.set_image(url=f"attachment://ow_{role.lower()}.png")
+        if heroes[0].icon_url:
+            emb.set_thumbnail(url=heroes[0].icon_url)
+
+        chunks = [_format_hero_block(h) for h in heroes]
+        joined = "\n\n﹒﹒﹒\n\n".join(chunks)
+        if len(joined) <= 4096:
+            emb.description = joined
         else:
-            chunks = [f"**{h.name}**\n{_format_hero_body(h)}" for h in heroes]
-            emb.description = ("\n\n".join(chunks))[:4000]
+            emb.description = f"_{len(heroes)} heroes — details below_"
+            for h in heroes:
+                body = _format_hero_body(h)
+                if len(body) > 1024:
+                    body = body[:1021].rstrip() + "…"
+                emb.add_field(name=h.name[:256], value=body or "—", inline=False)
         embeds.append(emb)
+
     return embeds
-
-
-async def build_patch_files(
-    session: aiohttp.ClientSession, summary: PatchSummary
-) -> list[discord.File]:
-    """Render one compact PNG per role (small hero + ability icons)."""
-    from overwatch_patches_render import render_role_card
-
-    by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
-    for h in summary.heroes:
-        by_role.setdefault(h.role, []).append(h)
-
-    files: list[discord.File] = []
-    for role in ROLE_ORDER:
-        heroes = by_role.get(role, [])
-        if not heroes:
-            continue
-        try:
-            png = await render_role_card(session, heroes, ssl_ctx=_SSL_CTX)
-        except Exception as exc:
-            log.warning("Role card render failed for %s: %s", role, exc)
-            continue
-        fname = f"ow_{role.lower()}.png"
-        files.append(discord.File(io.BytesIO(png), filename=fname))
-    return files
 
 
 class OverwatchPatchCog(commands.Cog):
@@ -450,7 +442,7 @@ class OverwatchPatchCog(commands.Cog):
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                headers={"User-Agent": USER_AGENT, "Accept": "text/html,image/*"}
+                headers={"User-Agent": USER_AGENT, "Accept": "text/html"}
             )
         return self._session
 
@@ -466,18 +458,7 @@ class OverwatchPatchCog(commands.Cog):
         *,
         preview: bool = False,
     ) -> discord.Message:
-        session = await self._get_session()
-        try:
-            files = await build_patch_files(session, summary)
-        except Exception as exc:
-            log.warning("OW card render failed: %s", exc)
-            files = []
-        embeds = build_patch_embeds(
-            summary, preview=preview, with_images=bool(files)
-        )
-        if files:
-            return await channel.send(embeds=embeds, files=files)
-        return await channel.send(embeds=embeds)
+        return await channel.send(embeds=build_patch_embeds(summary, preview=preview))
 
     async def send_preview_ephemeral(self, interaction: discord.Interaction) -> None:
         summary = await self.get_summary()
@@ -486,17 +467,10 @@ class OverwatchPatchCog(commands.Cog):
                 "Could not parse the patch notes page.", ephemeral=True
             )
             return
-        session = await self._get_session()
-        try:
-            files = await build_patch_files(session, summary)
-        except Exception as exc:
-            log.warning("OW preview render failed: %s", exc)
-            files = []
-        embeds = build_patch_embeds(summary, preview=True, with_images=bool(files))
-        if files:
-            await interaction.followup.send(embeds=embeds, files=files, ephemeral=True)
-        else:
-            await interaction.followup.send(embeds=embeds, ephemeral=True)
+        await interaction.followup.send(
+            embeds=build_patch_embeds(summary, preview=True),
+            ephemeral=True,
+        )
 
     async def announce_if_new(self, guild: discord.Guild) -> tuple[bool, str]:
         channel_id = self.bot.db.get_ow_patch_channel(guild.id)

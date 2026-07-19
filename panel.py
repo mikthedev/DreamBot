@@ -210,8 +210,8 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Overwatch patches",
         description=(
             "Checks [official patch notes]({url}) about once a day.\n"
-            "Posts **Tank / Damage / Support** cards in one message\n"
-            "(small hero + ability icons).\n\n"
+            "Posts **Tank / Damage / Support** text in one message.\n"
+            "Tap a hero or ability name to open its icon.\n\n"
             "**Preview** shows the exact post style."
         ).format(url=PATCH_URL),
         color=discord.Color.from_rgb(249, 158, 26),

@@ -164,9 +164,14 @@ async def fetch_tier_summary(
     return parse_tier_list(html)
 
 
+def _hero_stats(hero: TierHero) -> str:
+    """Compact stats only — icon carries the identity."""
+    return f"**{hero.win_rate}** · {hero.pick_rate}"
+
+
 def _hero_line(hero: TierHero) -> str:
-    role = ROLE_SHORT.get(hero.role, hero.role)
-    return f"{hero.name} · {role} — {hero.win_rate} WR · {hero.pick_rate} pick"
+    """Embed fallback (no per-row icons)."""
+    return f"{hero.name} — {_hero_stats(hero)}"
 
 
 def _tier_body(heroes: list[TierHero]) -> str:
@@ -176,21 +181,19 @@ def _tier_body(heroes: list[TierHero]) -> str:
 def build_tier_layouts(
     summary: TierListSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
-    """Colour-coded containers per tier — Hero / Win Rate / Pickrate only."""
+    """
+    Compact portrait cards: icon + win rate + pick rate only.
+    Colour accent per tier; Discord's 40-component cap may split the post.
+    """
     date_bit = summary.updated or "latest"
     season_bit = f"Season {summary.season}" if summary.season else "Overwatch"
     if preview:
-        header = (
-            f"🧪 **Preview** · **[{season_bit} tier list]({summary.url})**\n"
-            f"Updated {date_bit} · [Counterwatch]({summary.url})"
-        )
+        header = f"🧪 **Preview** · **[{season_bit}]({summary.url})** · {date_bit}"
     else:
-        header = (
-            f"**Tier list** · **[{season_bit}]({summary.url})**\n"
-            f"Updated {date_bit} · Win rate & pick rate"
-        )
+        header = f"**Tier list** · **[{season_bit}]({summary.url})** · {date_bit}"
 
     BUDGET = 38
+    HERO_COST = 3  # Section + text + thumbnail
     views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(header))
@@ -209,18 +212,40 @@ def build_tier_layouts(
         heroes = summary.tiers.get(tier) or []
         if not heroes:
             continue
-        body = _tier_body(heroes)
-        title = f"**{TIER_LABEL.get(tier, tier)}** · {len(heroes)}"
-        # Container(1) + title(1) + body(1)
-        cost = 3
-        if view._total_children + cost > BUDGET:
-            flush()
-        container = discord.ui.Container(
-            accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
-        )
-        view.add_item(container)
-        container.add_item(discord.ui.TextDisplay(title))
-        container.add_item(discord.ui.TextDisplay(body))
+
+        colour = TIER_COLOR.get(tier, discord.Color.orange())
+        label = TIER_LABEL.get(tier, tier)
+
+        def open_tier(*, continued: bool = False) -> discord.ui.Container:
+            # Container(1) + title(1) + at least one hero(3)
+            if view._total_children + 1 + 1 + HERO_COST > BUDGET:
+                flush()
+            title = f"**{label}**" + (" · cont." if continued else "")
+            container = discord.ui.Container(accent_colour=colour)
+            view.add_item(container)
+            container.add_item(discord.ui.TextDisplay(title))
+            return container
+
+        container = open_tier()
+
+        for hero in heroes:
+            if view._total_children + HERO_COST > BUDGET:
+                container = open_tier(continued=True)
+
+            stats = _hero_stats(hero)
+            if hero.icon_url:
+                container.add_item(
+                    discord.ui.Section(
+                        stats,
+                        accessory=discord.ui.Thumbnail(hero.icon_url),
+                    )
+                )
+            else:
+                if view._total_children + 1 > BUDGET:
+                    container = open_tier(continued=True)
+                container.add_item(
+                    discord.ui.TextDisplay(f"{hero.name} — {stats}")
+                )
 
     views.append(view)
     return views
@@ -237,7 +262,7 @@ def build_tier_embeds(
         description=(
             ("🧪 **Preview**\n" if preview else "")
             + f"[Counterwatch tier list]({summary.url})\n"
-            "Hero · Win rate · Pick rate"
+            "Icon · win rate · pick rate"
         ),
         color=color,
         url=summary.url,

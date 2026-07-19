@@ -165,8 +165,8 @@ async def fetch_tier_summary(
 
 
 def _hero_stats(hero: TierHero) -> str:
-    """Compact stats beside the portrait — no name (icon is the label)."""
-    return f"**{hero.win_rate}** · {hero.pick_rate} pick rate"
+    """One compact line beside the portrait."""
+    return f"{hero.win_rate} win rate · {hero.pick_rate} pick rate"
 
 
 def _hero_line(hero: TierHero) -> str:
@@ -182,18 +182,17 @@ def build_tier_layouts(
     summary: TierListSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
     """
-    Compact rows: hero portrait thumbnail + win rate · N% pick rate.
-    (Media galleries were unreliable for these icons; Section+Thumbnail matches patch notes.)
+    Compact rows: portrait + "N% win rate · N% pick rate" (no hero name).
     """
     date_bit = summary.updated or "latest"
-    season_bit = f"Season {summary.season}" if summary.season else "Overwatch"
+    season_bit = f"S{summary.season}" if summary.season else "OW"
     if preview:
-        header = f"🧪 **Preview** · **[{season_bit}]({summary.url})** · {date_bit}"
+        header = f"🧪 **[{season_bit} tier list]({summary.url})** · {date_bit}"
     else:
-        header = f"**Tier list** · **[{season_bit}]({summary.url})** · {date_bit}"
+        header = f"**[{season_bit} tier list]({summary.url})** · {date_bit}"
 
     BUDGET = 38
-    HERO_COST = 3  # Section + text + thumbnail
+    HERO_COST = 3
     views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(header))
@@ -203,9 +202,7 @@ def build_tier_layouts(
         views.append(view)
         view = discord.ui.LayoutView(timeout=None)
         view.add_item(
-            discord.ui.TextDisplay(
-                f"**Tier list** · **[{season_bit}]({summary.url})** · cont."
-            )
+            discord.ui.TextDisplay(f"**[{season_bit}]({summary.url})** · cont.")
         )
 
     for tier in TIER_ORDER:
@@ -214,12 +211,13 @@ def build_tier_layouts(
             continue
 
         colour = TIER_COLOR.get(tier, discord.Color.orange())
-        label = TIER_LABEL.get(tier, tier)
+        # Short tier tag — less vertical chrome
+        label = f"**{tier}**"
 
         def open_tier(*, continued: bool = False) -> discord.ui.Container:
             if view._total_children + 1 + 1 + HERO_COST > BUDGET:
                 flush()
-            title = f"**{label}**" + (" · cont." if continued else "")
+            title = label + (" ·…" if continued else "")
             container = discord.ui.Container(accent_colour=colour)
             view.add_item(container)
             container.add_item(discord.ui.TextDisplay(title))
@@ -235,6 +233,9 @@ def build_tier_layouts(
             icon = hero.icon_url
             if icon and "?" in icon:
                 icon = icon.split("?", 1)[0]
+            # Prefer full portrait when Counterwatch serves thumb/full paths
+            if icon and "/thumb/" in icon:
+                icon = icon.replace("/thumb/", "/full/")
 
             if icon:
                 container.add_item(

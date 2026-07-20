@@ -15,7 +15,7 @@ import aiohttp
 import certifi
 import discord
 from discord.ext import commands, tasks
-from PIL import Image, ImageDraw
+from PIL import Image
 
 import config
 
@@ -169,7 +169,8 @@ async def fetch_tier_summary(
 
 
 def _hero_stats(hero: TierHero) -> str:
-    return f"**{hero.win_rate}** win rate · **{hero.pick_rate}** pick rate"
+    # Compact labels: bold % for scan, short words so win vs pick stays obvious
+    return f"**{hero.win_rate}** win · **{hero.pick_rate}** pick"
 
 
 def _hero_emoji_key(hero: TierHero) -> str:
@@ -178,12 +179,12 @@ def _hero_emoji_key(hero: TierHero) -> str:
 
 
 def emoji_name_for_hero(hero: TierHero) -> str:
-    """Discord emoji names: 2–32 chars, [a-z0-9_]. Prefix marks circular 2D icons."""
-    return f"owc_{_hero_emoji_key(hero)}"[:32]
+    """Discord emoji names: 2–32 chars, [a-z0-9_]. Square thumbs (no circle mask)."""
+    return f"ows_{_hero_emoji_key(hero)}"[:32]
 
 
 def _icon_url(hero: TierHero) -> str | None:
-    """Prefer Counterwatch *thumb* assets (flatter 2D crop), never full 3D busts."""
+    """Prefer Counterwatch *thumb* assets (not full 3D busts)."""
     icon = hero.icon_url
     if not icon:
         return None
@@ -194,32 +195,22 @@ def _icon_url(hero: TierHero) -> str | None:
     return icon
 
 
-def _to_circular_emoji_png(data: bytes) -> bytes:
-    """
-    Build a small circular icon (transparent corners) for Discord app emojis.
-    This is the framed circle look — not a large Section thumbnail.
-    """
+def _to_emoji_png(data: bytes) -> bytes:
+    """Square PNG for app emojis — no circular mask."""
     im = Image.open(io.BytesIO(data)).convert("RGBA")
-    # Square crop from center
     w, h = im.size
     side = min(w, h)
     left = (w - side) // 2
     top = (h - side) // 2
     im = im.crop((left, top, left + side, top + side))
     im = im.resize((128, 128), Image.Resampling.LANCZOS)
-
-    mask = Image.new("L", (128, 128), 0)
-    ImageDraw.Draw(mask).ellipse((1, 1, 126, 126), fill=255)
-    out_im = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
-    out_im.paste(im, (0, 0), mask)
-
     out = io.BytesIO()
-    out_im.save(out, format="PNG", optimize=True)
+    im.save(out, format="PNG", optimize=True)
     payload = out.getvalue()
     if len(payload) > 256_000:
-        out_im = out_im.resize((96, 96), Image.Resampling.LANCZOS)
+        im = im.resize((96, 96), Image.Resampling.LANCZOS)
         out = io.BytesIO()
-        out_im.save(out, format="PNG", optimize=True)
+        im.save(out, format="PNG", optimize=True)
         payload = out.getvalue()
     return payload
 
@@ -227,6 +218,7 @@ def _to_circular_emoji_png(data: bytes) -> bytes:
 def _hero_line(
     hero: TierHero, emoji_map: dict[str, discord.Emoji] | None = None
 ) -> str:
+    """Emoji + rates only — icon identifies the hero."""
     stats = _hero_stats(hero)
     if emoji_map:
         em = emoji_map.get(emoji_name_for_hero(hero))
@@ -238,7 +230,72 @@ def _hero_line(
 def _tier_body(
     heroes: list[TierHero], emoji_map: dict[str, discord.Emoji] | None = None
 ) -> str:
-    return "\n".join(_hero_line(h, emoji_map) for h in heroes)
+    return "\n\n".join(_hero_line(h, emoji_map) for h in heroes)
+
+
+def _tier_emoji_strip(
+    heroes: list[TierHero], emoji_map: dict[str, discord.Emoji] | None
+) -> str:
+    """Emoji-only string so Discord can jumbo-render on plain messages."""
+    if not emoji_map:
+        return ""
+    parts: list[str] = []
+    for h in heroes:
+        em = emoji_map.get(emoji_name_for_hero(h))
+        if em is not None:
+            parts.append(str(em))
+    return " ".join(parts)
+
+
+def _chunk_emoji_strip(strip: str, size: int = 20) -> list[str]:
+    parts = strip.split()
+    if not parts:
+        return []
+    return [" ".join(parts[i : i + size]) for i in range(0, len(parts), size)]
+
+
+# Discord: sum of all Text Display characters in one message ≤ 4000.
+_TEXT_BUDGET = 3700
+
+
+def _pack_hero_chunks(
+    heroes: list[TierHero],
+    emoji_map: dict[str, discord.Emoji] | None,
+    *,
+    title: str,
+    budget: int,
+) -> list[str]:
+    """Split a tier into TextDisplay bodies that fit under `budget` chars."""
+    chunks: list[str] = []
+    lines: list[str] = []
+    prefix = f"**{title}**\n\n"
+    used = len(prefix)
+    for hero in heroes:
+        line = _hero_line(hero, emoji_map)
+        # blank line between heroes (+2)
+        cost = len(line) + (2 if lines else 0)
+        if lines and used + cost > budget:
+            chunks.append(prefix + "\n\n".join(lines))
+            prefix = f"**{title}** · cont.\n\n"
+            lines = [line]
+            used = len(prefix) + len(line)
+        else:
+            lines.append(line)
+            used += cost
+    if lines:
+        chunks.append(prefix + "\n\n".join(lines))
+    return chunks
+
+
+def _tier_header(summary: TierListSummary, *, preview: bool = False) -> str:
+    date_bit = summary.updated or "latest"
+    season_bit = f"S{summary.season}" if summary.season else "OW"
+    title = "**Tier list by win rate**"
+    if preview:
+        title = f"🧪 {title}"
+    meta = f"[{season_bit} tier list]({summary.url}) · {date_bit}"
+    legend = "_win % · pick %_"
+    return f"{title}\n{meta}\n{legend}"
 
 
 def build_tier_layouts(
@@ -246,43 +303,72 @@ def build_tier_layouts(
     *,
     preview: bool = False,
     emoji_map: dict[str, discord.Emoji] | None = None,
+    include_emoji_strips: bool = False,
 ) -> list[discord.ui.LayoutView]:
     """
-    Text only + small circular app-emoji icons (2D thumbs).
-    No large 3D Section portrait thumbnails.
+    Square app-emoji icons + rates.
+    Splits across messages so each stays under Discord's 4000 displayable-char cap.
     """
-    date_bit = summary.updated or "latest"
     season_bit = f"S{summary.season}" if summary.season else "OW"
-    if preview:
-        header = f"🧪 **[{season_bit} tier list]({summary.url})** · {date_bit}"
-    else:
-        header = f"**[{season_bit} tier list]({summary.url})** · {date_bit}"
+    header = _tier_header(summary, preview=preview)
 
-    BUDGET = 38
     views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.TextDisplay(header))
+    chars = 0
+    comps = 0
 
     def flush() -> None:
-        nonlocal view
+        nonlocal view, chars, comps
         views.append(view)
         view = discord.ui.LayoutView(timeout=None)
-        view.add_item(
-            discord.ui.TextDisplay(f"**[{season_bit}]({summary.url})** · cont.")
-        )
+        cont = f"**[{season_bit}]({summary.url})** · cont."
+        view.add_item(discord.ui.TextDisplay(cont))
+        chars = len(cont)
+        comps = 1
+
+    def ensure_room(extra_chars: int, extra_comps: int = 2) -> None:
+        if comps + extra_comps > 35 or chars + extra_chars > _TEXT_BUDGET:
+            flush()
+
+    view.add_item(discord.ui.TextDisplay(header))
+    chars = len(header)
+    comps = 1
 
     for tier in TIER_ORDER:
         heroes = summary.tiers.get(tier) or []
         if not heroes:
             continue
-        if view._total_children + 2 > BUDGET:
-            flush()
-        body = f"**{tier}**\n{_tier_body(heroes, emoji_map)}"
-        container = discord.ui.Container(
-            accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
+
+        if include_emoji_strips:
+            strip = _tier_emoji_strip(heroes, emoji_map)
+            if strip:
+                for chunk in _chunk_emoji_strip(strip, size=12):
+                    ensure_room(len(chunk) + 8, 3)
+                    container = discord.ui.Container(
+                        accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
+                    )
+                    view.add_item(container)
+                    label = f"**{tier}**"
+                    container.add_item(discord.ui.TextDisplay(label))
+                    container.add_item(discord.ui.TextDisplay(chunk))
+                    chars += len(label) + len(chunk)
+                    comps += 3
+
+        bodies = _pack_hero_chunks(
+            heroes,
+            emoji_map,
+            title=tier,
+            budget=min(3500, _TEXT_BUDGET - 80),
         )
-        view.add_item(container)
-        container.add_item(discord.ui.TextDisplay(body))
+        for body in bodies:
+            ensure_room(len(body), 2)
+            container = discord.ui.Container(
+                accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
+            )
+            view.add_item(container)
+            container.add_item(discord.ui.TextDisplay(body))
+            chars += len(body)
+            comps += 2
 
     views.append(view)
     return views
@@ -297,12 +383,14 @@ def build_tier_embeds(
     color = discord.Color.from_rgb(33, 143, 254) if preview else discord.Color.from_rgb(
         255, 176, 32
     )
+    season_bit = f"S{summary.season}" if summary.season else "OW"
+    date_bit = summary.updated or "latest"
     head = discord.Embed(
-        title=summary.title,
+        title="Tier list by win rate",
         description=(
             ("🧪 **Preview**\n" if preview else "")
-            + f"[Counterwatch tier list]({summary.url})\n"
-            "Win rate · pick rate"
+            + f"**[{season_bit} tier list]({summary.url})** · {date_bit}\n"
+            "_win % · pick %_"
         ),
         color=color,
         url=summary.url,
@@ -377,7 +465,7 @@ class OverwatchTierCog(commands.Cog):
                         log.warning("Emoji icon fetch %s → %s", name, resp.status)
                         continue
                     raw = await resp.read()
-                    png = _to_circular_emoji_png(raw)
+                    png = _to_emoji_png(raw)
                     emoji = await self.bot.create_application_emoji(name=name, image=png)
                 existing[name] = emoji
                 created += 1
@@ -404,9 +492,26 @@ class OverwatchTierCog(commands.Cog):
     ) -> list[discord.Message]:
         emoji_map = await self.ensure_hero_emojis(summary)
         messages: list[discord.Message] = []
+
+        # Plain emoji-only messages → Discord renders them jumbo (larger).
+        # Stickers aren't workable for a full roster (guild sticker slot limits).
+        for tier in TIER_ORDER:
+            heroes = summary.tiers.get(tier) or []
+            strip = _tier_emoji_strip(heroes, emoji_map)
+            if not strip:
+                continue
+            try:
+                for chunk in _chunk_emoji_strip(strip):
+                    messages.append(await channel.send(content=chunk))
+            except discord.HTTPException as exc:
+                log.warning("OW tier jumbo strip failed (%s): %s", tier, exc)
+
         try:
             layouts = build_tier_layouts(
-                summary, preview=preview, emoji_map=emoji_map
+                summary,
+                preview=preview,
+                emoji_map=emoji_map,
+                include_emoji_strips=False,
             )
             for layout in layouts:
                 messages.append(await channel.send(view=layout))
@@ -456,15 +561,24 @@ class OverwatchTierCog(commands.Cog):
         try:
             emoji_map = await self.ensure_hero_emojis(summary)
             layouts = build_tier_layouts(
-                summary, preview=True, emoji_map=emoji_map
+                summary,
+                preview=True,
+                emoji_map=emoji_map,
+                include_emoji_strips=False,
             )
             await interaction.followup.send(view=layouts[0], ephemeral=True)
             for layout in layouts[1:]:
                 await interaction.followup.send(view=layout, ephemeral=True)
         except Exception as exc:
             log.warning("OW tier preview failed: %s", exc)
+            try:
+                emoji_map = await self.ensure_hero_emojis(summary)
+            except Exception:
+                emoji_map = None
             await interaction.followup.send(
-                embeds=build_tier_embeds(summary, preview=True),
+                embeds=build_tier_embeds(
+                    summary, preview=True, emoji_map=emoji_map
+                ),
                 ephemeral=True,
             )
 

@@ -546,9 +546,7 @@ class AdminHubView(discord.ui.View):
         self.add_item(role_select)
 
     def _add_birthday_controls(self) -> None:
-        async def view_list(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def view_list(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             self.page = "bday_list"
@@ -574,9 +572,7 @@ class AdminHubView(discord.ui.View):
                 view=self,
             )
 
-        async def preview_card(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def preview_card(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             member = interaction.user
@@ -592,9 +588,7 @@ class AdminHubView(discord.ui.View):
             self.add_item(self._nav_select())
             await interaction.response.edit_message(embed=embed, view=self)
 
-        async def announce(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def announce(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             await interaction.response.defer()
@@ -614,9 +608,7 @@ class AdminHubView(discord.ui.View):
             self._rebuild()
             await interaction.edit_original_response(embed=embed, view=self)
 
-        async def signup_composer(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def signup_composer(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             channel = (
@@ -1125,17 +1117,13 @@ class AdminHubView(discord.ui.View):
         role_select.callback = on_role
         self.add_item(role_select)
 
-        async def edit_text(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def edit_text(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             copy = load_onboard_copy(self.bot, self.guild_id)
             await interaction.response.send_modal(EditOnboardModal(self, copy))
 
-        async def preview(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def preview(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             copy = load_onboard_copy(self.bot, self.guild_id)
@@ -1144,9 +1132,7 @@ class AdminHubView(discord.ui.View):
                 ephemeral=True,
             )
 
-        async def publish(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def publish(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             await interaction.response.defer(ephemeral=True)
@@ -1159,9 +1145,7 @@ class AdminHubView(discord.ui.View):
             if msg is None:
                 await interaction.followup.send(detail, ephemeral=True)
 
-        async def reset_text(
-            interaction: discord.Interaction, button: discord.ui.Button
-        ) -> None:
+        async def reset_text(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             base = default_onboard_copy()

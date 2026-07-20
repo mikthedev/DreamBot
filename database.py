@@ -77,6 +77,11 @@ class Database:
             self._ensure_column(conn, "guild_settings", "ow_tier_last_posted_at", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_tier_message_ids", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_tier_last_id", "TEXT")
+            self._ensure_column(conn, "guild_settings", "onboard_channel_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "onboard_message_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "onboard_title", "TEXT")
+            self._ensure_column(conn, "guild_settings", "onboard_body", "TEXT")
+            self._ensure_column(conn, "guild_settings", "ow_broadcast_role_id", "INTEGER")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS anniversary_announcements (
@@ -613,6 +618,86 @@ class Database:
                     ow_tier_last_posted_at = excluded.ow_tier_last_posted_at
                 """,
                 (guild_id, stamped),
+            )
+
+    def get_onboard_channel(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        return int(settings["onboard_channel_id"]) if settings and settings["onboard_channel_id"] else None
+
+    def get_onboard_message_id(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        return int(settings["onboard_message_id"]) if settings and settings["onboard_message_id"] else None
+
+    def set_onboard_channel(self, guild_id: int, channel_id: int | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, onboard_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET onboard_channel_id = excluded.onboard_channel_id
+                """,
+                (guild_id, channel_id),
+            )
+
+    def set_onboard_panel(
+        self, guild_id: int, channel_id: int | None, message_id: int | None
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id, onboard_channel_id, onboard_message_id
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    onboard_channel_id = excluded.onboard_channel_id,
+                    onboard_message_id = excluded.onboard_message_id
+                """,
+                (guild_id, channel_id, message_id),
+            )
+
+    def get_onboard_copy(self, guild_id: int) -> dict[str, str | None]:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return {"title": None, "body": None}
+        return {
+            "title": settings["onboard_title"],
+            "body": settings["onboard_body"],
+        }
+
+    def set_onboard_copy(
+        self, guild_id: int, *, title: str | None, body: str | None
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, onboard_title, onboard_body)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    onboard_title = excluded.onboard_title,
+                    onboard_body = excluded.onboard_body
+                """,
+                (guild_id, title, body),
+            )
+
+    def get_ow_broadcast_role(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        return (
+            int(settings["ow_broadcast_role_id"])
+            if settings and settings["ow_broadcast_role_id"]
+            else None
+        )
+
+    def set_ow_broadcast_role(self, guild_id: int, role_id: int | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_broadcast_role_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_broadcast_role_id = excluded.ow_broadcast_role_id
+                """,
+                (guild_id, role_id),
             )
 
     def guild_stats(self, guild_id: int) -> dict[str, int]:

@@ -20,6 +20,7 @@ from names import WelcomeNameView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
 from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
 from overwatch_tierlist import OverwatchTierCog
+from onboarding import OnboardingView
 from panel import PanelCog
 from anniversary import AnniversaryCog
 from birthday_signup import (
@@ -48,6 +49,7 @@ class DreamTeamBot(commands.Bot):
         self.add_view(BirthdaySignupView())
         self.add_view(WelcomeNameView())
         self.add_view(OwPatchHistoryView())
+        self.add_view(OnboardingView())
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(AnniversaryCog(self))

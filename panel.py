@@ -24,6 +24,14 @@ from names import SetNameModal, WelcomeNameView, names_list_embed
 from overwatch_patches import PATCH_URL, build_patch_embeds
 from overwatch_tierlist import TIER_URL
 from nicknames import is_guild_manager
+from onboarding import (
+    EditOnboardModal,
+    default_copy as default_onboard_copy,
+    hub_onboard_embed,
+    load_copy as load_onboard_copy,
+    onboard_embed,
+    publish_onboard,
+)
 
 log = logging.getLogger("dream_team.panel")
 
@@ -221,8 +229,8 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "**Patches** — [official notes]({patch_url}), checked daily. "
             "One live post (old deleted on new patch); **Previous patches** is ephemeral.\n\n"
             "**Tier list** — [Counterwatch]({tier_url}), about every "
-            "**{days} days**. Square hero emojis (jumbo icon rows + rates; "
-            "first sync uploads icons once)."
+            "**{days} days**. Square hero emojis + win / pick rates "
+            "(first sync uploads icons once)."
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,
@@ -346,6 +354,8 @@ class AdminHubView(discord.ui.View):
             self._add_welcome_controls()
         elif self.page == "overwatch":
             self._add_overwatch_controls()
+        elif self.page == "onboard":
+            self._add_onboard_controls()
         elif self.page == "anniversary":
             self._add_anniversary_controls()
 
@@ -385,6 +395,12 @@ class AdminHubView(discord.ui.View):
                     value="overwatch",
                     description="Patches & Counterwatch tier list",
                     emoji="🎯",
+                ),
+                discord.SelectOption(
+                    label="Онбординг",
+                    value="onboard",
+                    description="UA welcome panel with buttons",
+                    emoji="🚪",
                 ),
                 discord.SelectOption(
                     label="Anniversary",
@@ -427,6 +443,8 @@ class AdminHubView(discord.ui.View):
             return hub_welcome_embed(guild, self.bot)
         if self.page == "overwatch":
             return hub_overwatch_embed(guild, self.bot)
+        if self.page == "onboard":
+            return hub_onboard_embed(guild, self.bot)
         if self.page == "anniversary":
             copy = load_anniversary_copy(self.bot, guild.id)
             embed = anniversary_embed(copy, guild=guild, preview=True)
@@ -1056,6 +1074,115 @@ class AdminHubView(discord.ui.View):
         self.add_item(post_patch)
         self.add_item(preview_tier)
         self.add_item(post_tier)
+
+    def _add_onboard_controls(self) -> None:
+        ch_select = discord.ui.ChannelSelect(
+            placeholder="Канал онбордингу…",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+
+        async def on_channel(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            selected = ch_select.values[0]
+            channel_id = getattr(selected, "id", None)
+            if channel_id is None:
+                await interaction.response.send_message(
+                    "Could not read that channel.", ephemeral=True
+                )
+                return
+            self.bot.db.set_onboard_channel(self.guild_id, int(channel_id))
+            self._rebuild()
+            await interaction.response.edit_message(
+                embed=self.embed_for(interaction.guild),
+                view=self,
+            )
+
+        ch_select.callback = on_channel
+        self.add_item(ch_select)
+
+        role_select = discord.ui.RoleSelect(
+            placeholder="Роль Overwatch (патчі / тір)…",
+            min_values=1,
+            max_values=1,
+            row=2,
+        )
+
+        async def on_role(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            role = role_select.values[0]
+            self.bot.db.set_ow_broadcast_role(self.guild_id, role.id)
+            self._rebuild()
+            await interaction.response.edit_message(
+                embed=self.embed_for(interaction.guild),
+                view=self,
+            )
+
+        role_select.callback = on_role
+        self.add_item(role_select)
+
+        async def edit_text(
+            interaction: discord.Interaction, button: discord.ui.Button
+        ) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            copy = load_onboard_copy(self.bot, self.guild_id)
+            await interaction.response.send_modal(EditOnboardModal(self, copy))
+
+        async def preview(
+            interaction: discord.Interaction, button: discord.ui.Button
+        ) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            copy = load_onboard_copy(self.bot, self.guild_id)
+            await interaction.response.send_message(
+                embed=onboard_embed(copy, preview=True, guild=interaction.guild),
+                ephemeral=True,
+            )
+
+        async def publish(
+            interaction: discord.Interaction, button: discord.ui.Button
+        ) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            await interaction.response.defer(ephemeral=True)
+            msg, detail = await publish_onboard(self.bot, interaction.guild)
+            embed = hub_onboard_embed(interaction.guild, self.bot)
+            embed.add_field(name="Результат", value=detail, inline=False)
+            self.page = "onboard"
+            self._rebuild()
+            await interaction.edit_original_response(embed=embed, view=self)
+            if msg is None:
+                await interaction.followup.send(detail, ephemeral=True)
+
+        async def reset_text(
+            interaction: discord.Interaction, button: discord.ui.Button
+        ) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            base = default_onboard_copy()
+            self.bot.db.set_onboard_copy(
+                self.guild_id, title=base.title, body=base.body
+            )
+            self._rebuild()
+            await interaction.response.edit_message(
+                embed=self.embed_for(interaction.guild),
+                view=self,
+            )
+
+        for label, style, cb, row in (
+            ("Редагувати текст", discord.ButtonStyle.primary, edit_text, 3),
+            ("Прев’ю", discord.ButtonStyle.secondary, preview, 3),
+            ("Опублікувати / оновити", discord.ButtonStyle.success, publish, 4),
+            ("Скинути текст", discord.ButtonStyle.danger, reset_text, 4),
+        ):
+            btn = discord.ui.Button(label=label, style=style, row=row)
+            btn.callback = cb
+            self.add_item(btn)
 
     def _add_anniversary_controls(self) -> None:
         async def open_composer(

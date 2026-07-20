@@ -233,27 +233,6 @@ def _tier_body(
     return "\n\n".join(_hero_line(h, emoji_map) for h in heroes)
 
 
-def _tier_emoji_strip(
-    heroes: list[TierHero], emoji_map: dict[str, discord.Emoji] | None
-) -> str:
-    """Emoji-only string so Discord can jumbo-render on plain messages."""
-    if not emoji_map:
-        return ""
-    parts: list[str] = []
-    for h in heroes:
-        em = emoji_map.get(emoji_name_for_hero(h))
-        if em is not None:
-            parts.append(str(em))
-    return " ".join(parts)
-
-
-def _chunk_emoji_strip(strip: str, size: int = 20) -> list[str]:
-    parts = strip.split()
-    if not parts:
-        return []
-    return [" ".join(parts[i : i + size]) for i in range(0, len(parts), size)]
-
-
 # Discord: sum of all Text Display characters in one message ≤ 4000.
 _TEXT_BUDGET = 3700
 
@@ -303,7 +282,6 @@ def build_tier_layouts(
     *,
     preview: bool = False,
     emoji_map: dict[str, discord.Emoji] | None = None,
-    include_emoji_strips: bool = False,
 ) -> list[discord.ui.LayoutView]:
     """
     Square app-emoji icons + rates.
@@ -338,21 +316,6 @@ def build_tier_layouts(
         heroes = summary.tiers.get(tier) or []
         if not heroes:
             continue
-
-        if include_emoji_strips:
-            strip = _tier_emoji_strip(heroes, emoji_map)
-            if strip:
-                for chunk in _chunk_emoji_strip(strip, size=12):
-                    ensure_room(len(chunk) + 8, 3)
-                    container = discord.ui.Container(
-                        accent_colour=TIER_COLOR.get(tier, discord.Color.orange())
-                    )
-                    view.add_item(container)
-                    label = f"**{tier}**"
-                    container.add_item(discord.ui.TextDisplay(label))
-                    container.add_item(discord.ui.TextDisplay(chunk))
-                    chars += len(label) + len(chunk)
-                    comps += 3
 
         bodies = _pack_hero_chunks(
             heroes,
@@ -493,25 +456,11 @@ class OverwatchTierCog(commands.Cog):
         emoji_map = await self.ensure_hero_emojis(summary)
         messages: list[discord.Message] = []
 
-        # Plain emoji-only messages → Discord renders them jumbo (larger).
-        # Stickers aren't workable for a full roster (guild sticker slot limits).
-        for tier in TIER_ORDER:
-            heroes = summary.tiers.get(tier) or []
-            strip = _tier_emoji_strip(heroes, emoji_map)
-            if not strip:
-                continue
-            try:
-                for chunk in _chunk_emoji_strip(strip):
-                    messages.append(await channel.send(content=chunk))
-            except discord.HTTPException as exc:
-                log.warning("OW tier jumbo strip failed (%s): %s", tier, exc)
-
         try:
             layouts = build_tier_layouts(
                 summary,
                 preview=preview,
                 emoji_map=emoji_map,
-                include_emoji_strips=False,
             )
             for layout in layouts:
                 messages.append(await channel.send(view=layout))
@@ -564,7 +513,6 @@ class OverwatchTierCog(commands.Cog):
                 summary,
                 preview=True,
                 emoji_map=emoji_map,
-                include_emoji_strips=False,
             )
             await interaction.followup.send(view=layouts[0], ephemeral=True)
             for layout in layouts[1:]:

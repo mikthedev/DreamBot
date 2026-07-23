@@ -1,8 +1,9 @@
-"""Google Gemini chat — /ask and @mention replies."""
+"""Free Llama chat via Groq — /ask and @mention replies (no Google billing)."""
 
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -16,8 +17,6 @@ import config
 log = logging.getLogger("dream_team.ai")
 
 ACCENT = discord.Color.from_rgb(46, 230, 166)
-BRAND = discord.Color.from_rgb(14, 28, 48)
-
 DISCORD_MSG_LIMIT = 2000
 COOLDOWN_SECONDS = 8
 
@@ -28,52 +27,150 @@ SYSTEM_INSTRUCTION = (
     "music, or nicknames — point people to the bot's slash commands for those."
 )
 
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-class GeminiError(Exception):
-    """Raised when Gemini returns an error or empty reply."""
+
+class AIError(Exception):
+    """Raised when the free AI provider returns an error or empty reply."""
+
+
+# Back-compat alias used by voice_ai
+GeminiError = AIError
+
+
+def ai_configured() -> bool:
+    return bool(config.GROQ_API_KEY)
 
 
 async def generate_reply(prompt: str, *, session: aiohttp.ClientSession) -> str:
-    if not config.GEMINI_API_KEY:
-        raise GeminiError(
-            "Gemini is not configured. Add `GEMINI_API_KEY` to the bot `.env`."
+    if not config.GROQ_API_KEY:
+        raise AIError(
+            "AI is not configured. Add a free `GROQ_API_KEY` to `.env` "
+            "(https://console.groq.com/keys — no billing required)."
         )
 
-    model = config.GEMINI_MODEL
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent"
-    )
     payload: dict[str, Any] = {
-        "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.8,
-            "maxOutputTokens": 1024,
-        },
+        "model": config.GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_INSTRUCTION},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.8,
+        "max_tokens": 1024,
     }
     headers = {
+        "Authorization": f"Bearer {config.GROQ_API_KEY}",
         "Content-Type": "application/json",
-        "x-goog-api-key": config.GEMINI_API_KEY,
     }
 
     try:
         async with session.post(
-            url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=45)
+            GROQ_CHAT_URL,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=45),
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status >= 400:
                 message = _api_error_message(data) or f"HTTP {resp.status}"
-                log.warning("Gemini error %s: %s", resp.status, message)
-                raise GeminiError(f"Gemini request failed: {message}")
+                log.warning("Groq error %s: %s", resp.status, message)
+                if resp.status == 429:
+                    raise AIError(
+                        "Free Groq rate limit hit — wait a bit and try again."
+                    )
+                raise AIError(f"AI request failed: {message}")
     except aiohttp.ClientError as exc:
-        log.warning("Gemini network error: %s", exc)
-        raise GeminiError("Could not reach Gemini. Try again in a moment.") from exc
+        log.warning("Groq network error: %s", exc)
+        raise AIError("Could not reach Groq. Try again in a moment.") from exc
 
-    text = _extract_text(data)
+    text = _chat_text(data)
     if not text:
-        raise GeminiError("Gemini returned an empty reply. Try rephrasing.")
+        raise AIError("AI returned an empty reply. Try rephrasing.")
     return text.strip()
+
+
+async def transcribe_audio(
+    wav_bytes: bytes,
+    *,
+    session: aiohttp.ClientSession,
+    filename: str = "clip.wav",
+) -> str:
+    """Speech-to-text via Groq Whisper (free tier)."""
+    if not config.GROQ_API_KEY:
+        raise AIError("GROQ_API_KEY not set.")
+
+    form = aiohttp.FormData()
+    form.add_field(
+        "file",
+        wav_bytes,
+        filename=filename,
+        content_type="audio/wav",
+    )
+    form.add_field("model", config.GROQ_WHISPER_MODEL)
+    form.add_field("response_format", "json")
+    headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
+
+    try:
+        async with session.post(
+            GROQ_TRANSCRIBE_URL,
+            data=form,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status >= 400:
+                message = _api_error_message(data) or f"HTTP {resp.status}"
+                log.warning("Groq Whisper error %s: %s", resp.status, message)
+                raise AIError(f"Speech recognition failed: {message}")
+    except aiohttp.ClientError as exc:
+        raise AIError("Could not reach Groq Whisper.") from exc
+
+    text = ""
+    if isinstance(data, dict):
+        text = str(data.get("text") or "").strip()
+    return text
+
+
+_WAKE_RE = re.compile(
+    r"(?:^|[\s,.\!?])(?:hey\s+)?dream(?:\s+team)?[\s,.\!?:\-]*",
+    re.IGNORECASE,
+)
+
+
+def extract_wake_question(transcript: str) -> str | None:
+    """If transcript addresses Dream, return the question after the wake word."""
+    text = (transcript or "").strip()
+    if not text:
+        return None
+    match = _WAKE_RE.search(text)
+    if not match:
+        # Also accept starting with Dream
+        if not re.match(r"(?i)^\s*(?:hey\s+)?dream\b", text):
+            return None
+        match = re.match(r"(?i)^\s*(?:hey\s+)?dream(?:\s+team)?[\s,.\!?:\-]*", text)
+        if not match:
+            return None
+    question = text[match.end() :].strip(" \t\n\r,.-")
+    return question or None
+
+
+async def voice_reply_from_wav(
+    wav_bytes: bytes, *, session: aiohttp.ClientSession
+) -> str | None:
+    """Transcribe → wake check → Llama answer. None if no wake word."""
+    transcript = await transcribe_audio(wav_bytes, session=session)
+    log.info("Voice transcript: %r", transcript[:200])
+    question = extract_wake_question(transcript)
+    if question is None:
+        return None
+    if not question:
+        return "Yeah? What do you need?"
+    spoken = (
+        "Answer in 1–3 short spoken sentences, plain text, no markdown: "
+        + question
+    )
+    return await generate_reply(spoken, session=session)
 
 
 def _api_error_message(data: Any) -> str:
@@ -81,27 +178,20 @@ def _api_error_message(data: Any) -> str:
         return ""
     err = data.get("error")
     if isinstance(err, dict):
-        return str(err.get("message") or err.get("status") or "").strip()
+        return str(err.get("message") or err.get("code") or "").strip()
+    if isinstance(err, str):
+        return err.strip()
     return ""
 
 
-def extract_text(data: Any) -> str:
+def _chat_text(data: Any) -> str:
     if not isinstance(data, dict):
         return ""
-    candidates = data.get("candidates") or []
-    if not candidates:
+    choices = data.get("choices") or []
+    if not choices:
         return ""
-    content = candidates[0].get("content") or {}
-    parts = content.get("parts") or []
-    chunks: list[str] = []
-    for part in parts:
-        if isinstance(part, dict) and part.get("text"):
-            chunks.append(str(part["text"]))
-    return "\n".join(chunks).strip()
-
-
-def _extract_text(data: Any) -> str:
-    return extract_text(data)
+    msg = choices[0].get("message") or {}
+    return str(msg.get("content") or "").strip()
 
 
 def _chunk_text(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
@@ -138,7 +228,7 @@ class AICog(commands.Cog):
 
     def _session_or_raise(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            raise GeminiError("AI session is not ready yet. Try again.")
+            raise AIError("AI session is not ready yet. Try again.")
         return self._session
 
     def _check_cooldown(self, user_id: int) -> float | None:
@@ -150,7 +240,10 @@ class AICog(commands.Cog):
         self._last_ask[user_id] = now
         return None
 
-    @app_commands.command(name="ask", description="Ask the Dream Team AI (Google Gemini)")
+    @app_commands.command(
+        name="ask",
+        description="Ask the Dream Team AI (free Llama via Groq)",
+    )
     @app_commands.describe(prompt="Your question or message")
     async def ask(self, interaction: discord.Interaction, prompt: str) -> None:
         prompt = prompt.strip()
@@ -178,13 +271,13 @@ class AICog(commands.Cog):
         await interaction.response.defer(thinking=True)
         try:
             reply = await generate_reply(prompt, session=self._session_or_raise())
-        except GeminiError as exc:
+        except AIError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
         except Exception as exc:
             log.exception("Unexpected /ask failure: %s", exc)
             await interaction.followup.send(
-                "Something went wrong talking to Gemini.",
+                "Something went wrong talking to the AI.",
                 ephemeral=True,
             )
             return
@@ -194,9 +287,13 @@ class AICog(commands.Cog):
             description=reply[:4096],
             color=ACCENT,
         )
-        embed.set_footer(text=f"Gemini · asked by {interaction.user.display_name}")
+        embed.set_footer(
+            text=f"Llama · Groq · asked by {interaction.user.display_name}"
+        )
         await interaction.followup.send(embed=embed)
-        for extra in _chunk_text(reply[4096:], DISCORD_MSG_LIMIT) if len(reply) > 4096 else []:
+        for extra in (
+            _chunk_text(reply[4096:], DISCORD_MSG_LIMIT) if len(reply) > 4096 else []
+        ):
             await interaction.followup.send(extra)
 
     @commands.Cog.listener()
@@ -205,14 +302,13 @@ class AICog(commands.Cog):
             return
         if not message.guild:
             return
-        if not config.GEMINI_API_KEY:
+        if not ai_configured():
             return
 
         mentioned = self.bot.user in message.mentions
         if not mentioned:
             return
 
-        # Ignore pure mention with no question
         prompt = message.content
         for mention in message.mentions:
             prompt = prompt.replace(f"<@{mention.id}>", "")
@@ -232,13 +328,13 @@ class AICog(commands.Cog):
         async with message.channel.typing():
             try:
                 reply = await generate_reply(prompt, session=self._session_or_raise())
-            except GeminiError as exc:
+            except AIError as exc:
                 await message.reply(str(exc), mention_author=False)
                 return
             except Exception as exc:
                 log.exception("Unexpected mention-AI failure: %s", exc)
                 await message.reply(
-                    "Something went wrong talking to Gemini.",
+                    "Something went wrong talking to the AI.",
                     mention_author=False,
                 )
                 return

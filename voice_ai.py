@@ -1,13 +1,11 @@
-"""Voice AI — join VC, wake on \"Dream\", answer with Gemini + TTS."""
+"""Voice AI — join VC, wake on \"Dream\", answer with free Llama + TTS."""
 
 from __future__ import annotations
 
 import asyncio
 import audioop
-import base64
 import io
 import logging
-import re
 import tempfile
 import time
 import wave
@@ -21,7 +19,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
-from ai import GeminiError, SYSTEM_INSTRUCTION, extract_text
+from ai import AIError, ai_configured, voice_reply_from_wav
 
 log = logging.getLogger("dream_team.voice_ai")
 
@@ -34,7 +32,6 @@ MAX_UTTERANCE_SECONDS = 12.0
 RMS_THRESHOLD = 350
 WAKE_COOLDOWN_SECONDS = 4.0
 ALONE_LEAVE_SECONDS = 10.0
-NO_WAKE = "NO_WAKE"
 
 
 def _patch_voice_recv_router() -> None:
@@ -70,16 +67,6 @@ def _patch_voice_recv_router() -> None:
     vr_router.PacketRouter._do_run = _do_run_safe  # type: ignore[method-assign]
     vr_router.PacketRouter._dream_team_patched = True  # type: ignore[attr-defined]
     log.info("Patched voice_recv packet router for Opus error resilience")
-
-WAKE_PROMPT = (
-    "You are listening to a Discord voice clip from the Dream Team server.\n"
-    "The wake word for the bot is \"Dream\" (also accept close forms like "
-    "\"Hey Dream\", \"Dream?\").\n\n"
-    "If the speaker is addressing the bot with that wake word, answer their "
-    "question helpfully in 1–3 short spoken sentences (plain text, no markdown, "
-    "no bullet lists).\n"
-    "If they are NOT addressing the bot, reply with exactly: NO_WAKE"
-)
 
 
 def _pcm_to_wav_bytes(
@@ -234,58 +221,6 @@ def _build_sink_class():
     return WakeAudioSink
 
 
-async def gemini_voice_reply(
-    wav_bytes: bytes, *, session: aiohttp.ClientSession
-) -> str | None:
-    """Return spoken answer text, or None if wake word was not used."""
-    if not config.GEMINI_API_KEY:
-        raise GeminiError("GEMINI_API_KEY not set.")
-
-    model = config.GEMINI_MODEL
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent"
-    )
-    b64 = base64.b64encode(wav_bytes).decode("ascii")
-    payload: dict[str, Any] = {
-        "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": WAKE_PROMPT},
-                    {"inline_data": {"mime_type": "audio/wav", "data": b64}},
-                ],
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.6,
-            "maxOutputTokens": 512,
-        },
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": config.GEMINI_API_KEY,
-    }
-
-    async with session.post(
-        url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=60)
-    ) as resp:
-        data = await resp.json(content_type=None)
-        if resp.status >= 400:
-            err = data.get("error", {}) if isinstance(data, dict) else {}
-            msg = err.get("message") if isinstance(err, dict) else str(data)
-            raise GeminiError(f"Gemini voice failed: {msg}")
-
-    text = (extract_text(data) or "").strip()
-    if not text:
-        return None
-    if text.upper().startswith(NO_WAKE) or text.strip() == NO_WAKE:
-        return None
-    cleaned = re.sub(r"(?i)^\s*NO_WAKE\s*", "", text).strip()
-    return cleaned or None
-
-
 async def synthesize_speech(text: str, out_path: Path) -> Path:
     import edge_tts
 
@@ -332,7 +267,7 @@ class VoiceAICog(commands.Cog):
 
     def _session_or_raise(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            raise GeminiError("AI session not ready.")
+            raise AIError("AI session not ready.")
         return self._session
 
     async def _poll_loop(self) -> None:
@@ -375,7 +310,7 @@ class VoiceAICog(commands.Cog):
                 len(wav),
             )
             await self._announce_status(guild_id, "Hearing you…")
-            reply = await gemini_voice_reply(wav, session=self._session_or_raise())
+            reply = await voice_reply_from_wav(wav, session=self._session_or_raise())
             if not reply:
                 log.info("No wake word in clip (guild %s)", guild_id)
                 await self._announce_status(
@@ -394,7 +329,7 @@ class VoiceAICog(commands.Cog):
 
             await self._speak(guild, reply)
             await self._announce_text(guild_id, who, reply)
-        except GeminiError as exc:
+        except AIError as exc:
             log.warning("Voice AI: %s", exc)
             await self._announce_status(guild_id, f"Voice AI error: {exc}")
         except Exception:
@@ -501,9 +436,11 @@ class VoiceAICog(commands.Cog):
                 "Use this in a server.", ephemeral=True
             )
             return
-        if not config.GEMINI_API_KEY:
+        if not ai_configured():
             await interaction.response.send_message(
-                "Set `GEMINI_API_KEY` in `.env` first.", ephemeral=True
+                "Set a free `GROQ_API_KEY` in `.env` first "
+                "(https://console.groq.com/keys — no billing).",
+                ephemeral=True,
             )
             return
         if interaction.user.voice is None or interaction.user.voice.channel is None:

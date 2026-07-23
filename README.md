@@ -34,7 +34,7 @@ If the channel empties, the bot leaves after **10 seconds**.
 
 ## Dream AI
 
-Powered by **Google Gemini** (optional).
+**100% free** — Llama on [Groq](https://console.groq.com/keys) (no Google billing). Whisper for voice, edge-tts for speech.
 
 | How | What happens |
 |---|---|
@@ -67,7 +67,7 @@ A persistent Ukrainian welcome panel with buttons — edit and republish without
 | | |
 |---|---|
 | `/help` | Quick guide |
-| `/ask` | Chat with Gemini |
+| `/ask` | Chat with free Llama (Groq) |
 | `/join` / `/disconnect` | Voice AI in / out |
 | `/setbirthday` · `/mybirthday` · `/clearbirthday` | Birthday self-service |
 | `/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave` | Music |

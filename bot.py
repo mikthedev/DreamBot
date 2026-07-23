@@ -59,10 +59,10 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(OverwatchTierCog(self))
         await self.add_cog(AICog(self))
         await self.add_cog(VoiceAICog(self))
-        if config.GEMINI_API_KEY:
-            log.info("Gemini AI enabled (model=%s)", config.GEMINI_MODEL)
+        if config.GROQ_API_KEY:
+            log.info("Free Groq Llama AI enabled (model=%s)", config.GROQ_MODEL)
         else:
-            log.warning("GEMINI_API_KEY not set — /ask, @mention, and /join AI disabled")
+            log.warning("GROQ_API_KEY not set — /ask, @mention, and /join AI disabled")
 
     async def on_ready(self) -> None:
         # Sync to each guild only (instant). Clear globals so Discord doesn't show duplicates.

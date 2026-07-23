@@ -107,7 +107,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
         name="Everyone",
         value=(
             "`/help`\n"
-            "`/ask` — Gemini chat (or @mention the bot)\n"
+            "`/ask` — free Llama chat (or @mention the bot)\n"
             "`/join` · `/disconnect` — voice AI (say **Dream**, …)\n"
             "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"
             "`/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave`"

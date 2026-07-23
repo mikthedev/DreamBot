@@ -22,6 +22,7 @@ from ai_ow import (
     patch_details_from_facts,
     patch_teaser,
 )
+from web_search import gather_web_facts, needs_web_search
 
 log = logging.getLogger("dream_team.ai")
 
@@ -44,9 +45,11 @@ SYSTEM_INSTRUCTION = (
     "Be lightly witty only when it fits — never force jokes. "
     "Accuracy first: if unsure, say you don't know. "
     "Never invent facts, numbers, dates, patch details, quotes, or biographies. "
-    "For real people (actors, celebrities, streamers): give the correct real-world "
-    "role (e.g. Millie Bobby Brown is a live-action actress). Do not invent animated "
-    "series or fake credits.\n"
+    "When WEB FACTS are provided, answer ONLY from those facts — they come from "
+    "live Wikipedia/DuckDuckGo lookup. Prefer them over your own memory "
+    "(your training can be wrong about people and current events).\n"
+    "For real people (actors, celebrities, streamers): use WEB FACTS when present; "
+    "state their real-world role correctly. Do not invent animated series or fake credits.\n"
     "Use recent conversation context for pronouns and short follow-ups "
     "(LAST HERO / history).\n"
     "For Overwatch hero balance: ONLY use PATCH FACTS when provided. "
@@ -926,22 +929,34 @@ async def handle_user_turn(
         return reply
 
     # General chat — any topic, with memory so references make sense
+    web_block = ""
+    if needs_web_search(q):
+        try:
+            web_block = await gather_web_facts(q, session)
+            if web_block:
+                log.info("Web facts loaded for: %r", q[:80])
+        except Exception:
+            log.debug("Web search failed", exc_info=True)
+
     style = (
         "Reply like a real friend in voice chat: natural, warm, 1–2 short "
         "sentences. Use context if they refer to something earlier. "
-        "Answer directly. If unsure about a real person or fact, say you "
-        "don't know — never invent. No markdown, no filler."
+        "Answer directly. If WEB FACTS are present, use ONLY them — never invent. "
+        "If WEB FACTS are missing and you're unsure, say you don't know. "
+        "No markdown, no filler."
         if voice
         else (
             "Reply like a helpful friend: natural and concise. Use chat context. "
+            "If WEB FACTS are present, use ONLY them — never invent. "
             "If unsure about a real person or fact, say you don't know."
         )
     )
+    facts_line = f"{web_block}\n\n" if web_block else ""
     reply = await generate_reply(
-        f"{lang_line}{context_line}{style}\n\nUser: {q}",
+        f"{lang_line}{context_line}{facts_line}{style}\n\nUser: {q}",
         session=session,
         max_tokens=120 if voice else 200,
-        temperature=0.35,
+        temperature=0.25 if web_block else 0.35,
         history=history,
         lang=lang,
     )

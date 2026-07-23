@@ -28,16 +28,19 @@ COOLDOWN_SECONDS = 8
 PENDING_SECONDS = 90.0
 
 SYSTEM_INSTRUCTION = (
-    "You are Dream, the casual buddy AI for the Dream Team Discord server.\n"
-    "Style: short, natural, spoken — usually 1–3 sentences. No markdown, "
-    "no bullet lists, no headers.\n"
-    "Languages: understand Russian and English. Always reply in the same "
-    "language the user just used.\n"
-    "The wake word is always the English word Dream (even in Russian chat).\n"
-    "Do not invent Overwatch patch notes. If PATCH FACTS are provided, use "
-    "only those facts. If none are provided, say you don't have patch data.\n"
-    "For bot features (music, nicknames, panel): point people to slash commands "
-    "briefly — don't pretend you can change server settings yourself."
+    "You are Dream, a chill human-sounding buddy on the Dream Team Discord.\n"
+    "Talk naturally — short, warm, conversational. Usually 1–3 sentences.\n"
+    "No markdown, no bullet lists, no headers, no robotic phrasing.\n"
+    "You understand Russian and English; always reply in the user's language.\n"
+    "The wake word is always the English word Dream.\n"
+    "Answer ANY question people ask — jokes, life stuff, gaming, random curiosity — "
+    "like a real teammate in voice chat, not like a help desk.\n"
+    "For Overwatch hero balance: ONLY use PATCH FACTS when provided. "
+    "Refer to patches by calendar DATE only (e.g. July 14, 2026 or June 30), "
+    "never by patch title, season name, or codename. If no facts are given, "
+    "admit you don't have notes — don't invent.\n"
+    "For Discord bot features (music, nicknames, panel): briefly point to slash "
+    "commands — don't pretend you can change settings yourself."
 )
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -251,8 +254,36 @@ def _patch_question(text: str) -> bool:
         "изменени",
         "понерф",
         "побафф",
+        "meta",
+        "метан",
+        "strong",
+        "weak",
+        "играбел",
+        "баланс",
+        "how is",
+        "how's",
+        "what about",
+        "как там",
+        "что с",
+        "что по",
     )
     return any(k in low for k in keys)
+
+
+def _wants_hero_lookup(text: str) -> str | None:
+    """If the user is asking about an OW hero, return the hero query."""
+    hero = extract_hero_query(text)
+    if not hero:
+        return None
+    if _patch_question(text):
+        return hero
+    # "Dream, Genji?" / "tell me about Kiriko"
+    if re.search(
+        r"(?i)\b(tell me|about|про|насчёт|насчет|как|что|who|how's|how is)\b",
+        text or "",
+    ):
+        return hero
+    return hero if len((text or "").split()) <= 6 else None
 
 
 async def handle_user_turn(
@@ -274,24 +305,27 @@ async def handle_user_turn(
         offer = pop_pending_offer(guild_id, user_id)
         assert offer is not None
         prompt = (
-            "The user said yes — tell them the last patch highlights for this hero.\n"
+            "The user said yes — give the last patch highlights for this hero.\n"
             "Use ONLY these PATCH FACTS. Pick the 1–2 most important changes. "
-            "Keep it casual and short (2 sentences max). Mention roughly when "
-            "(from PATCH_DATE). No lists.\n\n"
+            "Keep it casual (2 sentences max). Mention when using PATCH_DATE "
+            "only (a calendar date like July 14, 2026 or June) — never a patch "
+            "name/title. No lists.\n\n"
             f"PATCH FACTS:\n{offer.facts}\n\n"
             f"User said: {q}"
         )
         return await generate_reply(prompt, session=session, max_tokens=180)
 
-    # Overwatch balance question
-    hero = extract_hero_query(q) if _patch_question(q) else None
+    # Overwatch hero → always check Blizzard patch-notes site
+    hero = _wants_hero_lookup(q)
     if hero:
         hit, latest_date = await lookup_hero_patch(bot, guild_id, hero)
         if hit is None:
             prompt = (
-                "User asked about an Overwatch hero patch, but we have no saved "
-                f"notes for '{hero}'. Say casually you don't see them in the "
-                "recent notes we track. One short sentence.\n\n"
+                "User asked about an Overwatch hero. We checked the official "
+                "Blizzard patch notes page and didn't find them in the recent "
+                f"retail hero updates listed there (latest date: "
+                f"{latest_date or 'unknown'}). Say that casually in one short "
+                "sentence — no fake patch names.\n\n"
                 f"User: {q}"
             )
             return await generate_reply(prompt, session=session, max_tokens=120)
@@ -301,31 +335,31 @@ async def handle_user_turn(
 
         if hit.in_latest:
             prompt = (
-                "User asked if this hero was nerfed/buffed. They ARE in the "
-                "latest patch. Answer in 1–2 casual sentences: say they got a "
-                "buff, nerf, or mix (from CHANGE_KIND), based on the latest "
-                "notes (LATEST_PATCH_DATE). Then ask if they want the highlights. "
-                "Do NOT list the changes yet.\n\n"
+                "User asked about this Overwatch hero. They ARE in the newest "
+                "patch on Blizzard's site. Answer in 1–2 casual sentences: say "
+                "buff, nerf, or mix (CHANGE_KIND), using LATEST_PATCH_DATE as "
+                "the when (date only). Then ask if they want the highlights. "
+                "Do NOT list the changes yet. Never say a patch title.\n\n"
                 f"PATCH FACTS:\n{facts}\n\nUser: {q}"
             )
         else:
             prompt = (
-                "User asked if this hero was nerfed/buffed. They are NOT in the "
-                "newest patch (LATEST_PATCH_DATE). Say casually that based on the "
-                "latest updates they didn't get changes this time. Mention the "
-                "last time they were patched (PATCH_DATE) only briefly, then ask "
-                "if the user wants to hear what changed then. Do NOT list changes "
-                "yet.\n\n"
+                "User asked about this Overwatch hero. They are NOT in the "
+                "newest patch (LATEST_PATCH_DATE). Say casually that based on "
+                "the latest updates they didn't get changes this time. Mention "
+                "the last time they were patched using PATCH_DATE only (a date, "
+                "not a title), then ask if they want to hear what changed. "
+                "Do NOT list changes yet.\n\n"
                 f"PATCH FACTS:\n{facts}\n\nUser: {q}"
             )
         return await generate_reply(prompt, session=session, max_tokens=160)
 
-    # General chat
+    # General chat — any topic, human and natural
     style = (
-        "Answer in 1–3 short spoken sentences, plain text, no markdown. "
-        "Match the user's language (Russian or English)."
+        "Reply like a real friend in voice chat: natural, warm, 1–3 short "
+        "sentences. Match the user's language (Russian or English). No markdown."
         if voice
-        else "Keep it concise and casual. Match the user's language."
+        else "Reply like a helpful friend: natural and concise. Match the user's language."
     )
     return await generate_reply(f"{style}\n\nUser: {q}", session=session)
 

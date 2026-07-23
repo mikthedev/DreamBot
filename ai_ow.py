@@ -1,4 +1,4 @@
-"""Hero patch lookup for Dream voice/chat answers."""
+"""Hero patch lookup for Dream — always from Blizzard patch-notes page."""
 
 from __future__ import annotations
 
@@ -9,13 +9,12 @@ from dataclasses import dataclass
 from overwatch_patches import (
     HeroChange,
     PatchSummary,
-    fetch_latest_summary,
+    fetch_all_patch_summaries,
     summary_from_payload,
 )
 
 log = logging.getLogger("dream_team.ai_ow")
 
-# Common RU → EN hero names (wake questions may be mixed)
 HERO_ALIASES: dict[str, str] = {
     "гендзи": "genji",
     "генджи": "genji",
@@ -42,20 +41,23 @@ HERO_ALIASES: dict[str, str] = {
     "д.ва": "d.va",
     "два": "d.va",
     "сигма": "sigma",
-    "орisa": "orisa",
     "ориса": "orisa",
     "бастион": "bastion",
     "симметра": "symmetra",
     "торбьорн": "torbjorn",
     "торб": "torbjorn",
     "эхо": "echo",
-    "эштион": "ashe",
     "эш": "ashe",
     "кэссиди": "cassidy",
-    "кэссиди": "cassidy",
     "маккри": "cassidy",
-    "фенн": "freja",
-    "хойер": "hazard",
+    "фрея": "freja",
+    "сиерра": "sierra",
+    "шион": "shion",
+    "вендетта": "vendetta",
+    "мауга": "mauga",
+    "думфист": "doomfist",
+    "королева": "junker queen",
+    "раматра": "ramattra",
 }
 
 
@@ -63,10 +65,9 @@ HERO_ALIASES: dict[str, str] = {
 class HeroPatchHit:
     hero_name: str
     patch_date: str
-    patch_title: str
     in_latest: bool
     latest_date: str
-    lines: list[str]  # plain spoken-friendly change lines
+    lines: list[str]
     buffish: bool
     nerfish: bool
 
@@ -96,9 +97,29 @@ def _tone_flags(hero: HeroChange) -> tuple[bool, bool]:
             nerf = True
         else:
             low = (ch.text or "").lower()
-            if any(w in low for w in ("increased", "buff", "grants", "added")):
+            if any(
+                w in low
+                for w in (
+                    "increased",
+                    "increases",
+                    "buff",
+                    "grants",
+                    "added",
+                    "boost",
+                )
+            ):
                 buff = True
-            if any(w in low for w in ("reduced", "nerf", "decreased", "removed")):
+            if any(
+                w in low
+                for w in (
+                    "reduced",
+                    "reduces",
+                    "nerf",
+                    "decreased",
+                    "decreases",
+                    "removed",
+                )
+            ):
                 nerf = True
     return buff, nerf
 
@@ -106,21 +127,19 @@ def _tone_flags(hero: HeroChange) -> tuple[bool, bool]:
 def extract_hero_query(text: str) -> str | None:
     """Best-effort hero name from a user question."""
     low = (text or "").lower()
-    # Explicit alias first
     for alias, canon in sorted(HERO_ALIASES.items(), key=lambda x: -len(x[0])):
         if alias in low:
             return canon
-    # "was Genji nerfed" / "гендзи баффнули"
     m = re.search(
-        r"(?i)\b(?:was|is|did|has|про|был|была|бафф|нерф|патч[аеиу]?)\s+"
-        r"([a-zа-яё0-9:.\-']{2,20})\b",
+        r"(?i)\b(?:was|is|did|has|how|about|про|был|была|бафф|нерф|патч[аеиу]?)\s+"
+        r"([a-zа-яё0-9:.\-']{2,24})\b",
         text or "",
     )
     if m:
         token = m.group(1).strip(" ?.,!")
         return HERO_ALIASES.get(token.lower(), token)
     m = re.search(
-        r"(?i)\b([a-z][a-z0-9:.\-']{1,20})\b(?:\s+(?:nerf|buff|patch|changed|updated))",
+        r"(?i)\b([a-z][a-z0-9:.\-']{1,24})\b(?:\s+(?:nerf|buff|patch|changed|updated|meta))",
         text or "",
     )
     if m:
@@ -135,7 +154,9 @@ def find_hero_in_summary(
     q = HERO_ALIASES.get(q, q)
     for h in summary.heroes:
         name = (h.name or "").lower()
-        if name == q or name.startswith(q) or q in name:
+        if name == q or name.startswith(q) or q in name.replace(" ", ""):
+            return h
+        if q.replace(" ", "") in name.replace(" ", ""):
             return h
     return None
 
@@ -144,34 +165,35 @@ async def lookup_hero_patch(
     bot, guild_id: int, hero_query: str
 ) -> tuple[HeroPatchHit | None, str]:
     """
-    Search live latest notes, then guild archive.
-    Returns (hit_or_none, latest_patch_date).
+    Always check Blizzard patch notes
+    (https://overwatch.blizzard.com/en-us/news/patch-notes/), walking the
+    same month calendar the site uses, newest→oldest, until this hero appears.
+    Fall back to the guild archive only if the live site has nothing.
     """
-    latest = await fetch_latest_summary()
-    latest_date = (latest.date if latest else "") or ""
-    latest_title = (latest.title if latest else "") or ""
+    patches = await fetch_all_patch_summaries(limit=25, max_months=8)
+    latest_date = (patches[0].date if patches else "") or ""
 
-    if latest:
-        hero = find_hero_in_summary(latest, hero_query)
-        if hero:
-            buff, nerf = _tone_flags(hero)
-            return (
-                HeroPatchHit(
-                    hero_name=hero.name,
-                    patch_date=latest_date,
-                    patch_title=latest_title,
-                    in_latest=True,
-                    latest_date=latest_date,
-                    lines=_hero_lines(hero),
-                    buffish=buff,
-                    nerfish=nerf,
-                ),
-                latest_date,
-            )
+    for i, summary in enumerate(patches):
+        hero = find_hero_in_summary(summary, hero_query)
+        if hero is None:
+            continue
+        buff, nerf = _tone_flags(hero)
+        return (
+            HeroPatchHit(
+                hero_name=hero.name,
+                patch_date=summary.date or "",
+                in_latest=(i == 0),
+                latest_date=latest_date,
+                lines=_hero_lines(hero),
+                buffish=buff,
+                nerfish=nerf,
+            ),
+            latest_date,
+        )
 
-    # Archive (newest first)
+    # Guild archive as backup if the live page didn't list older retail changes
     try:
-        rows = bot.db.list_ow_patch_history(guild_id, limit=20)
+        rows = bot.db.list_ow_patch_history(guild_id, limit=25)
     except Exception:
         rows = []
 
@@ -197,7 +219,6 @@ async def lookup_hero_patch(
             HeroPatchHit(
                 hero_name=hero.name,
                 patch_date=summary.date or "",
-                patch_title=summary.title or "",
                 in_latest=False,
                 latest_date=latest_date,
                 lines=_hero_lines(hero),
@@ -220,9 +241,10 @@ def facts_block(hit: HeroPatchHit) -> str:
     return (
         f"HERO: {hit.hero_name}\n"
         f"PATCH_DATE: {hit.patch_date or 'unknown'}\n"
-        f"PATCH_TITLE: {hit.patch_title or ''}\n"
         f"IN_LATEST_PATCH: {hit.in_latest}\n"
         f"LATEST_PATCH_DATE: {hit.latest_date or 'unknown'}\n"
         f"CHANGE_KIND: {kind}\n"
-        f"CHANGES:\n{lines}"
+        f"CHANGES:\n{lines}\n"
+        "IMPORTANT: Speak using PATCH_DATE / LATEST_PATCH_DATE only — "
+        "never invent or say a patch title/name."
     )

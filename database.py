@@ -82,6 +82,7 @@ class Database:
             self._ensure_column(conn, "guild_settings", "onboard_title", "TEXT")
             self._ensure_column(conn, "guild_settings", "onboard_body", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_broadcast_role_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "voice_log_channel_id", "INTEGER")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS anniversary_announcements (
@@ -106,6 +107,17 @@ class Database:
             )
             self._ensure_column(conn, "ow_patch_announcements", "message_ids", "TEXT")
             self._ensure_column(conn, "ow_patch_announcements", "payload", "TEXT")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS voice_log_messages (
+                    guild_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    delete_at TEXT NOT NULL,
+                    PRIMARY KEY (channel_id, message_id)
+                )
+                """
+            )
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -698,6 +710,76 @@ class Database:
                     ow_broadcast_role_id = excluded.ow_broadcast_role_id
                 """,
                 (guild_id, role_id),
+            )
+
+    def get_voice_log_channel(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["voice_log_channel_id"]:
+            return None
+        return int(settings["voice_log_channel_id"])
+
+    def set_voice_log_channel(self, guild_id: int, channel_id: int | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, voice_log_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    voice_log_channel_id = excluded.voice_log_channel_id
+                """,
+                (guild_id, channel_id),
+            )
+
+    def schedule_voice_log_delete(
+        self,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        delete_at: datetime,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO voice_log_messages (
+                    guild_id, channel_id, message_id, delete_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(channel_id, message_id) DO UPDATE SET
+                    delete_at = excluded.delete_at,
+                    guild_id = excluded.guild_id
+                """,
+                (
+                    guild_id,
+                    channel_id,
+                    message_id,
+                    delete_at.astimezone(timezone.utc).isoformat(),
+                ),
+            )
+
+    def list_due_voice_log_deletes(self, now: datetime | None = None) -> list[sqlite3.Row]:
+        stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT guild_id, channel_id, message_id, delete_at
+                    FROM voice_log_messages
+                    WHERE delete_at <= ?
+                    ORDER BY delete_at ASC
+                    LIMIT 100
+                    """,
+                    (stamp,),
+                ).fetchall()
+            )
+
+    def remove_voice_log_message(self, channel_id: int, message_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM voice_log_messages
+                WHERE channel_id = ? AND message_id = ?
+                """,
+                (channel_id, message_id),
             )
 
     def guild_stats(self, guild_id: int) -> dict[str, int]:

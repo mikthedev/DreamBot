@@ -10,13 +10,14 @@ import tempfile
 import time
 import wave
 from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import aiohttp
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import config
 from ai import AIError, ai_configured, looks_cyrillic, voice_reply_from_wav
@@ -32,6 +33,11 @@ MAX_UTTERANCE_SECONDS = 12.0
 RMS_THRESHOLD = 350
 WAKE_COOLDOWN_SECONDS = 4.0
 ALONE_LEAVE_SECONDS = 10.0
+# Leave VC if nobody wakes Dream with the wake word
+IDLE_LEAVE_SECONDS = 150.0  # 2.5 minutes
+# Voice transcript embeds (text copies of what Dream said)
+TRANSCRIPT_TTL_SECONDS = 24 * 60 * 60
+TRANSCRIPT_CLEANUP_SECONDS = 15 * 60
 
 
 def _patch_voice_recv_router() -> None:
@@ -249,13 +255,16 @@ class VoiceAICog(commands.Cog):
         self._poll_task: asyncio.Task | None = None
         self._text_channel: dict[int, int] = {}
         self._alone_timers: dict[int, asyncio.Task] = {}
+        self._idle_timers: dict[int, asyncio.Task] = {}
 
     async def cog_load(self) -> None:
         _patch_voice_recv_router()
         self._session = aiohttp.ClientSession()
         self._poll_task = asyncio.create_task(self._poll_loop())
+        self._cleanup_transcripts.start()
 
     async def cog_unload(self) -> None:
+        self._cleanup_transcripts.cancel()
         if self._poll_task:
             self._poll_task.cancel()
             try:
@@ -266,6 +275,8 @@ class VoiceAICog(commands.Cog):
             await self._stop_listening(guild_id, leave=False)
         for guild_id in list(self._alone_timers):
             self._cancel_alone_timer(guild_id)
+        for guild_id in list(self._idle_timers):
+            self._cancel_idle_timer(guild_id)
         if self._session and not self._session.closed:
             await self._session.close()
 
@@ -319,7 +330,8 @@ class VoiceAICog(commands.Cog):
                 user_id,
                 len(wav),
             )
-            await self._announce_status(guild_id, "Hearing you…")
+            # Stay quiet unless Dream / pending yes actually fires —
+            # no "Hearing you…" spam while people chat normally.
             reply = await voice_reply_from_wav(
                 wav,
                 session=self._session_or_raise(),
@@ -329,12 +341,6 @@ class VoiceAICog(commands.Cog):
             )
             if not reply:
                 log.info("No wake word in clip (guild %s)", guild_id)
-                await self._announce_status(
-                    guild_id,
-                    "I heard you, but no **Dream** wake word — try: "
-                    "*Dream, was Genji patched?* "
-                    "(after I offer details you can just say **yes** / **да**)",
-                )
                 return
 
             guild = self.bot.get_guild(guild_id)
@@ -344,6 +350,7 @@ class VoiceAICog(commands.Cog):
             who = member.display_name if member else f"user {user_id}"
             log.info("Voice wake from %s in %s", who, guild.name)
 
+            self._bump_idle_timer(guild_id)
             await self._speak(guild, reply)
             await self._announce_text(guild_id, who, reply)
         except AIError as exc:
@@ -366,21 +373,69 @@ class VoiceAICog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+    def _transcript_channel(self, guild_id: int) -> discord.TextChannel | None:
+        """Admin-configured voice log channel, else the channel used for /join."""
+        configured = self.bot.db.get_voice_log_channel(guild_id)
+        channel_id = configured or self._text_channel.get(guild_id)
+        if not channel_id:
+            return None
+        channel = self.bot.get_channel(channel_id)
+        return channel if isinstance(channel, discord.TextChannel) else None
+
     async def _announce_text(self, guild_id: int, who: str, reply: str) -> None:
-        channel_id = self._text_channel.get(guild_id)
-        channel = self.bot.get_channel(channel_id) if channel_id else None
-        if not isinstance(channel, discord.TextChannel):
+        channel = self._transcript_channel(guild_id)
+        if channel is None:
             return
         embed = discord.Embed(
             title="Dream (voice)",
             description=reply[:4096],
             color=discord.Color.from_rgb(46, 230, 166),
         )
-        embed.set_footer(text=f"Heard {who}")
+        embed.set_footer(text=f"Heard {who} · auto-deletes in 24h")
         try:
-            await channel.send(embed=embed)
+            msg = await channel.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException):
-            pass
+            return
+        delete_at = datetime.now(timezone.utc) + timedelta(seconds=TRANSCRIPT_TTL_SECONDS)
+        try:
+            self.bot.db.schedule_voice_log_delete(
+                guild_id, channel.id, msg.id, delete_at
+            )
+        except Exception:
+            log.exception("Could not schedule voice transcript delete")
+
+    @tasks.loop(seconds=TRANSCRIPT_CLEANUP_SECONDS)
+    async def _cleanup_transcripts(self) -> None:
+        try:
+            due = self.bot.db.list_due_voice_log_deletes()
+        except Exception:
+            log.exception("Failed listing voice transcript deletes")
+            return
+        for row in due:
+            channel_id = int(row["channel_id"])
+            message_id = int(row["message_id"])
+            channel = self.bot.get_channel(channel_id)
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    msg = await channel.fetch_message(message_id)
+                    await msg.delete()
+                except discord.NotFound:
+                    pass
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.debug(
+                        "Could not delete voice transcript %s/%s: %s",
+                        channel_id,
+                        message_id,
+                        exc,
+                    )
+            try:
+                self.bot.db.remove_voice_log_message(channel_id, message_id)
+            except Exception:
+                log.exception("Failed removing voice transcript row")
+
+    @_cleanup_transcripts.before_loop
+    async def _cleanup_transcripts_before(self) -> None:
+        await self.bot.wait_until_ready()
 
     async def _speak(self, guild: discord.Guild, text: str) -> None:
         voice = guild.voice_client
@@ -546,10 +601,22 @@ class VoiceAICog(commands.Cog):
             dave_ver,
         )
 
+        self._bump_idle_timer(interaction.guild.id)
+
+        tip = (
+            f"Joined **{channel.name}** — I can hear the channel, but I only "
+            f"reply when someone says **Dream** … "
+            f"(example: *Dream, was Genji patched?*). "
+            f"If nobody wakes me for 2.5 minutes, I'll leave."
+        )
+        # One public tip is enough — stay quiet while people talk without Dream
+        if isinstance(interaction.channel, discord.TextChannel):
+            try:
+                await interaction.channel.send(tip, delete_after=90)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
         await interaction.followup.send(
-            f"Joined **{channel.name}** — listening for **Dream** …\n"
-            "Example: *Dream, was Genji patched?*\n"
-            "Use `/disconnect` to leave.",
+            "Listening. Use `/disconnect` anytime.",
             ephemeral=True,
         )
 
@@ -586,7 +653,6 @@ class VoiceAICog(commands.Cog):
             listen_fn(sink, after=_after)
             self._listening[guild_id] = sink
             log.info("Re-started voice listen in guild %s", guild_id)
-            await self._announce_status(guild_id, "Reconnected voice listen.")
         except Exception:
             log.exception("Failed to restart listen in guild %s", guild_id)
 
@@ -620,6 +686,7 @@ class VoiceAICog(commands.Cog):
     async def _leave_voice(self, guild_id: int) -> None:
         """Stop wake listening, stop music, and disconnect from VC."""
         self._cancel_alone_timer(guild_id)
+        self._cancel_idle_timer(guild_id)
 
         await self._stop_listening(guild_id, leave=False)
 
@@ -697,6 +764,47 @@ class VoiceAICog(commands.Cog):
             log.exception("Alone-leave failed in guild %s", guild_id)
         finally:
             self._alone_timers.pop(guild_id, None)
+
+    def _cancel_idle_timer(self, guild_id: int) -> None:
+        task = self._idle_timers.pop(guild_id, None)
+        current = asyncio.current_task()
+        if task and not task.done() and task is not current:
+            task.cancel()
+
+    def _bump_idle_timer(self, guild_id: int) -> None:
+        """Reset the 2.5‑min no-wake leave clock (join or successful Dream)."""
+        self._cancel_idle_timer(guild_id)
+        self._idle_timers[guild_id] = asyncio.create_task(
+            self._idle_leave_after(guild_id, IDLE_LEAVE_SECONDS)
+        )
+
+    async def _idle_leave_after(self, guild_id: int, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
+            vc = guild.voice_client
+            if vc is None or not vc.is_connected():
+                return
+            if guild_id not in self._listening:
+                return
+            log.info(
+                "Leaving VC in %s — no Dream wake for %.0fs",
+                guild.name,
+                delay,
+            )
+            await self._announce_status(
+                guild_id,
+                "Left voice — nobody said **Dream** for 2.5 minutes.",
+            )
+            await self._leave_voice(guild_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Idle-leave failed in guild %s", guild_id)
+        finally:
+            self._idle_timers.pop(guild_id, None)
 
 
 async def setup(bot: commands.Bot) -> None:

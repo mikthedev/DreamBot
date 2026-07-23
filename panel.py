@@ -117,7 +117,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
     if is_admin:
         embed.add_field(
             name="Admins",
-            value="`/panel` — channels, names, birthdays, Overwatch, onboarding, anniversary",
+            value="`/panel` — channels, Dream AI, names, birthdays, Overwatch, onboarding, anniversary",
             inline=False,
         )
     return embed
@@ -175,8 +175,28 @@ def hub_channels_embed(guild: discord.Guild, bot) -> discord.Embed:
             f"**Welcome** {_ch(guild, settings['welcome_channel_id'] if settings else None)}\n"
             f"**Birthday** {_ch(guild, settings['birthday_channel_id'] if settings else None)}\n"
             f"**Music** {_ch(guild, settings['now_playing_channel_id'] if settings else None)}\n"
+            f"**Dream voice log** {_ch(guild, settings['voice_log_channel_id'] if settings else None)}\n"
             f"**Auto-role** {_role(guild, settings['auto_role_id'] if settings else None)}"
         ),
+        inline=False,
+    )
+    return embed
+
+
+def hub_dream_embed(guild: discord.Guild, bot) -> discord.Embed:
+    settings = bot.db.get_settings(guild.id)
+    embed = discord.Embed(
+        title="Dream AI",
+        description=(
+            "Voice replies are also posted as text embeds.\n"
+            "Pick where those go — the bot deletes them after **24 hours**.\n"
+            "If unset, they post in the channel where `/join` was used."
+        ),
+        color=ACCENT,
+    )
+    embed.add_field(
+        name="Voice transcript channel",
+        value=_ch(guild, settings["voice_log_channel_id"] if settings else None),
         inline=False,
     )
     return embed
@@ -349,6 +369,8 @@ class AdminHubView(discord.ui.View):
         self.add_item(self._nav_select())
         if self.page == "channels":
             self._add_channel_controls()
+        elif self.page == "dream":
+            self._add_dream_controls()
         elif self.page == "birthdays":
             self._add_birthday_controls()
         elif self.page == "names":
@@ -374,6 +396,12 @@ class AdminHubView(discord.ui.View):
                     value="channels",
                     description="Welcome, birthday, music, auto-role",
                     emoji="#️⃣",
+                ),
+                discord.SelectOption(
+                    label="Dream AI",
+                    value="dream",
+                    description="Voice transcript channel (24h auto-delete)",
+                    emoji="🎤",
                 ),
                 discord.SelectOption(
                     label="Birthdays",
@@ -438,6 +466,8 @@ class AdminHubView(discord.ui.View):
     def embed_for(self, guild: discord.Guild) -> discord.Embed:
         if self.page == "channels":
             return hub_channels_embed(guild, self.bot)
+        if self.page == "dream":
+            return hub_dream_embed(guild, self.bot)
         if self.page == "birthdays":
             return hub_birthdays_embed(guild, self.bot)
         if self.page == "names":
@@ -547,6 +577,35 @@ class AdminHubView(discord.ui.View):
 
         role_select.callback = on_role
         self.add_item(role_select)
+
+    def _add_dream_controls(self) -> None:
+        select = discord.ui.ChannelSelect(
+            placeholder="Set Dream voice transcript channel…",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+
+        async def on_pick(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            selected = select.values[0]
+            channel_id = getattr(selected, "id", None)
+            if channel_id is None:
+                await interaction.response.send_message(
+                    "Could not read that channel.", ephemeral=True
+                )
+                return
+            self.bot.db.set_voice_log_channel(self.guild_id, int(channel_id))
+            self._rebuild()
+            await interaction.response.edit_message(
+                embed=self.embed_for(interaction.guild),
+                view=self,
+            )
+
+        select.callback = on_pick
+        self.add_item(select)
 
     def _add_birthday_controls(self) -> None:
         async def view_list(interaction: discord.Interaction) -> None:

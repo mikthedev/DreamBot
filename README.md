@@ -40,9 +40,11 @@ If the channel empties, the bot leaves after **10 seconds**.
 |---|---|
 | `/ask …` | Short casual chat |
 | @mention the bot | Same, in the channel |
-| `/join` then say **Dream, …** | Voice answers (understands Russian; wake word stays **Dream**) |
+| `/join` then say **Dream, …** | Voice answers (understands Russian; wake word stays **Dream**). One tip on join — stays quiet until woken. Leaves after 2.5 min with no wake. |
 
-Overwatch balance questions use the bot’s live + archived patch notes — e.g. *Dream, was Genji nerfed?* → short take, then offer details; say **yes** / **да** to hear the highlights.
+Ask about any Overwatch hero and Dream scans the live [Blizzard patch notes](https://overwatch.blizzard.com/en-us/news/patch-notes/) (including older months on that site), then answers with the **patch date** — never the patch title. Example: *Dream, was Genji nerfed?* → short take, then offer details; say **yes** / **да** for highlights. Ask anything else and Dream still answers naturally like a teammate.
+
+Voice transcript embeds (text copies of what Dream said) go to a channel you set in **`/panel` → Dream AI**, and the bot deletes them after **24 hours**.
 
 ---
 

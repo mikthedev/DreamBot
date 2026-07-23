@@ -19,6 +19,8 @@ import config
 log = logging.getLogger("dream_team.overwatch")
 
 PATCH_URL = config.OW_PATCH_URL
+# Blizzard loads older months via XHR:
+#   /{locale}/news/patch-body/live/{year}/{month}
 OW_ORANGE = discord.Color.from_rgb(249, 158, 26)
 OW_BLUE = discord.Color.from_rgb(33, 143, 254)
 USER_AGENT = "DreamTeamBot/1.0 (+discord; patch-notes monitor)"
@@ -253,22 +255,8 @@ def _hero_section_text(hero: HeroChange) -> str:
 
 
 
-def parse_latest_patch(html: str) -> PatchSummary | None:
-    m = re.search(
-        r'<div class="PatchNotes-patch PatchNotes-live">(.*?)<div class="PatchNotes-patch ',
-        html,
-        re.S,
-    )
-    if not m:
-        m = re.search(
-            r'<div class="PatchNotes-patch PatchNotes-live">(.*)$',
-            html,
-            re.S,
-        )
-    if not m:
-        return None
-
-    block = m.group(1)
+def _parse_patch_block(block: str) -> PatchSummary | None:
+    """Parse one PatchNotes-patch HTML block into a summary."""
     patch_id = _first(r'id="(patch-[^"]+)"', block) or _first(
         r'PatchNotes-date">([^<]+)', block
     )
@@ -276,6 +264,8 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
     title = _strip_tags(_first(r'PatchNotes-patchTitle"[^>]*>(.*?)</h3>', block, re.S))
     if not title:
         title = f"Overwatch Patch Notes – {date}" if date else "Overwatch Patch Notes"
+    if not date and not patch_id:
+        return None
 
     summary = PatchSummary(patch_id=patch_id or title, date=date, title=title)
 
@@ -338,13 +328,13 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
                     ch = _make_change(ability_name, li, icon_url=ability_icon)
                     if ch:
                         changes.append(ch)
-                    if len(changes) >= 6:
+                    if len(changes) >= 8:
                         break
-                if len(changes) >= 6:
+                if len(changes) >= 8:
                     break
 
             if not changes:
-                for li in re.findall(r"<li>(.*?)</li>", body, re.S)[:4]:
+                for li in re.findall(r"<li>(.*?)</li>", body, re.S)[:6]:
                     ch = _make_change("General", li, icon_url=None)
                     if ch:
                         changes.append(ch)
@@ -359,7 +349,6 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
                     )
                 )
 
-    # Retail only (first occurrence per hero name in role)
     seen: set[str] = set()
     unique: list[HeroChange] = []
     for h in summary.heroes:
@@ -370,6 +359,70 @@ def parse_latest_patch(html: str) -> PatchSummary | None:
         unique.append(h)
     summary.heroes = unique
     return summary
+
+
+def parse_latest_patch(html: str) -> PatchSummary | None:
+    m = re.search(
+        r'<div class="PatchNotes-patch PatchNotes-live">(.*?)<div class="PatchNotes-patch ',
+        html,
+        re.S,
+    )
+    if not m:
+        m = re.search(
+            r'<div class="PatchNotes-patch PatchNotes-live">(.*)$',
+            html,
+            re.S,
+        )
+    if not m:
+        return None
+    return _parse_patch_block(m.group(1))
+
+
+def parse_all_patches(html: str, *, limit: int = 15) -> list[PatchSummary]:
+    """
+    Parse every patch block on the Blizzard patch-notes page (newest first).
+    Used by Dream AI to find the last time a hero was changed.
+    """
+    # Split on patch containers; keep class so we know which is live
+    parts = re.split(r'(?=<div class="PatchNotes-patch)', html)
+    out: list[PatchSummary] = []
+    for part in parts:
+        if 'class="PatchNotes-patch' not in part[:80]:
+            continue
+        # Trim trailing next-patch start if present — block is the part itself
+        block = part
+        summary = _parse_patch_block(block)
+        if summary is None:
+            continue
+        if not summary.date and not summary.heroes:
+            continue
+        out.append(summary)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def parse_available_months(html: str, *, patch_type: str = "live") -> list[tuple[int, int]]:
+    """
+    Read Blizzard's patchNotesDates calendar from the patch-notes page.
+    Returns (year, month) newest-first, e.g. [(2026, 7), (2026, 6), ...].
+    """
+    m = re.search(r"patchNotesDates\s*=\s*(\{.*?\});", html, re.S)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return []
+    raw = data.get(patch_type) or data.get("live") or []
+    out: list[tuple[int, int]] = []
+    for item in raw:
+        # "2026-07"
+        mm = re.match(r"^(\d{4})-(\d{1,2})$", str(item).strip())
+        if not mm:
+            continue
+        out.append((int(mm.group(1)), int(mm.group(2))))
+    return out
 
 
 async def fetch_patch_html(session: aiohttp.ClientSession | None = None) -> str:
@@ -392,9 +445,103 @@ async def fetch_patch_html(session: aiohttp.ClientSession | None = None) -> str:
             await session.close()
 
 
+async def fetch_patch_body_html(
+    year: int,
+    month: int,
+    *,
+    session: aiohttp.ClientSession | None = None,
+    patch_type: str = "live",
+) -> str:
+    """Fetch one calendar month of retail patch notes (XHR body Blizzard uses)."""
+    close = False
+    if session is None:
+        session = aiohttp.ClientSession(
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
+        close = True
+    url = (
+        f"https://overwatch.blizzard.com/en-us/news/patch-body/"
+        f"{patch_type}/{year}/{month:02d}"
+    )
+    try:
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=45),
+            ssl=_SSL_CTX,
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.text()
+    finally:
+        if close:
+            await session.close()
+
+
 async def fetch_latest_summary() -> PatchSummary | None:
     html = await fetch_patch_html()
     return parse_latest_patch(html)
+
+
+async def fetch_all_patch_summaries(
+    *, limit: int = 15, max_months: int = 8
+) -> list[PatchSummary]:
+    """
+    Walk Blizzard's patch-notes calendar (newest month → older) via the same
+    patch-body endpoint the website uses when you change month/year.
+    Returns individual patches newest-first, capped by `limit`.
+    """
+    html = await fetch_patch_html()
+    months = parse_available_months(html)
+    if not months:
+        # Page itself still has the current month's patches
+        patches = parse_all_patches(html, limit=limit)
+        if patches:
+            return patches
+        latest = parse_latest_patch(html)
+        return [latest] if latest else []
+
+    out: list[PatchSummary] = []
+    seen: set[str] = set()
+    session = aiohttp.ClientSession(
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+    )
+    try:
+        for year, month in months[:max_months]:
+            try:
+                body = await fetch_patch_body_html(
+                    year, month, session=session
+                )
+            except Exception as exc:
+                log.warning(
+                    "Failed to fetch patch body %s-%02d: %s", year, month, exc
+                )
+                continue
+            for summary in parse_all_patches(body, limit=limit):
+                key = summary.fingerprint or f"{summary.date}:{summary.title}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(summary)
+                if len(out) >= limit:
+                    return out
+    finally:
+        await session.close()
+
+    if out:
+        return out
+    # Last resort: SSR content on the main page
+    patches = parse_all_patches(html, limit=limit)
+    if patches:
+        return patches
+    latest = parse_latest_patch(html)
+    return [latest] if latest else []
 
 
 def summary_to_payload(summary: PatchSummary) -> str:

@@ -20,7 +20,12 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
-from ai import AIError, ai_configured, looks_cyrillic, voice_reply_from_wav
+from ai import (
+    AIError,
+    ai_configured,
+    detect_user_language,
+    voice_reply_from_wav,
+)
 
 log = logging.getLogger("dream_team.voice_ai")
 
@@ -28,10 +33,12 @@ SAMPLE_RATE = 48000
 CHANNELS = 2
 SAMPLE_WIDTH = 2
 # Wait for a clear end-of-phrase pause, but keep it snappy for voice latency.
-SILENCE_SECONDS = 0.95
-MIN_UTTERANCE_SECONDS = 0.55
-MAX_UTTERANCE_SECONDS = 14.0
-RMS_THRESHOLD = 260
+SILENCE_SECONDS = 1.1
+MIN_UTTERANCE_SECONDS = 0.7
+MAX_UTTERANCE_SECONDS = 12.0
+RMS_THRESHOLD = 420
+# Clip must have enough real speech (not just noise spikes)
+MIN_VOICED_RATIO = 0.22
 WAKE_COOLDOWN_SECONDS = 1.8
 ALONE_LEAVE_SECONDS = 10.0
 # Leave VC if nobody wakes Dream with the wake word
@@ -104,8 +111,8 @@ def _pcm_to_whisper_wav(pcm_stereo_48k: bytes) -> bytes:
         # Mild gain — Discord VC is often quiet for Whisper
         try:
             rms = audioop.rms(mono, SAMPLE_WIDTH) or 1
-            if rms < 1200:
-                factor = min(4.0, 1200 / rms)
+            if 200 < rms < 900:
+                factor = min(2.2, 900 / rms)
                 mono = audioop.mul(mono, SAMPLE_WIDTH, factor)
         except Exception:
             pass
@@ -161,6 +168,7 @@ class UtteranceBuffer:
         self.quiet_since: float | None = None
         self.started_at = 0.0
         self.bytes_total = 0
+        self.voiced_bytes = 0
 
     def add(self, pcm: bytes, now: float, *, voiced: bool) -> None:
         if not self.chunks:
@@ -168,6 +176,7 @@ class UtteranceBuffer:
         self.chunks.append(pcm)
         self.bytes_total += len(pcm)
         if voiced:
+            self.voiced_bytes += len(pcm)
             self.last_voice_at = now
             self.quiet_since = None
         elif self.quiet_since is None:
@@ -184,10 +193,16 @@ class UtteranceBuffer:
             return 0.0
         return max(0.0, now - self.quiet_since)
 
+    def voiced_ratio(self) -> float:
+        if self.bytes_total <= 0:
+            return 0.0
+        return self.voiced_bytes / self.bytes_total
+
     def flush(self) -> bytes:
         data = b"".join(self.chunks)
         self.chunks.clear()
         self.bytes_total = 0
+        self.voiced_bytes = 0
         self.started_at = 0.0
         self.last_voice_at = 0.0
         self.quiet_since = None
@@ -250,7 +265,19 @@ def _build_sink_class():
                 return None
             if buf.duration(now) < MIN_UTTERANCE_SECONDS:
                 return None
-            if buf.quiet_for(now) < SILENCE_SECONDS and buf.duration(now) < MAX_UTTERANCE_SECONDS:
+            if (
+                buf.quiet_for(now) < SILENCE_SECONDS
+                and buf.duration(now) < MAX_UTTERANCE_SECONDS
+            ):
+                return None
+            if buf.voiced_ratio() < MIN_VOICED_RATIO:
+                # Mostly noise / silence padding — drop
+                log.debug(
+                    "Dropping low-voice clip guild=%s ratio=%.2f",
+                    self.guild_id,
+                    buf.voiced_ratio(),
+                )
+                buf.flush()
                 return None
             return buf.flush()
 
@@ -274,8 +301,10 @@ def _build_sink_class():
 async def synthesize_speech(text: str, out_path: Path) -> Path:
     import edge_tts
 
-    # Masculine + a bit more punchy; Russian → Dmitry
-    if looks_cyrillic(text):
+    lang = detect_user_language(text)
+    if lang == "uk":
+        voice = config.TTS_VOICE_UK
+    elif lang == "ru":
         voice = config.TTS_VOICE_RU
     else:
         voice = config.TTS_VOICE
@@ -299,7 +328,8 @@ class VoiceAICog(commands.Cog):
         self._poll_task: asyncio.Task | None = None
         self._text_channel: dict[int, int] = {}
         self._alone_timers: dict[int, asyncio.Task] = {}
-        self._idle_timers: dict[int, asyncio.Task] = {}
+        self._idle_deadline: dict[int, float] = {}
+        self._idle_leave_pending: set[int] = set()
 
     async def cog_load(self) -> None:
         _quiet_rtcp_logs()
@@ -320,8 +350,8 @@ class VoiceAICog(commands.Cog):
             await self._stop_listening(guild_id, leave=False)
         for guild_id in list(self._alone_timers):
             self._cancel_alone_timer(guild_id)
-        for guild_id in list(self._idle_timers):
-            self._cancel_idle_timer(guild_id)
+        self._idle_deadline.clear()
+        self._idle_leave_pending.clear()
         if self._session and not self._session.closed:
             await self._session.close()
 
@@ -342,6 +372,14 @@ class VoiceAICog(commands.Cog):
                 await asyncio.sleep(0.25)
                 now = time.monotonic()
                 for guild_id, sink in list(self._listening.items()):
+                    deadline = self._idle_deadline.get(guild_id)
+                    if (
+                        deadline is not None
+                        and now >= deadline
+                        and guild_id not in self._idle_leave_pending
+                    ):
+                        self._idle_leave_pending.add(guild_id)
+                        asyncio.create_task(self._idle_leave_now(guild_id))
                     if self.is_paused(guild_id) or guild_id in self._busy:
                         continue
                     for user_id in sink.ready_user_ids(now):
@@ -384,7 +422,7 @@ class VoiceAICog(commands.Cog):
                 user_id=user_id,
             )
             if not reply:
-                log.info("No wake word in clip (guild %s)", guild_id)
+                log.info("No wake / ignored clip (guild %s)", guild_id)
                 return
 
             guild = self.bot.get_guild(guild_id)
@@ -826,21 +864,24 @@ class VoiceAICog(commands.Cog):
             self._alone_timers.pop(guild_id, None)
 
     def _cancel_idle_timer(self, guild_id: int) -> None:
-        task = self._idle_timers.pop(guild_id, None)
-        current = asyncio.current_task()
-        if task and not task.done() and task is not current:
-            task.cancel()
+        self._idle_deadline.pop(guild_id, None)
+        self._idle_leave_pending.discard(guild_id)
 
     def _bump_idle_timer(self, guild_id: int) -> None:
         """Reset the 2.5‑min no-wake leave clock (join or successful Dream)."""
-        self._cancel_idle_timer(guild_id)
-        self._idle_timers[guild_id] = asyncio.create_task(
-            self._idle_leave_after(guild_id, IDLE_LEAVE_SECONDS)
+        self._idle_deadline[guild_id] = time.monotonic() + IDLE_LEAVE_SECONDS
+        self._idle_leave_pending.discard(guild_id)
+        log.info(
+            "Idle leave armed guild=%s in %.0fs",
+            guild_id,
+            IDLE_LEAVE_SECONDS,
         )
 
-    async def _idle_leave_after(self, guild_id: int, delay: float) -> None:
+    async def _idle_leave_now(self, guild_id: int) -> None:
         try:
-            await asyncio.sleep(delay)
+            deadline = self._idle_deadline.get(guild_id)
+            if deadline is None or time.monotonic() < deadline:
+                return
             guild = self.bot.get_guild(guild_id)
             if guild is None:
                 return
@@ -852,19 +893,18 @@ class VoiceAICog(commands.Cog):
             log.info(
                 "Leaving VC in %s — no Dream wake for %.0fs",
                 guild.name,
-                delay,
+                IDLE_LEAVE_SECONDS,
             )
             await self._announce_status(
                 guild_id,
                 "Left voice — nobody said **Dream** for 2.5 minutes.",
             )
             await self._leave_voice(guild_id)
-        except asyncio.CancelledError:
-            raise
         except Exception:
             log.exception("Idle-leave failed in guild %s", guild_id)
         finally:
-            self._idle_timers.pop(guild_id, None)
+            self._idle_leave_pending.discard(guild_id)
+            self._idle_deadline.pop(guild_id, None)
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -68,10 +68,13 @@ GROQ_WHISPER_MODEL = (
 # Optional: force Whisper language (ru / en / uk). Empty = auto-detect.
 GROQ_WHISPER_LANGUAGE = os.getenv("GROQ_WHISPER_LANGUAGE", "").strip().lower()
 
-# Free edge-tts — masculine default; Russian replies use TTS_VOICE_RU
+# Free edge-tts — masculine defaults per language
 TTS_VOICE = os.getenv("TTS_VOICE", "en-US-GuyNeural").strip() or "en-US-GuyNeural"
 TTS_VOICE_RU = (
     os.getenv("TTS_VOICE_RU", "ru-RU-DmitryNeural").strip() or "ru-RU-DmitryNeural"
+)
+TTS_VOICE_UK = (
+    os.getenv("TTS_VOICE_UK", "uk-UA-OstapNeural").strip() or "uk-UA-OstapNeural"
 )
 # Slightly more expressive delivery
 TTS_RATE = os.getenv("TTS_RATE", "+8%").strip() or "+8%"

@@ -35,13 +35,20 @@ SYSTEM_INSTRUCTION = (
     "You are Dream, a sharp but chill teammate on the Dream Team Discord.\n"
     "Talk naturally — short, warm, conversational. Usually 1–2 sentences in voice.\n"
     "No markdown, no bullet lists, no headers, no robotic phrasing.\n"
-    "You understand Russian, Ukrainian, and English; reply in the user's language.\n"
+    "You understand English, Russian, and Ukrainian.\n"
+    "CRITICAL: Always answer in the SAME language the user just used "
+    "(English→English, Russian→Russian, Ukrainian→Ukrainian). "
+    "Never mix languages unless the user did.\n"
+    "Be lightly witty only when it fits — never force jokes. "
+    "Accuracy first: if you are unsure, say you don't know. "
+    "Never invent facts, numbers, dates, patch details, or quotes.\n"
     "Use recent conversation context: resolve pronouns (he/she/they/him/her/it, "
-    "он/она/его/её) and short follow-ups like 'and Tracer?' using LAST HERO / history.\n"
-    "Answer ANY question — jokes, life, gaming, Overwatch vibes — like a real friend.\n"
-    "For Overwatch hero balance: ONLY use PATCH FACTS when provided. "
-    "Refer to patches by calendar DATE only (e.g. July 14, 2026), never by title. "
-    "If no facts are given, say you don't have notes — don't invent numbers.\n"
+    "он/она/его/её, він/вона/його/її) and short follow-ups like 'and Tracer?' "
+    "using LAST HERO / history.\n"
+    "Answer everyday questions normally. For Overwatch hero balance: ONLY use "
+    "PATCH FACTS when provided. Refer to patches by calendar DATE only "
+    "(e.g. July 14, 2026), never by title. If no facts are given, say you "
+    "don't have notes — don't invent numbers.\n"
     "For Discord bot features: briefly point to slash commands."
 )
 
@@ -50,7 +57,7 @@ GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 _WAKE_RE = re.compile(
     r"(?:^|[\s,.\!?])(?:hey\s+|эй\s+|эй,\s*|ok\s+)?"
-    r"(?:dream(?:\s+team)?|дрим(?:\s+тим)?|"
+    r"(?:dream(?:\s+team)?|дрим(?:\s+тим)?|дрім(?:\s+тім)?|"
     r"dre+m+|dr[ei]m+|drum|grim|cream|drin|дримм?|"
     r"дрень|дрейм|джейм|джеймс|дреам|дримы|дримс|грим|"
     r"dmv|d\.m\.v)"
@@ -65,6 +72,7 @@ _WAKE_FIRST_TOKENS = frozenset(
         "dreams",
         "dreamteam",
         "дрим",
+        "дрім",
         "дрима",
         "дримм",
         "дримы",
@@ -77,6 +85,7 @@ _WAKE_FIRST_TOKENS = frozenset(
         "джеймс",
         "джейми",
         "дримтим",
+        "дрімтим",
         "грим",
         "грем",
         "дрин",
@@ -99,6 +108,7 @@ _WAKE_FUZZY_TARGETS = (
     "dream",
     "dreams",
     "дрим",
+    "дрім",
     "дримм",
     "дрейм",
     "дрень",
@@ -148,9 +158,10 @@ def _token_looks_like_dream(token: str) -> bool:
 
 
 _YES_RE = re.compile(
-    r"(?i)^\s*(?:(?:dream|дрим|дрень|джейм|дрейм)[\s,.\!?:\-]*)?"
+    r"(?i)^\s*(?:(?:dream|дрим|дрім|дрень|джейм|дрейм)[\s,.\!?:\-]*)?"
     r"(?:yes|yeah|yep|sure|ok|okay|"
-    r"да|ага|угу|конечно|давай|расскажи|tell me|go ahead)\b",
+    r"да|ага|угу|конечно|давай|расскажи|tell me|go ahead|"
+    r"так|авжеж|розкажи|добре)\b",
 )
 
 
@@ -178,6 +189,7 @@ class ChatTurn:
 class UserSession:
     expires_at: float
     last_hero: str | None = None
+    last_lang: str | None = None  # en | ru | uk
     history: list[ChatTurn] | None = None
 
     def __post_init__(self) -> None:
@@ -196,7 +208,66 @@ def ai_configured() -> bool:
 
 
 def looks_cyrillic(text: str) -> bool:
-    return bool(re.search(r"[а-яА-ЯёЁ]", text or ""))
+    return bool(re.search(r"[а-яА-ЯёЁіІїЇєЄґҐ]", text or ""))
+
+
+def detect_user_language(text: str, *, fallback: str | None = None) -> str:
+    """
+    Detect reply language from the user's message.
+    Returns 'en', 'ru', or 'uk'.
+    """
+    t = text or ""
+    # Ukrainian-specific letters
+    if re.search(r"[іїєґІЇЄҐ]", t):
+        return "uk"
+    # Word hints before shared Cyrillic letter heuristics
+    if re.search(
+        r"(?i)\b(що|як|де|мені|тобі|дякую|будь\s*ласка|привіт|капібар|"
+        r"розкажи|авжеж|добре|живуть)\b",
+        t,
+    ):
+        return "uk"
+    # Russian-specific letters (ё/ы/э/ъ are strong RU signals)
+    if re.search(r"[ыэъёЫЭЪЁ]", t):
+        return "ru"
+    if re.search(
+        r"(?i)\b(что|как|где|мне|тебе|спасибо|пожалуйста|привет|"
+        r"расскажи|конечно|живут)\b",
+        t,
+    ):
+        return "ru"
+    if re.search(r"[а-яА-Я]", t):
+        if fallback in {"ru", "uk"}:
+            return fallback
+        return "ru"
+    if re.search(r"[a-zA-Z]", t):
+        return "en"
+    return fallback if fallback in {"en", "ru", "uk"} else "en"
+
+
+def language_instruction(lang: str) -> str:
+    if lang == "uk":
+        return (
+            "REPLY LANGUAGE: Ukrainian only. "
+            "Пиши українською, природно, без російської кальки."
+        )
+    if lang == "ru":
+        return (
+            "REPLY LANGUAGE: Russian only. "
+            "Отвечай по-русски, коротко и по-человечески."
+        )
+    return (
+        "REPLY LANGUAGE: English only. "
+        "Answer in natural casual English."
+    )
+
+
+def empty_prompt_reply(lang: str) -> str:
+    if lang == "uk":
+        return "Ага? Що треба?"
+    if lang == "ru":
+        return "Ага? Чё надо?"
+    return "Yeah? What do you need?"
 
 
 def is_affirmative(text: str) -> bool:
@@ -236,7 +307,11 @@ def peek_pending_offer(guild_id: int, user_id: int) -> PendingOffer | None:
 
 
 def touch_session(
-    guild_id: int, user_id: int, *, last_hero: str | None = None
+    guild_id: int,
+    user_id: int,
+    *,
+    last_hero: str | None = None,
+    last_lang: str | None = None,
 ) -> UserSession:
     key = (guild_id, user_id)
     sess = _sessions.get(key)
@@ -248,6 +323,8 @@ def touch_session(
         sess.expires_at = now + CONVO_SECONDS
     if last_hero:
         sess.last_hero = last_hero
+    if last_lang in {"en", "ru", "uk"}:
+        sess.last_lang = last_lang
     return sess
 
 
@@ -263,9 +340,15 @@ def peek_session(guild_id: int, user_id: int) -> UserSession | None:
 
 
 def remember_turn(
-    guild_id: int, user_id: int, *, user: str, assistant: str, hero: str | None = None
+    guild_id: int,
+    user_id: int,
+    *,
+    user: str,
+    assistant: str,
+    hero: str | None = None,
+    lang: str | None = None,
 ) -> None:
-    sess = touch_session(guild_id, user_id, last_hero=hero)
+    sess = touch_session(guild_id, user_id, last_hero=hero, last_lang=lang)
     assert sess.history is not None
     sess.history.append(ChatTurn("user", user[:500]))
     sess.history.append(ChatTurn("assistant", assistant[:500]))
@@ -307,8 +390,8 @@ async def generate_reply(
     *,
     session: aiohttp.ClientSession,
     system: str | None = None,
-    max_tokens: int = 180,
-    temperature: float = 0.6,
+    max_tokens: int = 160,
+    temperature: float = 0.45,
     history: list[ChatTurn] | None = None,
 ) -> str:
     if not config.GROQ_API_KEY:
@@ -362,13 +445,7 @@ async def generate_reply(
     return _strip_markdown(text.strip())
 
 
-WHISPER_PROMPT = (
-    "Dream. The wake word is Dream. "
-    "Dream, hello. Dream, tell me a joke. Dream, where do capybaras live? "
-    "Дрим, привет. Дрим, где живут капибары? Дрим, расскажи шутку. "
-    "Эй Dream, как дела? Dream, was Doomfist nerfed? "
-    "Overwatch: Doomfist, Tracer, Genji, Kiriko, Widowmaker, Reinhardt."
-)
+WHISPER_PROMPT = "Dream."
 
 
 async def _whisper_once(
@@ -377,7 +454,11 @@ async def _whisper_once(
     session: aiohttp.ClientSession,
     filename: str,
     language: str | None,
-) -> str:
+) -> tuple[str, float]:
+    """
+    Returns (text, no_speech_prob).
+    no_speech_prob is 0..1 from verbose_json segments (1 = likely silence).
+    """
     form = aiohttp.FormData()
     form.add_field(
         "file",
@@ -386,7 +467,7 @@ async def _whisper_once(
         content_type="audio/wav",
     )
     form.add_field("model", config.GROQ_WHISPER_MODEL)
-    form.add_field("response_format", "json")
+    form.add_field("response_format", "verbose_json")
     form.add_field("temperature", "0")
     form.add_field("prompt", WHISPER_PROMPT)
     if language:
@@ -405,22 +486,56 @@ async def _whisper_once(
             log.warning("Groq Whisper error %s: %s", resp.status, message)
             raise AIError(f"Speech recognition failed: {message}")
 
-    text = ""
+    text_out = ""
+    no_speech = 0.0
     if isinstance(data, dict):
-        text = str(data.get("text") or "").strip()
-    return _fix_common_asr(fix_ow_asr(text))
+        text_out = str(data.get("text") or "").strip()
+        segs = data.get("segments") or []
+        if isinstance(segs, list) and segs:
+            probs = [
+                float(s.get("no_speech_prob") or 0.0)
+                for s in segs
+                if isinstance(s, dict)
+            ]
+            if probs:
+                no_speech = sum(probs) / len(probs)
+    return _fix_common_asr(fix_ow_asr(text_out)), no_speech
 
 
 def _fix_common_asr(text: str) -> str:
     """Light cleanup for frequent Whisper mistakes (not just OW heroes)."""
     out = text or ""
     fixes = (
-        (r"(?i)\b(?:эпибары|бибары|капибар+ы?|капибаррский)\b", "капибары"),
+        (r"(?i)\b(?:эпибары|бибары|капибаррский)\b", "капибары"),
+        (r"(?i)\bкапибар+ы?\b", "капибары"),
+        (r"(?i)\bкапібар+и?\b", "капібари"),
         (r"(?i)\bcapybaras?\b", "capybaras"),
     )
     for pat, repl in fixes:
         out = re.sub(pat, repl, out)
     return out
+
+
+def _looks_like_hallucination(text: str) -> bool:
+    """Catch Whisper inventing words from silence / prompt bleed."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    letters = re.sub(r"[^\wа-яёіїєґА-ЯЁІЇЄҐ]", "", t, flags=re.UNICODE)
+    if len(letters) < 3:
+        return True
+    low = t.lower()
+    if re.fullmatch(
+        r"(?i)[\s.]*"
+        r"(thanks?\s*for\s*watching|subscribe|thank\s*you|"
+        r"amara\.org|www\.|http|music|\[?\s*music\s*\]?|"
+        r"you|the end|\.\.\.)[\s.]*",
+        t,
+    ):
+        return True
+    if "капибаррский day" in low:
+        return True
+    return False
 
 
 async def transcribe_audio(
@@ -430,37 +545,55 @@ async def transcribe_audio(
     filename: str = "clip.wav",
 ) -> str:
     """
-    Transcribe with Whisper (large-v3 by default).
-    If the first pass misses the Dream wake word, retry in Russian — RU/UA
-    accents often get mangled when language is auto-detected as English.
+    Transcribe with Whisper. Drop high no-speech / hallucinated clips.
+    Retry uk/ru only when first pass has real speech but missed Dream.
     """
     if not config.GROQ_API_KEY:
         raise AIError("GROQ_API_KEY not set.")
 
     forced = config.GROQ_WHISPER_LANGUAGE or None
     try:
-        text = await _whisper_once(
+        text, no_speech = await _whisper_once(
             wav_bytes, session=session, filename=filename, language=forced
         )
     except aiohttp.ClientError as exc:
         raise AIError("Could not reach Groq Whisper.") from exc
 
+    if no_speech >= 0.55 or _looks_like_hallucination(text):
+        log.info(
+            "Ignoring likely non-speech (no_speech=%.2f text=%r)",
+            no_speech,
+            text[:80],
+        )
+        return ""
+
     if forced or extract_wake_question(text) is not None:
         return text
 
-    try:
-        ru = await _whisper_once(
-            wav_bytes, session=session, filename=filename, language="ru"
-        )
-    except (AIError, aiohttp.ClientError):
-        return text
-
-    if extract_wake_question(ru) is not None:
-        log.info("Whisper RU retry caught wake: %r → %r", text[:80], ru[:80])
-        return ru
-    if looks_cyrillic(ru) and not looks_cyrillic(text):
-        return ru
+    for lang_code in ("uk", "ru"):
+        try:
+            alt, alt_ns = await _whisper_once(
+                wav_bytes,
+                session=session,
+                filename=filename,
+                language=lang_code,
+            )
+        except (AIError, aiohttp.ClientError):
+            continue
+        if alt_ns >= 0.55 or _looks_like_hallucination(alt):
+            continue
+        if extract_wake_question(alt) is not None:
+            log.info(
+                "Whisper %s retry caught wake: %r → %r",
+                lang_code,
+                text[:80],
+                alt[:80],
+            )
+            return alt
+        if looks_cyrillic(alt) and not looks_cyrillic(text):
+            text = alt
     return text
+
 
 
 def _normalize_wake_transcript(transcript: str) -> str:
@@ -572,7 +705,7 @@ def _wants_hero_lookup(text: str) -> str | None:
     # Balance vibes — not jokes / stories that merely mention a hero
     if re.search(
         r"(?i)\b(how'?s|how is|what about|was|were|did|has|"
-        r"как там|что с|что по|нерф|бафф|патч)\b",
+        r"как там|что с|что по|як там|що з|що по|нерф|бафф|патч)\b",
         text,
     ):
         return hero
@@ -593,22 +726,28 @@ async def handle_user_turn(
 ) -> str:
     """Answer a user turn (after wake word, convo follow-up, or pending yes)."""
     raw = fix_ow_asr((question or "").strip())
-    if not raw:
-        return "Yeah? What do you need?" if not looks_cyrillic(raw) else "Ага? Чё надо?"
-
     sess = peek_session(guild_id, user_id)
+    lang = detect_user_language(
+        raw, fallback=(sess.last_lang if sess else None)
+    )
+    if not raw:
+        return empty_prompt_reply(lang)
+
     q = resolve_question(raw, sess)
+    # Re-detect after resolve (pronoun expansion may add English hero names)
+    lang = detect_user_language(raw, fallback=lang)
     history = list(sess.history) if sess and sess.history else None
     context_line = ""
     if sess and sess.last_hero:
         context_line = f"LAST HERO in this chat: {sess.last_hero}\n"
+    lang_line = language_instruction(lang) + "\n"
 
     # Follow-up: user said yes to hearing last patch details
     if is_affirmative(q) and peek_pending_offer(guild_id, user_id):
         offer = pop_pending_offer(guild_id, user_id)
         assert offer is not None
         prompt = (
-            f"{context_line}"
+            f"{lang_line}{context_line}"
             "The user said yes — give the last patch highlights for this hero.\n"
             "Use ONLY these PATCH FACTS. Pick the 1–2 most important changes. "
             "Keep it casual (2 sentences max). Mention when using PATCH_DATE "
@@ -620,7 +759,12 @@ async def handle_user_turn(
             prompt, session=session, max_tokens=100, history=history
         )
         remember_turn(
-            guild_id, user_id, user=raw, assistant=reply, hero=offer.hero
+            guild_id,
+            user_id,
+            user=raw,
+            assistant=reply,
+            hero=offer.hero,
+            lang=lang,
         )
         return reply
 
@@ -633,7 +777,7 @@ async def handle_user_turn(
         hit, latest_date = await lookup_hero_patch(bot, guild_id, hero)
         if hit is None:
             prompt = (
-                f"{context_line}"
+                f"{lang_line}{context_line}"
                 "User asked about an Overwatch hero. We checked Blizzard patch "
                 "notes and didn't find recent retail hero updates for them "
                 f"(latest listed date: {latest_date or 'unknown'}). "
@@ -643,7 +787,9 @@ async def handle_user_turn(
             reply = await generate_reply(
                 prompt, session=session, max_tokens=80, history=history
             )
-            remember_turn(guild_id, user_id, user=raw, assistant=reply, hero=hero)
+            remember_turn(
+                guild_id, user_id, user=raw, assistant=reply, hero=hero, lang=lang
+            )
             return reply
 
         facts = facts_block(hit)
@@ -651,7 +797,7 @@ async def handle_user_turn(
 
         if hit.in_latest:
             prompt = (
-                f"{context_line}"
+                f"{lang_line}{context_line}"
                 "User asked about this Overwatch hero. They ARE in the newest "
                 "patch. Answer in 1–2 casual sentences: buff/nerf/mix "
                 "(CHANGE_KIND), using LATEST_PATCH_DATE as the when (date only). "
@@ -660,7 +806,7 @@ async def handle_user_turn(
             )
         else:
             prompt = (
-                f"{context_line}"
+                f"{lang_line}{context_line}"
                 "User asked about this Overwatch hero. They are NOT in the newest "
                 "patch (LATEST_PATCH_DATE). Say they didn't change this time, "
                 "mention last change with PATCH_DATE only, then offer highlights. "
@@ -671,7 +817,12 @@ async def handle_user_turn(
             prompt, session=session, max_tokens=110, history=history
         )
         remember_turn(
-            guild_id, user_id, user=raw, assistant=reply, hero=hit.hero_name
+            guild_id,
+            user_id,
+            user=raw,
+            assistant=reply,
+            hero=hit.hero_name,
+            lang=lang,
         )
         return reply
 
@@ -679,19 +830,17 @@ async def handle_user_turn(
     style = (
         "Reply like a real friend in voice chat: natural, warm, 1–2 short "
         "sentences. Use context if they refer to something earlier. "
-        "Answer directly. Match their language. No markdown, no filler."
+        "Answer directly. No markdown, no filler."
         if voice
-        else "Reply like a helpful friend: natural and concise. Use chat context. "
-        "Match the user's language."
+        else "Reply like a helpful friend: natural and concise. Use chat context."
     )
     reply = await generate_reply(
-        f"{context_line}{style}\n\nUser: {q}",
+        f"{lang_line}{context_line}{style}\n\nUser: {q}",
         session=session,
         max_tokens=120 if voice else 200,
-        temperature=0.7,
+        temperature=0.5,
         history=history,
     )
-    # Keep last hero if they mentioned one casually
     maybe_hero = extract_hero_query(q)
     remember_turn(
         guild_id,
@@ -699,6 +848,7 @@ async def handle_user_turn(
         user=raw,
         assistant=reply,
         hero=maybe_hero,
+        lang=lang,
     )
     return reply
 
@@ -741,6 +891,9 @@ async def voice_reply_from_wav(
     Returns None if this utterance should be ignored.
     """
     transcript = await transcribe_audio(wav_bytes, session=session)
+    if not (transcript or "").strip():
+        log.info("Empty / non-speech transcript ignored")
+        return None
     log.info("Voice transcript: %r", transcript[:200])
 
     pending = peek_pending_offer(guild_id, user_id)

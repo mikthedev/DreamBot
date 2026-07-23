@@ -327,7 +327,8 @@ class VoiceAICog(commands.Cog):
         self._busy: set[int] = set()
         self._poll_task: asyncio.Task | None = None
         self._text_channel: dict[int, int] = {}
-        # User who ran /join — voice transcripts go only to their DMs
+        # /join interaction — ephemeral transcripts ("Only you can see this")
+        self._join_interaction: dict[int, discord.Interaction] = {}
         self._join_user_id: dict[int, int] = {}
         self._alone_timers: dict[int, asyncio.Task] = {}
         self._idle_deadline: dict[int, float] = {}
@@ -468,38 +469,26 @@ class VoiceAICog(commands.Cog):
             pass
 
     async def _announce_text(self, guild_id: int, who: str, reply: str) -> None:
-        """Send Dream's spoken reply only to the user who ran /join (DM)."""
-        join_uid = self._join_user_id.get(guild_id)
-        if not join_uid:
+        """Private transcript for the /join user — ephemeral in-channel."""
+        inter = self._join_interaction.get(guild_id)
+        if inter is None:
             return
-        user = self.bot.get_user(join_uid)
-        if user is None:
-            try:
-                user = await self.bot.fetch_user(join_uid)
-            except (discord.NotFound, discord.HTTPException):
-                return
         embed = discord.Embed(
             title="Dream (voice)",
             description=reply[:4096],
             color=discord.Color.from_rgb(46, 230, 166),
         )
-        embed.set_footer(text=f"Heard {who} · auto-deletes in 24h · private to you")
+        embed.set_footer(text=f"Heard {who} · only you can see this")
         try:
-            msg = await user.send(embed=embed)
-        except (discord.Forbidden, discord.HTTPException):
+            await inter.followup.send(embed=embed, ephemeral=True)
+        except (discord.NotFound, discord.HTTPException) as exc:
+            # Interaction token expires ~15 min after /join
             log.info(
-                "Could not DM voice transcript to join user %s (guild %s)",
-                join_uid,
+                "Ephemeral transcript failed guild=%s (token expired?): %s",
                 guild_id,
+                exc,
             )
-            return
-        delete_at = datetime.now(timezone.utc) + timedelta(seconds=TRANSCRIPT_TTL_SECONDS)
-        try:
-            self.bot.db.schedule_voice_log_delete(
-                guild_id, msg.channel.id, msg.id, delete_at
-            )
-        except Exception:
-            log.exception("Could not schedule voice transcript delete")
+            self._join_interaction.pop(guild_id, None)
 
     @tasks.loop(seconds=TRANSCRIPT_CLEANUP_SECONDS)
     async def _cleanup_transcripts(self) -> None:
@@ -581,6 +570,7 @@ class VoiceAICog(commands.Cog):
         sink = self._listening.pop(guild_id, None)
         self._text_channel.pop(guild_id, None)
         self._join_user_id.pop(guild_id, None)
+        self._join_interaction.pop(guild_id, None)
         if guild and guild.voice_client:
             vc = guild.voice_client
             stop_listening = getattr(vc, "stop_listening", None)
@@ -681,6 +671,7 @@ class VoiceAICog(commands.Cog):
         listen_fn(sink, after=_after_listen)
         self._listening[interaction.guild.id] = sink
         self._join_user_id[interaction.guild.id] = interaction.user.id
+        self._join_interaction[interaction.guild.id] = interaction
         if isinstance(interaction.channel, discord.TextChannel):
             self._text_channel[interaction.guild.id] = interaction.channel.id
 
@@ -715,22 +706,12 @@ class VoiceAICog(commands.Cog):
 
         asyncio.create_task(_warm_patches())
 
-        tip = (
-            f"Joined **{channel.name}** — say **Dream, …** to start. "
-            f"For ~90s after that you can keep talking without repeating Dream. "
-            f"Say **Dream, leave** or **thank Dream** to make me leave "
-            f"(works in EN/RU/UK). "
-            f"Idle 2.5 min with no wake → I leave. "
-            f"Voice transcripts go to your DMs only."
-        )
-        # One public tip is enough — stay quiet while people talk without Dream
-        if isinstance(interaction.channel, discord.TextChannel):
-            try:
-                await interaction.channel.send(tip, delete_after=90)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
         await interaction.followup.send(
-            "Listening. Transcripts are DM'd to you. Use `/disconnect` anytime.",
+            f"Listening in **{channel.name}**. Say **Dream, …** to talk "
+            f"(~90s follow-ups without repeating Dream). "
+            f"**Dream, leave** / **thank Dream** to exit (EN/RU/UK). "
+            f"Idle 2.5 min → I leave. "
+            f"Replies show only to you. Use `/disconnect` anytime.",
             ephemeral=True,
         )
 

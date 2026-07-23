@@ -94,6 +94,15 @@ HERO_ALIASES: dict[str, str] = {
     "роадхог": "roadhog",
     "д.ва": "d.va",
     "два": "d.va",
+    "дива": "d.va",
+    "диво": "d.va",
+    "діва": "d.va",
+    "діво": "d.va",
+    "diva": "d.va",
+    "divas": "d.va",
+    "zyva": "d.va",
+    "ziva": "d.va",
+    "deeva": "d.va",
     "сигма": "sigma",
     "ориса": "orisa",
     "бастион": "bastion",
@@ -172,7 +181,15 @@ _ASR_HERO_FIXES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"\bfreja\b", "Freja"),
         (r"\bventure\b", "Venture"),
         (r"\bhaz\s*ard\b", "Hazard"),
+        # D.Va — Whisper loves "Diva" / "Zyva" / Cyrillic mangling
         (r"\bd\.?\s*va\b", "D.Va"),
+        (r"\bdivas?\b", "D.Va"),
+        (r"\bdeevas?\b", "D.Va"),
+        (r"\bdee\s*va\b", "D.Va"),
+        (r"\bz[yi]vas?\b", "D.Va"),
+        (r"\bдив[аоуыеийюя]{0,3}\b", "D.Va"),
+        (r"\bдів[аоуеіийюя]{0,3}\b", "D.Va"),
+        (r"\bд\.?\s*ва\b", "D.Va"),
     )
 )
 
@@ -314,12 +331,13 @@ def extract_hero_query(text: str) -> str | None:
     low = text.lower()
 
     # Prefer longer aliases / names so "junker queen" wins over "queen"
+    # Word-boundary match — avoid "два" inside unrelated words
     for alias, canon in sorted(HERO_ALIASES.items(), key=lambda x: -len(x[0])):
-        if alias in low:
+        if re.search(rf"(?i)(?<!\w){re.escape(alias)}(?!\w)", low):
             return canon
 
     for name in sorted(CANON_HEROES, key=len, reverse=True):
-        if name in low:
+        if re.search(rf"(?i)(?<!\w){re.escape(name)}(?!\w)", low):
             return HERO_ALIASES.get(name, name)
 
     m = re.search(
@@ -472,28 +490,47 @@ def patch_teaser(hit: HeroPatchHit, lang: str) -> str:
     kind = change_kind_phrase(hit, lang)
     if hit.in_latest:
         if lang == "uk":
-            return f"{name} у патчі {date} отримав {kind}. Розкажу деталі?"
+            return f"{name} — {kind} у патчі {date}. Деталі?"
         if lang == "ru":
-            return f"{name} в патче {date} получил {kind}. Рассказать детали?"
-        return f"{name} got {kind} in the {date} patch. Want the highlights?"
+            return f"{name} — {kind} в патче {date}. Детали?"
+        return f"{name} — {kind} on {date}. Want details?"
     if lang == "uk":
         return (
-            f"{name} не чіпали в останньому патчі ({latest}). "
-            f"Останні правки — {date} ({kind}). Хочеш деталі?"
+            f"{name} не чіпали цього разу ({latest}). "
+            f"Останнє — {date}, {kind}. Деталі?"
         )
     if lang == "ru":
         return (
-            f"{name} не трогали в последнем патче ({latest}). "
-            f"Последние правки — {date} ({kind}). Хочешь детали?"
+            f"{name} не трогали в этом патче ({latest}). "
+            f"Последнее — {date}, {kind}. Детали?"
         )
     return (
-        f"{name} wasn't touched in the latest patch ({latest}). "
-        f"Last change was {date} ({kind}). Want the highlights?"
+        f"{name} wasn't in the latest patch ({latest}). "
+        f"Last touch: {date}, {kind}. Want details?"
     )
 
 
+def _shorten_change_line(line: str) -> str:
+    """One short spoken clause from a patch bullet."""
+    text = (line or "").strip()
+    if ":" in text:
+        ability, rest = text.split(":", 1)
+        rest = re.split(r"[;.]", rest.strip())[0].strip()
+        # Drop long "from X to Y to Z" walls — keep first ~12 words
+        words = rest.split()
+        if len(words) > 12:
+            rest = " ".join(words[:12]) + "…"
+        short = f"{ability.strip()}: {rest}"
+    else:
+        words = text.split()
+        short = " ".join(words[:14]) + ("…" if len(words) > 14 else "")
+    if len(short) > 110:
+        short = short[:107] + "…"
+    return short
+
+
 def patch_details_from_facts(facts: str, *, hero: str, lang: str) -> str:
-    """Speak only the stored Blizzard change lines — no freeform inventing."""
+    """One brief highlight — not a full patch-note read."""
     changes: list[str] = []
     in_changes = False
     for line in (facts or "").splitlines():
@@ -507,16 +544,15 @@ def patch_details_from_facts(facts: str, *, hero: str, lang: str) -> str:
                     changes.append(bit)
             elif line.strip():
                 break
-    picks = changes[:2]
-    if not picks:
+    if not changes:
         if lang == "uk":
-            return f"По {hero} детальних рядків у нотатках немає."
+            return f"По {hero} коротких деталей немає."
         if lang == "ru":
-            return f"По {hero} детальных строк в заметках нет."
-        return f"No detailed lines for {hero} in the notes."
-    body = "; ".join(picks)
+            return f"По {hero} коротких деталей нет."
+        return f"No short details for {hero}."
+    bit = _shorten_change_line(changes[0])
     if lang == "uk":
-        return f"По {hero}: {body}"
+        return f"Коротко по {hero}: {bit}."
     if lang == "ru":
-        return f"По {hero}: {body}"
-    return f"On {hero}: {body}"
+        return f"Коротко по {hero}: {bit}."
+    return f"Quick hit on {hero}: {bit}."

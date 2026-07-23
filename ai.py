@@ -64,8 +64,8 @@ _WAKE_RE = re.compile(
     r"(?:^|[\s,.\!?])(?:hey\s+|эй\s+|эй,\s*|ok\s+)?"
     r"(?:dream(?:\s+team)?|дрим(?:\s+тим)?|дрім(?:\s+тім)?|"
     r"dre+m+|dr[ei]m+|drum|grim|cream|drin|дримм?|"
-    r"дрень|дрейм|джейм|джеймс|дреам|дримы|дримс|грим|"
-    r"dmv|d\.m\.v)"
+    r"дрень|дрейм|джейм|джеймс|джим|дим|дреам|дримы|дримс|грим|"
+    r"jim|gym|dmv|d\.m\.v)"
     r"[\s,.\!?:\-]*",
     re.IGNORECASE,
 )
@@ -89,6 +89,8 @@ _WAKE_FIRST_TOKENS = frozenset(
         "джейм",
         "джеймс",
         "джейми",
+        "джим",
+        "дим",
         "дримтим",
         "дрімтим",
         "грим",
@@ -104,6 +106,8 @@ _WAKE_FIRST_TOKENS = frozenset(
         "cream",
         "drean",
         "drain",
+        "jim",
+        "gym",
         "dmv",
         "дмв",
     }
@@ -118,6 +122,8 @@ _WAKE_FUZZY_TARGETS = (
     "дрейм",
     "дрень",
     "джейм",
+    "джим",
+    "jim",
 )
 
 
@@ -667,7 +673,8 @@ async def transcribe_audio(
 ) -> str:
     """
     Transcribe with Whisper. Drop high no-speech / hallucinated clips.
-    Retry uk/ru only when first pass has real speech but missed Dream.
+    Retry uk/ru only when first pass has real speech but missed Dream —
+    never overwrite a clear English (Latin) transcript with Cyrillic.
     """
     if not config.GROQ_API_KEY:
         raise AIError("GROQ_API_KEY not set.")
@@ -691,6 +698,10 @@ async def transcribe_audio(
     if forced or extract_wake_question(text) is not None:
         return text
 
+    latin = len(re.findall(r"[A-Za-z]", text or ""))
+    cyr = len(re.findall(r"[а-яА-ЯёЁіІїЇєЄґҐ]", text or ""))
+    clearly_english = latin >= 4 and latin >= cyr * 2 and not looks_cyrillic(text)
+
     for lang_code in ("uk", "ru"):
         try:
             alt, alt_ns = await _whisper_once(
@@ -704,6 +715,14 @@ async def transcribe_audio(
         if alt_ns >= 0.55 or _looks_like_hallucination(alt):
             continue
         if extract_wake_question(alt) is not None:
+            # Don't replace clear EN speech with a Cyrillic "translation"
+            if clearly_english and looks_cyrillic(alt):
+                log.info(
+                    "Whisper %s wake ignored — keeping English: %r",
+                    lang_code,
+                    text[:80],
+                )
+                continue
             log.info(
                 "Whisper %s retry caught wake: %r → %r",
                 lang_code,
@@ -712,6 +731,8 @@ async def transcribe_audio(
             )
             return alt
         if looks_cyrillic(alt) and not looks_cyrillic(text):
+            if clearly_english:
+                continue
             text = alt
     return text
 
@@ -812,9 +833,18 @@ def _patch_question(text: str) -> bool:
         "how is",
         "how's",
         "what about",
+        "how about",
+        "happened",
         "как там",
         "что с",
         "что по",
+        "а що з",
+        "що з",
+        "що по",
+        "сталося",
+        "случилось",
+        "трогали",
+        "чіпали",
     )
     return any(k in low for k in keys)
 
@@ -930,7 +960,12 @@ async def handle_user_turn(
 
     # General chat — any topic, with memory so references make sense
     web_block = ""
-    if needs_web_search(q):
+    # Skip web search for OW / chitchat — avoid wrong celebrity pages for "Diva"
+    if (
+        needs_web_search(q)
+        and not extract_hero_query(q)
+        and not _patch_question(q)
+    ):
         try:
             web_block = await gather_web_facts(q, session)
             if web_block:
@@ -1040,7 +1075,11 @@ async def voice_reply_from_wav(
     elif pending and is_affirmative(transcript):
         question = transcript.strip()
         touch_session(guild_id, user_id)
-    elif sess is not None and _looks_like_followup(transcript):
+    elif sess is not None and (
+        _looks_like_followup(transcript)
+        or is_leave_command(raw_t)
+        or is_thanks_leave_command(raw_t, after_wake=True)
+    ):
         # Same user, still in the post-wake conversation window
         question = transcript.strip()
         touch_session(guild_id, user_id)
@@ -1050,18 +1089,17 @@ async def voice_reply_from_wav(
 
     # Voice leave / thanks (all languages) — before LLM
     sess2 = peek_session(guild_id, user_id)
+    in_convo = sess2 is not None
     lang = detect_user_language(
         question, fallback=(sess2.last_lang if sess2 else None)
     )
-    thanks = is_thanks_leave_command(question, after_wake=from_wake)
+    thanks = is_thanks_leave_command(
+        question, after_wake=from_wake or in_convo
+    )
     if thanks or is_leave_command(question):
-        # Leave needs wake (or explicit "thank Dream"); bare "leave" in convo OK
-        if thanks and not from_wake and not is_thanks_leave_command(raw_t):
-            pass  # fall through to normal chat
-        else:
-            bye = leave_goodbye(lang, thanks=bool(thanks))
-            touch_session(guild_id, user_id, last_lang=lang)
-            return VoiceTurnResult(reply=bye, leave=True)
+        bye = leave_goodbye(lang, thanks=bool(thanks))
+        touch_session(guild_id, user_id, last_lang=lang)
+        return VoiceTurnResult(reply=bye, leave=True)
 
     reply = await handle_user_turn(
         question,

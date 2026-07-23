@@ -19,6 +19,8 @@ from ai_ow import (
     facts_block,
     fix_ow_asr,
     lookup_hero_patch,
+    patch_details_from_facts,
+    patch_teaser,
 )
 
 log = logging.getLogger("dream_team.ai")
@@ -36,19 +38,19 @@ SYSTEM_INSTRUCTION = (
     "Talk naturally — short, warm, conversational. Usually 1–2 sentences in voice.\n"
     "No markdown, no bullet lists, no headers, no robotic phrasing.\n"
     "You understand English, Russian, and Ukrainian.\n"
-    "CRITICAL: Always answer in the SAME language the user just used "
-    "(English→English, Russian→Russian, Ukrainian→Ukrainian). "
-    "Never mix languages unless the user did.\n"
+    "CRITICAL LANGUAGE RULE: Reply ONLY in the language marked REPLY LANGUAGE. "
+    "If REPLY LANGUAGE is English, every sentence must be English — never Russian "
+    "or Ukrainian. Same for Russian-only and Ukrainian-only.\n"
     "Be lightly witty only when it fits — never force jokes. "
-    "Accuracy first: if you are unsure, say you don't know. "
-    "Never invent facts, numbers, dates, patch details, or quotes.\n"
-    "Use recent conversation context: resolve pronouns (he/she/they/him/her/it, "
-    "он/она/его/её, він/вона/його/її) and short follow-ups like 'and Tracer?' "
-    "using LAST HERO / history.\n"
-    "Answer everyday questions normally. For Overwatch hero balance: ONLY use "
-    "PATCH FACTS when provided. Refer to patches by calendar DATE only "
-    "(e.g. July 14, 2026), never by title. If no facts are given, say you "
-    "don't have notes — don't invent numbers.\n"
+    "Accuracy first: if unsure, say you don't know. "
+    "Never invent facts, numbers, dates, patch details, quotes, or biographies. "
+    "For real people (actors, celebrities, streamers): give the correct real-world "
+    "role (e.g. Millie Bobby Brown is a live-action actress). Do not invent animated "
+    "series or fake credits.\n"
+    "Use recent conversation context for pronouns and short follow-ups "
+    "(LAST HERO / history).\n"
+    "For Overwatch hero balance: ONLY use PATCH FACTS when provided. "
+    "Refer to patches by calendar DATE only. Never invent nerfs/buffs.\n"
     "For Discord bot features: briefly point to slash commands."
 )
 
@@ -215,32 +217,35 @@ def detect_user_language(text: str, *, fallback: str | None = None) -> str:
     """
     Detect reply language from the user's message.
     Returns 'en', 'ru', or 'uk'.
+    Latin-heavy text is ALWAYS English (never fall back to RU/UK).
     """
     t = text or ""
-    # Ukrainian-specific letters
+    latin = len(re.findall(r"[A-Za-z]", t))
+    cyr = len(re.findall(r"[а-яА-ЯёЁіІїЇєЄґҐ]", t))
+    # Clear English: mostly Latin letters — lock EN even mid-RU session
+    if latin >= 3 and latin >= cyr * 2:
+        return "en"
     if re.search(r"[іїєґІЇЄҐ]", t):
         return "uk"
-    # Word hints before shared Cyrillic letter heuristics
     if re.search(
         r"(?i)\b(що|як|де|мені|тобі|дякую|будь\s*ласка|привіт|капібар|"
-        r"розкажи|авжеж|добре|живуть)\b",
+        r"розкажи|авжеж|добре|живуть|вийди|дякую)\b",
         t,
     ):
         return "uk"
-    # Russian-specific letters (ё/ы/э/ъ are strong RU signals)
     if re.search(r"[ыэъёЫЭЪЁ]", t):
         return "ru"
     if re.search(
         r"(?i)\b(что|как|где|мне|тебе|спасибо|пожалуйста|привет|"
-        r"расскажи|конечно|живут)\b",
+        r"расскажи|конечно|живут|выйди|уходи)\b",
         t,
     ):
         return "ru"
-    if re.search(r"[а-яА-Я]", t):
+    if cyr >= 3:
         if fallback in {"ru", "uk"}:
             return fallback
         return "ru"
-    if re.search(r"[a-zA-Z]", t):
+    if latin >= 1:
         return "en"
     return fallback if fallback in {"en", "ru", "uk"} else "en"
 
@@ -249,16 +254,16 @@ def language_instruction(lang: str) -> str:
     if lang == "uk":
         return (
             "REPLY LANGUAGE: Ukrainian only. "
-            "Пиши українською, природно, без російської кальки."
+            "Пиши українською. Do not use English or Russian."
         )
     if lang == "ru":
         return (
             "REPLY LANGUAGE: Russian only. "
-            "Отвечай по-русски, коротко и по-человечески."
+            "Отвечай только по-русски. Do not use English or Ukrainian."
         )
     return (
         "REPLY LANGUAGE: English only. "
-        "Answer in natural casual English."
+        "Answer only in English. Do not use Russian or Ukrainian."
     )
 
 
@@ -268,6 +273,84 @@ def empty_prompt_reply(lang: str) -> str:
     if lang == "ru":
         return "Ага? Чё надо?"
     return "Yeah? What do you need?"
+
+
+def _cyrillic_ratio(text: str) -> float:
+    letters = re.findall(r"[A-Za-zа-яА-ЯёЁіІїЇєЄґҐ]", text or "")
+    if not letters:
+        return 0.0
+    cyr = sum(1 for ch in letters if re.match(r"[а-яА-ЯёЁіІїЇєЄґҐ]", ch))
+    return cyr / len(letters)
+
+
+def reply_matches_language(reply: str, lang: str) -> bool:
+    if not (reply or "").strip():
+        return True
+    ratio = _cyrillic_ratio(reply)
+    if lang == "en":
+        return ratio < 0.25
+    return ratio > 0.45
+
+
+def leave_goodbye(lang: str, *, thanks: bool) -> str:
+    if thanks:
+        if lang == "uk":
+            return "Немає проблем, бувай!"
+        if lang == "ru":
+            return "Без проблем, пока-пока!"
+        return "No problem, bye bye!"
+    if lang == "uk":
+        return "Ок, виходжу."
+    if lang == "ru":
+        return "Ок, выхожу."
+    return "Alright, leaving."
+
+
+_LEAVE_CMD_RE = re.compile(
+    r"(?i)^\s*(?:please\s+)?(?:"
+    r"leave|disconnect|go\s+away|get\s+out|"
+    r"выйди|выйти|уходи|отключись|покинь|"
+    r"вийди|піди\s+геть|виходь|залиши"
+    r")(?:\s+please)?\s*[.!]?\s*$"
+)
+
+_THANKS_LEAVE_RE = re.compile(
+    r"(?i)^\s*(?:(?:hey\s+|эй\s+)?)?(?:"
+    r"thanks?(?:\s+you)?(?:\s+so\s+much)?\s+(?:dream|дрим|дрім)|"
+    r"thank\s+(?:you\s+)?(?:dream|дрим|дрім)|ty\s+(?:dream|дрим|дрім)|"
+    r"спасибо(?:\s+тебе)?\s+(?:дрим|dream|дрім)|"
+    r"благодарю\s+(?:дрим|dream|дрім)|"
+    r"дякую(?:\s+тобі)?\s+(?:дрім|dream|дрим)"
+    r")\s*[.!]?\s*$"
+)
+
+# After wake word stripped: "thanks" / "спасибо" alone still counts
+_THANKS_AFTER_WAKE_RE = re.compile(
+    r"(?i)^\s*(?:"
+    r"thanks?(?:\s+you)?(?:\s+so\s+much)?|"
+    r"thank\s+you|ty|"
+    r"спасибо(?:\s+тебе)?|благодарю|дякую(?:\s+тобі)?"
+    r")\s*[.!]?\s*$"
+)
+
+
+def is_leave_command(text: str) -> bool:
+    return bool(_LEAVE_CMD_RE.match((text or "").strip()))
+
+
+def is_thanks_leave_command(text: str, *, after_wake: bool = False) -> bool:
+    t = (text or "").strip()
+    if after_wake and _THANKS_AFTER_WAKE_RE.match(t):
+        return True
+    return bool(_THANKS_LEAVE_RE.match(t))
+
+
+@dataclass
+class VoiceTurnResult:
+    """Spoken reply and/or leave the voice channel."""
+
+    reply: str | None = None
+    leave: bool = False
 
 
 def is_affirmative(text: str) -> bool:
@@ -393,6 +476,7 @@ async def generate_reply(
     max_tokens: int = 160,
     temperature: float = 0.45,
     history: list[ChatTurn] | None = None,
+    lang: str | None = None,
 ) -> str:
     if not config.GROQ_API_KEY:
         raise AIError(
@@ -442,7 +526,41 @@ async def generate_reply(
     text = _chat_text(data)
     if not text:
         raise AIError("AI returned an empty reply. Try rephrasing.")
-    return _strip_markdown(text.strip())
+    reply = _strip_markdown(text.strip())
+
+    # One retry if the model ignored REPLY LANGUAGE (common EN→UA bleed)
+    if lang and not reply_matches_language(reply, lang):
+        log.info("Language mismatch (want=%s) — rewriting", lang)
+        fix_prompt = (
+            f"{language_instruction(lang)}\n"
+            "Rewrite the following answer in the required language only. "
+            "Keep the same meaning. Do not add new facts.\n\n"
+            f"Answer to rewrite:\n{reply}"
+        )
+        payload2 = {
+            "model": config.GROQ_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": fix_prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }
+        try:
+            async with session.post(
+                GROQ_CHAT_URL,
+                json=payload2,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp2:
+                data2 = await resp2.json(content_type=None)
+                if resp2.status < 400:
+                    fixed = _strip_markdown(_chat_text(data2).strip())
+                    if fixed and reply_matches_language(fixed, lang):
+                        return fixed
+        except Exception:
+            log.debug("Language rewrite failed", exc_info=True)
+    return reply
 
 
 WHISPER_PROMPT = "Dream."
@@ -652,8 +770,12 @@ def extract_wake_question(transcript: str) -> str | None:
         )
         if not match:
             return None
-    question = text[match.end() :].strip(" \t\n\r,.-")
-    return question or None
+    after = text[match.end() :].strip(" \t\n\r,.-")
+    before = text[: match.start()].strip(" \t\n\r,.-")
+    # "Thank Dream" / "Leave Dream" — wake word at the end
+    if not after and before:
+        return before
+    return after or None
 
 
 def _strip_markdown(text: str) -> str:
@@ -727,6 +849,7 @@ async def handle_user_turn(
     """Answer a user turn (after wake word, convo follow-up, or pending yes)."""
     raw = fix_ow_asr((question or "").strip())
     sess = peek_session(guild_id, user_id)
+    # Affirmatives / tiny follow-ups keep session language; long Latin = EN
     lang = detect_user_language(
         raw, fallback=(sess.last_lang if sess else None)
     )
@@ -734,8 +857,8 @@ async def handle_user_turn(
         return empty_prompt_reply(lang)
 
     q = resolve_question(raw, sess)
-    # Re-detect after resolve (pronoun expansion may add English hero names)
-    lang = detect_user_language(raw, fallback=lang)
+    if not is_affirmative(raw) and len(raw.split()) >= 3:
+        lang = detect_user_language(raw, fallback=None)
     history = list(sess.history) if sess and sess.history else None
     context_line = ""
     if sess and sess.last_hero:
@@ -746,17 +869,8 @@ async def handle_user_turn(
     if is_affirmative(q) and peek_pending_offer(guild_id, user_id):
         offer = pop_pending_offer(guild_id, user_id)
         assert offer is not None
-        prompt = (
-            f"{lang_line}{context_line}"
-            "The user said yes — give the last patch highlights for this hero.\n"
-            "Use ONLY these PATCH FACTS. Pick the 1–2 most important changes. "
-            "Keep it casual (2 sentences max). Mention when using PATCH_DATE "
-            "only — never a patch name/title. No lists.\n\n"
-            f"PATCH FACTS:\n{offer.facts}\n\n"
-            f"User said: {q}"
-        )
-        reply = await generate_reply(
-            prompt, session=session, max_tokens=100, history=history
+        reply = patch_details_from_facts(
+            offer.facts, hero=offer.hero, lang=lang
         )
         remember_turn(
             guild_id,
@@ -785,7 +899,12 @@ async def handle_user_turn(
                 f"User: {q}"
             )
             reply = await generate_reply(
-                prompt, session=session, max_tokens=80, history=history
+                prompt,
+                session=session,
+                max_tokens=80,
+                temperature=0.25,
+                history=history,
+                lang=lang,
             )
             remember_turn(
                 guild_id, user_id, user=raw, assistant=reply, hero=hero, lang=lang
@@ -794,28 +913,8 @@ async def handle_user_turn(
 
         facts = facts_block(hit)
         set_pending_offer(guild_id, user_id, hero=hit.hero_name, facts=facts)
-
-        if hit.in_latest:
-            prompt = (
-                f"{lang_line}{context_line}"
-                "User asked about this Overwatch hero. They ARE in the newest "
-                "patch. Answer in 1–2 casual sentences: buff/nerf/mix "
-                "(CHANGE_KIND), using LATEST_PATCH_DATE as the when (date only). "
-                "Then ask if they want the highlights. No lists, no patch titles.\n\n"
-                f"PATCH FACTS:\n{facts}\n\nUser: {q}"
-            )
-        else:
-            prompt = (
-                f"{lang_line}{context_line}"
-                "User asked about this Overwatch hero. They are NOT in the newest "
-                "patch (LATEST_PATCH_DATE). Say they didn't change this time, "
-                "mention last change with PATCH_DATE only, then offer highlights. "
-                "No lists, no patch titles.\n\n"
-                f"PATCH FACTS:\n{facts}\n\nUser: {q}"
-            )
-        reply = await generate_reply(
-            prompt, session=session, max_tokens=110, history=history
-        )
+        # Template teaser — buff/nerf/date come only from Blizzard facts
+        reply = patch_teaser(hit, lang)
         remember_turn(
             guild_id,
             user_id,
@@ -830,16 +929,21 @@ async def handle_user_turn(
     style = (
         "Reply like a real friend in voice chat: natural, warm, 1–2 short "
         "sentences. Use context if they refer to something earlier. "
-        "Answer directly. No markdown, no filler."
+        "Answer directly. If unsure about a real person or fact, say you "
+        "don't know — never invent. No markdown, no filler."
         if voice
-        else "Reply like a helpful friend: natural and concise. Use chat context."
+        else (
+            "Reply like a helpful friend: natural and concise. Use chat context. "
+            "If unsure about a real person or fact, say you don't know."
+        )
     )
     reply = await generate_reply(
         f"{lang_line}{context_line}{style}\n\nUser: {q}",
         session=session,
         max_tokens=120 if voice else 200,
-        temperature=0.5,
+        temperature=0.35,
         history=history,
+        lang=lang,
     )
     maybe_hero = extract_hero_query(q)
     remember_turn(
@@ -859,6 +963,8 @@ def _looks_like_followup(text: str) -> bool:
     if len(t) < 2:
         return False
     if "?" in t or is_affirmative(t):
+        return True
+    if is_leave_command(t) or is_thanks_leave_command(t):
         return True
     if extract_hero_query(t) or _patch_question(t):
         return True
@@ -885,7 +991,7 @@ async def voice_reply_from_wav(
     bot,
     guild_id: int,
     user_id: int,
-) -> str | None:
+) -> VoiceTurnResult | None:
     """
     Transcribe → wake / active convo / pending-yes → answer.
     Returns None if this utterance should be ignored.
@@ -898,7 +1004,20 @@ async def voice_reply_from_wav(
 
     pending = peek_pending_offer(guild_id, user_id)
     sess = peek_session(guild_id, user_id)
+    raw_t = transcript.strip()
+
+    # "Thank Dream" / "дякую Dream" even if wake parsing is odd
+    if is_thanks_leave_command(raw_t):
+        lang = detect_user_language(
+            raw_t, fallback=(sess.last_lang if sess else None)
+        )
+        touch_session(guild_id, user_id, last_lang=lang)
+        return VoiceTurnResult(
+            reply=leave_goodbye(lang, thanks=True), leave=True
+        )
+
     wake_q = extract_wake_question(transcript)
+    from_wake = wake_q is not None
 
     if wake_q is not None:
         question = wake_q
@@ -914,7 +1033,22 @@ async def voice_reply_from_wav(
     else:
         return None
 
-    return await handle_user_turn(
+    # Voice leave / thanks (all languages) — before LLM
+    sess2 = peek_session(guild_id, user_id)
+    lang = detect_user_language(
+        question, fallback=(sess2.last_lang if sess2 else None)
+    )
+    thanks = is_thanks_leave_command(question, after_wake=from_wake)
+    if thanks or is_leave_command(question):
+        # Leave needs wake (or explicit "thank Dream"); bare "leave" in convo OK
+        if thanks and not from_wake and not is_thanks_leave_command(raw_t):
+            pass  # fall through to normal chat
+        else:
+            bye = leave_goodbye(lang, thanks=bool(thanks))
+            touch_session(guild_id, user_id, last_lang=lang)
+            return VoiceTurnResult(reply=bye, leave=True)
+
+    reply = await handle_user_turn(
         question,
         session=session,
         bot=bot,
@@ -922,6 +1056,7 @@ async def voice_reply_from_wav(
         user_id=user_id,
         voice=True,
     )
+    return VoiceTurnResult(reply=reply, leave=False)
 
 
 def _api_error_message(data: Any) -> str:

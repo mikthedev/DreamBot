@@ -327,6 +327,8 @@ class VoiceAICog(commands.Cog):
         self._busy: set[int] = set()
         self._poll_task: asyncio.Task | None = None
         self._text_channel: dict[int, int] = {}
+        # User who ran /join — voice transcripts go only to their DMs
+        self._join_user_id: dict[int, int] = {}
         self._alone_timers: dict[int, asyncio.Task] = {}
         self._idle_deadline: dict[int, float] = {}
         self._idle_leave_pending: set[int] = set()
@@ -414,14 +416,14 @@ class VoiceAICog(commands.Cog):
             )
             # Stay quiet unless Dream / pending yes actually fires —
             # no "Hearing you…" spam while people chat normally.
-            reply = await voice_reply_from_wav(
+            turn = await voice_reply_from_wav(
                 wav,
                 session=self._session_or_raise(),
                 bot=self.bot,
                 guild_id=guild_id,
                 user_id=user_id,
             )
-            if not reply:
+            if turn is None or (not turn.reply and not turn.leave):
                 log.info("No wake / ignored clip (guild %s)", guild_id)
                 return
 
@@ -433,11 +435,16 @@ class VoiceAICog(commands.Cog):
             log.info("Voice wake from %s in %s", who, guild.name)
 
             self._bump_idle_timer(guild_id)
-            # Speak + text log in parallel to cut perceived latency
-            await asyncio.gather(
-                self._speak(guild, reply),
-                self._announce_text(guild_id, who, reply),
-            )
+            reply = (turn.reply or "").strip()
+            if reply:
+                # Speak + private transcript (join user only) in parallel
+                await asyncio.gather(
+                    self._speak(guild, reply),
+                    self._announce_text(guild_id, who, reply),
+                )
+            if turn.leave:
+                await self._leave_voice(guild_id)
+                return
             self.pause_listening(guild_id, WAKE_COOLDOWN_SECONDS)
         except AIError as exc:
             log.warning("Voice AI: %s", exc)
@@ -460,33 +467,36 @@ class VoiceAICog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    def _transcript_channel(self, guild_id: int) -> discord.TextChannel | None:
-        """Admin-configured voice log channel, else the channel used for /join."""
-        configured = self.bot.db.get_voice_log_channel(guild_id)
-        channel_id = configured or self._text_channel.get(guild_id)
-        if not channel_id:
-            return None
-        channel = self.bot.get_channel(channel_id)
-        return channel if isinstance(channel, discord.TextChannel) else None
-
     async def _announce_text(self, guild_id: int, who: str, reply: str) -> None:
-        channel = self._transcript_channel(guild_id)
-        if channel is None:
+        """Send Dream's spoken reply only to the user who ran /join (DM)."""
+        join_uid = self._join_user_id.get(guild_id)
+        if not join_uid:
             return
+        user = self.bot.get_user(join_uid)
+        if user is None:
+            try:
+                user = await self.bot.fetch_user(join_uid)
+            except (discord.NotFound, discord.HTTPException):
+                return
         embed = discord.Embed(
             title="Dream (voice)",
             description=reply[:4096],
             color=discord.Color.from_rgb(46, 230, 166),
         )
-        embed.set_footer(text=f"Heard {who} · auto-deletes in 24h")
+        embed.set_footer(text=f"Heard {who} · auto-deletes in 24h · private to you")
         try:
-            msg = await channel.send(embed=embed)
+            msg = await user.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException):
+            log.info(
+                "Could not DM voice transcript to join user %s (guild %s)",
+                join_uid,
+                guild_id,
+            )
             return
         delete_at = datetime.now(timezone.utc) + timedelta(seconds=TRANSCRIPT_TTL_SECONDS)
         try:
             self.bot.db.schedule_voice_log_delete(
-                guild_id, channel.id, msg.id, delete_at
+                guild_id, msg.channel.id, msg.id, delete_at
             )
         except Exception:
             log.exception("Could not schedule voice transcript delete")
@@ -502,7 +512,8 @@ class VoiceAICog(commands.Cog):
             channel_id = int(row["channel_id"])
             message_id = int(row["message_id"])
             channel = self.bot.get_channel(channel_id)
-            if isinstance(channel, discord.TextChannel):
+            # Text channel or DM
+            if channel is not None and hasattr(channel, "fetch_message"):
                 try:
                     msg = await channel.fetch_message(message_id)
                     await msg.delete()
@@ -569,6 +580,7 @@ class VoiceAICog(commands.Cog):
         guild = self.bot.get_guild(guild_id)
         sink = self._listening.pop(guild_id, None)
         self._text_channel.pop(guild_id, None)
+        self._join_user_id.pop(guild_id, None)
         if guild and guild.voice_client:
             vc = guild.voice_client
             stop_listening = getattr(vc, "stop_listening", None)
@@ -668,6 +680,7 @@ class VoiceAICog(commands.Cog):
 
         listen_fn(sink, after=_after_listen)
         self._listening[interaction.guild.id] = sink
+        self._join_user_id[interaction.guild.id] = interaction.user.id
         if isinstance(interaction.channel, discord.TextChannel):
             self._text_channel[interaction.guild.id] = interaction.channel.id
 
@@ -682,10 +695,11 @@ class VoiceAICog(commands.Cog):
         dave = getattr(conn, "dave_session", None) if conn else None
         dave_ver = getattr(conn, "dave_protocol_version", None) if conn else None
         log.info(
-            "Listen started guild=%s dave_ready=%s dave_ver=%s",
+            "Listen started guild=%s dave_ready=%s dave_ver=%s join_user=%s",
             interaction.guild.id,
             bool(dave and getattr(dave, "ready", False)),
             dave_ver,
+            interaction.user.id,
         )
 
         self._bump_idle_timer(interaction.guild.id)
@@ -703,9 +717,11 @@ class VoiceAICog(commands.Cog):
 
         tip = (
             f"Joined **{channel.name}** — say **Dream, …** to start. "
-            f"For ~90s after that you can keep talking without repeating Dream "
-            f"(follow-ups like *and Tracer?* work). "
-            f"Idle 2.5 min with no wake → I leave."
+            f"For ~90s after that you can keep talking without repeating Dream. "
+            f"Say **Dream, leave** or **thank Dream** to make me leave "
+            f"(works in EN/RU/UK). "
+            f"Idle 2.5 min with no wake → I leave. "
+            f"Voice transcripts go to your DMs only."
         )
         # One public tip is enough — stay quiet while people talk without Dream
         if isinstance(interaction.channel, discord.TextChannel):
@@ -714,7 +730,7 @@ class VoiceAICog(commands.Cog):
             except (discord.Forbidden, discord.HTTPException):
                 pass
         await interaction.followup.send(
-            "Listening. Use `/disconnect` anytime.",
+            "Listening. Transcripts are DM'd to you. Use `/disconnect` anytime.",
             ephemeral=True,
         )
 

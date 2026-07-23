@@ -431,12 +431,25 @@ async def lookup_hero_patch(
     return None, latest_date
 
 
-def facts_block(hit: HeroPatchHit) -> str:
-    kind = "mixed"
+def change_kind(hit: HeroPatchHit) -> str:
     if hit.buffish and not hit.nerfish:
-        kind = "buff"
-    elif hit.nerfish and not hit.buffish:
-        kind = "nerf"
+        return "buff"
+    if hit.nerfish and not hit.buffish:
+        return "nerf"
+    return "mixed"
+
+
+def change_kind_phrase(hit: HeroPatchHit, lang: str) -> str:
+    kind = change_kind(hit)
+    if lang == "uk":
+        return {"buff": "баф", "nerf": "нерф", "mixed": "змішані зміни"}[kind]
+    if lang == "ru":
+        return {"buff": "бафф", "nerf": "нерф", "mixed": "микс изменений"}[kind]
+    return {"buff": "a buff", "nerf": "a nerf", "mixed": "mixed changes"}[kind]
+
+
+def facts_block(hit: HeroPatchHit) -> str:
+    kind = change_kind(hit)
     lines = "\n".join(f"- {ln}" for ln in hit.lines[:8]) or "- (no detail lines)"
     return (
         f"HERO: {hit.hero_name}\n"
@@ -446,5 +459,64 @@ def facts_block(hit: HeroPatchHit) -> str:
         f"CHANGE_KIND: {kind}\n"
         f"CHANGES:\n{lines}\n"
         "IMPORTANT: Speak using PATCH_DATE / LATEST_PATCH_DATE only — "
-        "never invent or say a patch title/name."
+        "never invent or say a patch title/name. "
+        "CHANGE_KIND is authoritative for buff vs nerf — do not flip it."
     )
+
+
+def patch_teaser(hit: HeroPatchHit, lang: str) -> str:
+    """Factual first reply — no LLM, so buff/nerf/date can't be invented."""
+    name = hit.hero_name
+    date = hit.patch_date or "unknown"
+    latest = hit.latest_date or "unknown"
+    kind = change_kind_phrase(hit, lang)
+    if hit.in_latest:
+        if lang == "uk":
+            return f"{name} у патчі {date} отримав {kind}. Розкажу деталі?"
+        if lang == "ru":
+            return f"{name} в патче {date} получил {kind}. Рассказать детали?"
+        return f"{name} got {kind} in the {date} patch. Want the highlights?"
+    if lang == "uk":
+        return (
+            f"{name} не чіпали в останньому патчі ({latest}). "
+            f"Останні правки — {date} ({kind}). Хочеш деталі?"
+        )
+    if lang == "ru":
+        return (
+            f"{name} не трогали в последнем патче ({latest}). "
+            f"Последние правки — {date} ({kind}). Хочешь детали?"
+        )
+    return (
+        f"{name} wasn't touched in the latest patch ({latest}). "
+        f"Last change was {date} ({kind}). Want the highlights?"
+    )
+
+
+def patch_details_from_facts(facts: str, *, hero: str, lang: str) -> str:
+    """Speak only the stored Blizzard change lines — no freeform inventing."""
+    changes: list[str] = []
+    in_changes = False
+    for line in (facts or "").splitlines():
+        if line.startswith("CHANGES:"):
+            in_changes = True
+            continue
+        if in_changes:
+            if line.startswith("- "):
+                bit = line[2:].strip()
+                if bit and bit != "(no detail lines)":
+                    changes.append(bit)
+            elif line.strip():
+                break
+    picks = changes[:2]
+    if not picks:
+        if lang == "uk":
+            return f"По {hero} детальних рядків у нотатках немає."
+        if lang == "ru":
+            return f"По {hero} детальных строк в заметках нет."
+        return f"No detailed lines for {hero} in the notes."
+    body = "; ".join(picks)
+    if lang == "uk":
+        return f"По {hero}: {body}"
+    if lang == "ru":
+        return f"По {hero}: {body}"
+    return f"On {hero}: {body}"

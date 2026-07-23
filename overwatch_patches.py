@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import ssl
+import time
 from dataclasses import dataclass, field
 from html import unescape
 
@@ -75,6 +76,13 @@ class PatchSummary:
     @property
     def fingerprint(self) -> str:
         return self.patch_id or self.title
+
+
+# In-memory cache so Dream doesn't re-download months on every question
+_PATCH_CACHE: list[PatchSummary] | None = None
+_PATCH_CACHE_AT = 0.0
+_PATCH_CACHE_TTL = 600.0  # 10 minutes
+_PATCH_CACHE_MONTHS = 0
 
 
 def _strip_tags(html: str) -> str:
@@ -485,26 +493,74 @@ async def fetch_latest_summary() -> PatchSummary | None:
     return parse_latest_patch(html)
 
 
+def _hero_name_in_patches(patches: list[PatchSummary], hero_query: str) -> bool:
+    q = (hero_query or "").lower().strip()
+    if not q:
+        return False
+    compact_q = q.replace(" ", "")
+    for summary in patches:
+        for h in summary.heroes:
+            name = (h.name or "").lower()
+            compact = name.replace(" ", "")
+            if name == q or name.startswith(q) or compact_q in compact or q in compact:
+                return True
+    return False
+
+
 async def fetch_all_patch_summaries(
-    *, limit: int = 15, max_months: int = 8
+    *,
+    limit: int = 15,
+    max_months: int = 8,
+    stop_hero: str | None = None,
 ) -> list[PatchSummary]:
     """
     Walk Blizzard's patch-notes calendar (newest month → older) via the same
     patch-body endpoint the website uses when you change month/year.
     Returns individual patches newest-first, capped by `limit`.
+
+    `stop_hero`: stop downloading older months once this hero appears (faster
+    Dream answers). Results are cached ~10 minutes.
     """
+    global _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS
+
+    now = time.monotonic()
+    if (
+        _PATCH_CACHE
+        and now - _PATCH_CACHE_AT < _PATCH_CACHE_TTL
+        and _PATCH_CACHE_MONTHS >= max_months
+    ):
+        cached = _PATCH_CACHE[:limit]
+        if not stop_hero or _hero_name_in_patches(cached, stop_hero):
+            return cached
+        # Hero not in cache — fall through and fetch more months below
+
     html = await fetch_patch_html()
     months = parse_available_months(html)
     if not months:
-        # Page itself still has the current month's patches
         patches = parse_all_patches(html, limit=limit)
         if patches:
-            return patches
+            _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = patches, now, 1
+            return patches[:limit]
         latest = parse_latest_patch(html)
-        return [latest] if latest else []
+        out = [latest] if latest else []
+        _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = out, now, 1
+        return out
 
+    # Reuse any still-fresh partial cache as a starting point
     out: list[PatchSummary] = []
     seen: set[str] = set()
+    if _PATCH_CACHE and now - _PATCH_CACHE_AT < _PATCH_CACHE_TTL:
+        for summary in _PATCH_CACHE:
+            key = summary.fingerprint or f"{summary.date}:{summary.title}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(summary)
+
+    start_month_idx = 0
+    if out and _PATCH_CACHE_MONTHS > 0:
+        start_month_idx = min(_PATCH_CACHE_MONTHS, len(months))
+
     session = aiohttp.ClientSession(
         headers={
             "User-Agent": USER_AGENT,
@@ -512,8 +568,9 @@ async def fetch_all_patch_summaries(
             "X-Requested-With": "XMLHttpRequest",
         }
     )
+    months_fetched = start_month_idx
     try:
-        for year, month in months[:max_months]:
+        for year, month in months[start_month_idx:max_months]:
             try:
                 body = await fetch_patch_body_html(
                     year, month, session=session
@@ -522,26 +579,36 @@ async def fetch_all_patch_summaries(
                 log.warning(
                     "Failed to fetch patch body %s-%02d: %s", year, month, exc
                 )
+                months_fetched += 1
                 continue
+            months_fetched += 1
             for summary in parse_all_patches(body, limit=limit):
                 key = summary.fingerprint or f"{summary.date}:{summary.title}"
                 if key in seen:
                     continue
                 seen.add(key)
                 out.append(summary)
-                if len(out) >= limit:
-                    return out
+            if stop_hero and _hero_name_in_patches(out, stop_hero):
+                break
+            if len(out) >= limit and not stop_hero:
+                break
     finally:
         await session.close()
 
     if out:
-        return out
-    # Last resort: SSR content on the main page
+        _PATCH_CACHE = out
+        _PATCH_CACHE_AT = time.monotonic()
+        _PATCH_CACHE_MONTHS = max(months_fetched, _PATCH_CACHE_MONTHS)
+        return out[:limit] if not stop_hero else out
+
     patches = parse_all_patches(html, limit=limit)
     if patches:
+        _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = patches, now, 1
         return patches
     latest = parse_latest_patch(html)
-    return [latest] if latest else []
+    out = [latest] if latest else []
+    _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = out, now, 1
+    return out
 
 
 def summary_to_payload(summary: PatchSummary) -> str:

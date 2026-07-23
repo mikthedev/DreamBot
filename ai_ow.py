@@ -15,7 +15,61 @@ from overwatch_patches import (
 
 log = logging.getLogger("dream_team.ai_ow")
 
+# Canon English names (as they appear on Blizzard notes)
+CANON_HEROES: tuple[str, ...] = (
+    "doomfist",
+    "tracer",
+    "genji",
+    "hanzo",
+    "widowmaker",
+    "reinhardt",
+    "winston",
+    "d.va",
+    "roadhog",
+    "junkrat",
+    "mei",
+    "ana",
+    "mercy",
+    "lucio",
+    "lúcio",
+    "kiriko",
+    "junker queen",
+    "ramattra",
+    "orisa",
+    "sigma",
+    "cassidy",
+    "ashe",
+    "soldier: 76",
+    "sojourn",
+    "sombra",
+    "symmetra",
+    "torbjörn",
+    "torbjorn",
+    "pharah",
+    "echo",
+    "freja",
+    "venture",
+    "illari",
+    "lifeweaver",
+    "baptiste",
+    "zenyatta",
+    "moira",
+    "brigitte",
+    "zarya",
+    "wrecking ball",
+    "mauga",
+    "hazard",
+    "vendetta",
+    "shion",
+    "sierra",
+    "wuyang",
+    "juno",
+    "bastion",
+    "reaper",
+)
+
 HERO_ALIASES: dict[str, str] = {
+    # Russian / UA nicknames
     "гендзи": "genji",
     "генджи": "genji",
     "ханзо": "hanzo",
@@ -56,9 +110,71 @@ HERO_ALIASES: dict[str, str] = {
     "вендетта": "vendetta",
     "мауга": "mauga",
     "думфист": "doomfist",
+    "дум": "doomfist",
     "королева": "junker queen",
     "раматра": "ramattra",
+    "трейсерка": "tracer",
+    "винстон": "winston",
+    "фара": "pharah",
+    "фарах": "pharah",
+    "хомкраб": "wrecking ball",
+    "хог": "roadhog",
+    "жнец": "reaper",
+    "рипер": "reaper",
+    # English ASR / slang
+    "doom": "doomfist",
+    "doom fist": "doomfist",
+    "dumfist": "doomfist",
+    "dum fist": "doomfist",
+    "mccree": "cassidy",
+    "soldier": "soldier: 76",
+    "soldier76": "soldier: 76",
+    "ball": "wrecking ball",
+    "hammond": "wrecking ball",
+    "queen": "junker queen",
+    "jq": "junker queen",
+    "df": "doomfist",
 }
+
+# Whisper often mangles hero names — rewrite before intent parsing
+_ASR_HERO_FIXES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pat, re.I), repl)
+    for pat, repl in (
+        (r"\bdoom\s*fist\b", "Doomfist"),
+        (r"\bdum\s*fist\b", "Doomfist"),
+        (r"\bdon'?t\s*fist\b", "Doomfist"),
+        (r"\bnew\s*fist\b", "Doomfist"),
+        (r"\bdoomfist\b", "Doomfist"),
+        (r"\btrace\s*her\b", "Tracer"),
+        (r"\btracer\b", "Tracer"),
+        (r"\bgen\s*g[iy]\b", "Genji"),
+        (r"\bgenji\b", "Genji"),
+        (r"\bwidow\s*maker\b", "Widowmaker"),
+        (r"\brein\s*hardt\b", "Reinhardt"),
+        (r"\bjunker\s*queen\b", "Junker Queen"),
+        (r"\brock\s*hog\b", "Roadhog"),
+        (r"\broad\s*hog\b", "Roadhog"),
+        (r"\bjunk\s*rat\b", "Junkrat"),
+        (r"\bsoldier\s*(?:76|seventy\s*six)?\b", "Soldier: 76"),
+        (r"\bmc\s*cree\b", "Cassidy"),
+        (r"\bcassidy\b", "Cassidy"),
+        (r"\bkiri\s*ko\b", "Kiriko"),
+        (r"\blife\s*weaver\b", "Lifeweaver"),
+        (r"\bwrecking\s*ball\b", "Wrecking Ball"),
+        (r"\bramattra\b", "Ramattra"),
+        (r"\bmauga\b", "Mauga"),
+        (r"\bsojourn\b", "Sojourn"),
+        (r"\bpharah\b", "Pharah"),
+        (r"\bbaptiste\b", "Baptiste"),
+        (r"\bzenyatta\b", "Zenyatta"),
+        (r"\bbrigitte\b", "Brigitte"),
+        (r"\billari\b", "Illari"),
+        (r"\bfreja\b", "Freja"),
+        (r"\bventure\b", "Venture"),
+        (r"\bhaz\s*ard\b", "Hazard"),
+        (r"\bd\.?\s*va\b", "D.Va"),
+    )
+)
 
 
 @dataclass
@@ -74,6 +190,14 @@ class HeroPatchHit:
 
 def _plain(text: str) -> str:
     return re.sub(r"[`*_]", "", text or "").strip()
+
+
+def fix_ow_asr(text: str) -> str:
+    """Correct common Whisper mangling of Overwatch hero names."""
+    out = text or ""
+    for pat, repl in _ASR_HERO_FIXES:
+        out = pat.sub(repl, out)
+    return out
 
 
 def _hero_lines(hero: HeroChange) -> list[str]:
@@ -124,26 +248,97 @@ def _tone_flags(hero: HeroChange) -> tuple[bool, bool]:
     return buff, nerf
 
 
+_STOP_HERO_TOKENS = frozenset(
+    {
+        "he",
+        "she",
+        "they",
+        "him",
+        "her",
+        "his",
+        "the",
+        "a",
+        "an",
+        "was",
+        "is",
+        "are",
+        "were",
+        "been",
+        "nerf",
+        "nerfs",
+        "buff",
+        "buffs",
+        "patch",
+        "meta",
+        "hero",
+        "that",
+        "this",
+        "it",
+        "me",
+        "my",
+        "you",
+        "your",
+        "about",
+        "what",
+        "how",
+        "when",
+        "who",
+        "why",
+        "and",
+        "for",
+        "with",
+        "from",
+        "just",
+        "like",
+        "have",
+        "has",
+        "had",
+        "did",
+        "does",
+        "will",
+        "would",
+        "could",
+        "should",
+        "also",
+        "same",
+        "last",
+        "latest",
+        "recent",
+    }
+)
+
+
 def extract_hero_query(text: str) -> str | None:
     """Best-effort hero name from a user question."""
-    low = (text or "").lower()
+    text = fix_ow_asr(text or "")
+    low = text.lower()
+
+    # Prefer longer aliases / names so "junker queen" wins over "queen"
     for alias, canon in sorted(HERO_ALIASES.items(), key=lambda x: -len(x[0])):
         if alias in low:
             return canon
+
+    for name in sorted(CANON_HEROES, key=len, reverse=True):
+        if name in low:
+            return HERO_ALIASES.get(name, name)
+
     m = re.search(
         r"(?i)\b(?:was|is|did|has|how|about|про|был|была|бафф|нерф|патч[аеиу]?)\s+"
         r"([a-zа-яё0-9:.\-']{2,24})\b",
-        text or "",
+        text,
     )
     if m:
-        token = m.group(1).strip(" ?.,!")
-        return HERO_ALIASES.get(token.lower(), token)
+        token = m.group(1).strip(" ?.,!").lower()
+        if token not in _STOP_HERO_TOKENS:
+            return HERO_ALIASES.get(token, token)
     m = re.search(
-        r"(?i)\b([a-z][a-z0-9:.\-']{1,24})\b(?:\s+(?:nerf|buff|patch|changed|updated|meta))",
-        text or "",
+        r"(?i)\b([a-z][a-z0-9:.\-']{2,24})\b(?:\s+(?:nerfs?|nerfed|buffs?|buffed|patch(?:ed|es)?|changed|updated|meta))\b",
+        text,
     )
     if m:
-        return m.group(1)
+        token = m.group(1).lower()
+        if token not in _STOP_HERO_TOKENS:
+            return HERO_ALIASES.get(token, token)
     return None
 
 
@@ -152,9 +347,11 @@ def find_hero_in_summary(
 ) -> HeroChange | None:
     q = hero_query.lower().strip()
     q = HERO_ALIASES.get(q, q)
+    compact_q = q.replace(" ", "").replace(":", "")
     for h in summary.heroes:
         name = (h.name or "").lower()
-        if name == q or name.startswith(q) or q in name.replace(" ", ""):
+        compact = name.replace(" ", "").replace(":", "")
+        if name == q or name.startswith(q) or compact_q in compact:
             return h
         if q.replace(" ", "") in name.replace(" ", ""):
             return h
@@ -170,7 +367,10 @@ async def lookup_hero_patch(
     same month calendar the site uses, newest→oldest, until this hero appears.
     Fall back to the guild archive only if the live site has nothing.
     """
-    patches = await fetch_all_patch_summaries(limit=25, max_months=8)
+    hero_query = HERO_ALIASES.get(hero_query.lower().strip(), hero_query)
+    patches = await fetch_all_patch_summaries(
+        limit=40, max_months=6, stop_hero=hero_query
+    )
     latest_date = (patches[0].date if patches else "") or ""
 
     for i, summary in enumerate(patches):

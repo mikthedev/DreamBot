@@ -27,17 +27,19 @@ log = logging.getLogger("dream_team.voice_ai")
 SAMPLE_RATE = 48000
 CHANNELS = 2
 SAMPLE_WIDTH = 2
-SILENCE_SECONDS = 0.85
-MIN_UTTERANCE_SECONDS = 0.7
-MAX_UTTERANCE_SECONDS = 12.0
-RMS_THRESHOLD = 350
-WAKE_COOLDOWN_SECONDS = 4.0
+# Wait for a clear end-of-phrase pause, but keep it snappy for voice latency.
+SILENCE_SECONDS = 0.95
+MIN_UTTERANCE_SECONDS = 0.55
+MAX_UTTERANCE_SECONDS = 14.0
+RMS_THRESHOLD = 260
+WAKE_COOLDOWN_SECONDS = 1.8
 ALONE_LEAVE_SECONDS = 10.0
 # Leave VC if nobody wakes Dream with the wake word
 IDLE_LEAVE_SECONDS = 150.0  # 2.5 minutes
 # Voice transcript embeds (text copies of what Dream said)
 TRANSCRIPT_TTL_SECONDS = 24 * 60 * 60
 TRANSCRIPT_CLEANUP_SECONDS = 15 * 60
+WHISPER_RATE = 16000
 
 
 def _patch_voice_recv_router() -> None:
@@ -75,6 +77,11 @@ def _patch_voice_recv_router() -> None:
     log.info("Patched voice_recv packet router for Opus error resilience")
 
 
+def _quiet_rtcp_logs() -> None:
+    # SenderReportPacket spam is harmless and drowns real voice logs
+    logging.getLogger("discord.ext.voice_recv.reader").setLevel(logging.WARNING)
+
+
 def _pcm_to_wav_bytes(
     pcm: bytes, *, rate: int = SAMPLE_RATE, channels: int = CHANNELS
 ) -> bytes:
@@ -85,6 +92,20 @@ def _pcm_to_wav_bytes(
         wf.setframerate(rate)
         wf.writeframes(pcm)
     return buf.getvalue()
+
+
+def _pcm_to_whisper_wav(pcm_stereo_48k: bytes) -> bytes:
+    """Downmix Discord PCM to mono 16 kHz — Whisper hears this much more clearly."""
+    if not pcm_stereo_48k:
+        return _pcm_to_wav_bytes(b"", rate=WHISPER_RATE, channels=1)
+    try:
+        mono = audioop.tomono(pcm_stereo_48k, SAMPLE_WIDTH, 0.5, 0.5)
+        mono16, _ = audioop.ratecv(
+            mono, SAMPLE_WIDTH, 1, SAMPLE_RATE, WHISPER_RATE, None
+        )
+    except Exception:
+        return _pcm_to_wav_bytes(pcm_stereo_48k)
+    return _pcm_to_wav_bytes(mono16, rate=WHISPER_RATE, channels=1)
 
 
 def _voice_recv_cls():
@@ -128,15 +149,20 @@ class UtteranceBuffer:
     def __init__(self) -> None:
         self.chunks: deque[bytes] = deque()
         self.last_voice_at = 0.0
+        self.quiet_since: float | None = None
         self.started_at = 0.0
         self.bytes_total = 0
 
-    def add(self, pcm: bytes, now: float) -> None:
+    def add(self, pcm: bytes, now: float, *, voiced: bool) -> None:
         if not self.chunks:
             self.started_at = now
         self.chunks.append(pcm)
         self.bytes_total += len(pcm)
-        self.last_voice_at = now
+        if voiced:
+            self.last_voice_at = now
+            self.quiet_since = None
+        elif self.quiet_since is None:
+            self.quiet_since = now
 
     def duration(self, now: float | None = None) -> float:
         if not self.chunks:
@@ -144,12 +170,18 @@ class UtteranceBuffer:
         end = now if now is not None else self.last_voice_at
         return max(0.0, end - self.started_at)
 
+    def quiet_for(self, now: float) -> float:
+        if self.quiet_since is None:
+            return 0.0
+        return max(0.0, now - self.quiet_since)
+
     def flush(self) -> bytes:
         data = b"".join(self.chunks)
         self.chunks.clear()
         self.bytes_total = 0
         self.started_at = 0.0
         self.last_voice_at = 0.0
+        self.quiet_since = None
         return data
 
 
@@ -174,6 +206,8 @@ def _build_sink_class():
                 log.info("Voice packets flowing in guild %s", self.guild_id)
             if user is None or getattr(user, "bot", False):
                 return
+            # Only drop while Dream is speaking / cooling down — keep buffering
+            # during Whisper so mid-sentence audio is not lost.
             if self.cog.is_paused(self.guild_id):
                 return
             pcm = getattr(data, "pcm", None)
@@ -183,19 +217,20 @@ def _build_sink_class():
                 rms = audioop.rms(pcm, SAMPLE_WIDTH)
             except Exception:
                 return
-            if rms < RMS_THRESHOLD:
-                return
 
             now = time.monotonic()
             buf = self._buffers[user.id]
-            buf.add(pcm, now)
+            voiced = rms >= RMS_THRESHOLD
+            if voiced or buf.chunks:
+                # Keep quiet frames inside an active utterance so pauses
+                # between words don't chop the clip for Whisper.
+                buf.add(pcm, now, voiced=voiced)
 
             max_bytes = int(
                 SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH * MAX_UTTERANCE_SECONDS
             )
             if buf.bytes_total > max_bytes:
-                # Force readiness on next poll
-                buf.last_voice_at = now - SILENCE_SECONDS - 0.01
+                buf.quiet_since = now - SILENCE_SECONDS - 0.01
 
         def cleanup(self) -> None:
             self._buffers.clear()
@@ -206,7 +241,7 @@ def _build_sink_class():
                 return None
             if buf.duration(now) < MIN_UTTERANCE_SECONDS:
                 return None
-            if now - buf.last_voice_at < SILENCE_SECONDS:
+            if buf.quiet_for(now) < SILENCE_SECONDS and buf.duration(now) < MAX_UTTERANCE_SECONDS:
                 return None
             return buf.flush()
 
@@ -218,7 +253,7 @@ def _build_sink_class():
                 if buf.duration(now) < MIN_UTTERANCE_SECONDS:
                     continue
                 if (
-                    now - buf.last_voice_at >= SILENCE_SECONDS
+                    buf.quiet_for(now) >= SILENCE_SECONDS
                     or buf.duration(now) >= MAX_UTTERANCE_SECONDS
                 ):
                     ready.append(uid)
@@ -258,6 +293,7 @@ class VoiceAICog(commands.Cog):
         self._idle_timers: dict[int, asyncio.Task] = {}
 
     async def cog_load(self) -> None:
+        _quiet_rtcp_logs()
         _patch_voice_recv_router()
         self._session = aiohttp.ClientSession()
         self._poll_task = asyncio.create_task(self._poll_loop())
@@ -317,9 +353,8 @@ class VoiceAICog(commands.Cog):
             return
 
         self._busy.add(guild_id)
-        self.pause_listening(guild_id, 2.0)
         try:
-            wav = _pcm_to_wav_bytes(pcm)
+            wav = _pcm_to_whisper_wav(pcm)
             if len(wav) > 4_500_000:
                 log.info("Voice clip too large in guild %s — skipped", guild_id)
                 return
@@ -351,8 +386,12 @@ class VoiceAICog(commands.Cog):
             log.info("Voice wake from %s in %s", who, guild.name)
 
             self._bump_idle_timer(guild_id)
-            await self._speak(guild, reply)
-            await self._announce_text(guild_id, who, reply)
+            # Speak + text log in parallel to cut perceived latency
+            await asyncio.gather(
+                self._speak(guild, reply),
+                self._announce_text(guild_id, who, reply),
+            )
+            self.pause_listening(guild_id, WAKE_COOLDOWN_SECONDS)
         except AIError as exc:
             log.warning("Voice AI: %s", exc)
             await self._announce_status(guild_id, f"Voice AI error: {exc}")
@@ -361,7 +400,8 @@ class VoiceAICog(commands.Cog):
             await self._announce_status(guild_id, "Voice AI failed — check bot logs.")
         finally:
             self._busy.discard(guild_id)
-            self.pause_listening(guild_id, WAKE_COOLDOWN_SECONDS)
+            # Short cooldown only after a real reply path finished speaking;
+            # non-wake returns above skip long pause so the next phrase is kept.
 
     async def _announce_status(self, guild_id: int, text: str) -> None:
         channel_id = self._text_channel.get(guild_id)
@@ -603,11 +643,22 @@ class VoiceAICog(commands.Cog):
 
         self._bump_idle_timer(interaction.guild.id)
 
+        # Warm patch-notes cache so the first hero question is faster
+        async def _warm_patches() -> None:
+            try:
+                from overwatch_patches import fetch_all_patch_summaries
+
+                await fetch_all_patch_summaries(limit=20, max_months=3)
+            except Exception:
+                log.debug("Patch cache warm failed", exc_info=True)
+
+        asyncio.create_task(_warm_patches())
+
         tip = (
-            f"Joined **{channel.name}** — I can hear the channel, but I only "
-            f"reply when someone says **Dream** … "
-            f"(example: *Dream, was Genji patched?*). "
-            f"If nobody wakes me for 2.5 minutes, I'll leave."
+            f"Joined **{channel.name}** — say **Dream, …** to start. "
+            f"For ~90s after that you can keep talking without repeating Dream "
+            f"(follow-ups like *and Tracer?* work). "
+            f"Idle 2.5 min with no wake → I leave."
         )
         # One public tip is enough — stay quiet while people talk without Dream
         if isinstance(interaction.channel, discord.TextChannel):

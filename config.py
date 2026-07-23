@@ -56,8 +56,10 @@ OW_TIER_CHECK_HOURS = max(1, int(os.getenv("OW_TIER_CHECK_HOURS", "24")))
 
 # Free Llama via Groq (no billing) — https://console.groq.com/keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+# 70B is still very fast on Groq LPUs and much smarter than 8B
 GROQ_MODEL = (
-    os.getenv("GROQ_MODEL", "llama-3.1-8b-instant").strip() or "llama-3.1-8b-instant"
+    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+    or "llama-3.3-70b-versatile"
 )
 GROQ_WHISPER_MODEL = (
     os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo").strip()

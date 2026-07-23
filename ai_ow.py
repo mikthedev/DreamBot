@@ -138,60 +138,14 @@ HERO_ALIASES: dict[str, str] = {
     "mccree": "cassidy",
     "soldier": "soldier: 76",
     "soldier76": "soldier: 76",
+    "soldier 76": "soldier: 76",
     "ball": "wrecking ball",
     "hammond": "wrecking ball",
     "queen": "junker queen",
     "jq": "junker queen",
     "df": "doomfist",
+    "dee va": "d.va",
 }
-
-# Whisper often mangles hero names — rewrite before intent parsing
-_ASR_HERO_FIXES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(pat, re.I), repl)
-    for pat, repl in (
-        (r"\bdoom\s*fist\b", "Doomfist"),
-        (r"\bdum\s*fist\b", "Doomfist"),
-        (r"\bdon'?t\s*fist\b", "Doomfist"),
-        (r"\bnew\s*fist\b", "Doomfist"),
-        (r"\bdoomfist\b", "Doomfist"),
-        (r"\btrace\s*her\b", "Tracer"),
-        (r"\btracer\b", "Tracer"),
-        (r"\bgen\s*g[iy]\b", "Genji"),
-        (r"\bgenji\b", "Genji"),
-        (r"\bwidow\s*maker\b", "Widowmaker"),
-        (r"\brein\s*hardt\b", "Reinhardt"),
-        (r"\bjunker\s*queen\b", "Junker Queen"),
-        (r"\brock\s*hog\b", "Roadhog"),
-        (r"\broad\s*hog\b", "Roadhog"),
-        (r"\bjunk\s*rat\b", "Junkrat"),
-        (r"\bsoldier\s*(?:76|seventy\s*six)?\b", "Soldier: 76"),
-        (r"\bmc\s*cree\b", "Cassidy"),
-        (r"\bcassidy\b", "Cassidy"),
-        (r"\bkiri\s*ko\b", "Kiriko"),
-        (r"\blife\s*weaver\b", "Lifeweaver"),
-        (r"\bwrecking\s*ball\b", "Wrecking Ball"),
-        (r"\bramattra\b", "Ramattra"),
-        (r"\bmauga\b", "Mauga"),
-        (r"\bsojourn\b", "Sojourn"),
-        (r"\bpharah\b", "Pharah"),
-        (r"\bbaptiste\b", "Baptiste"),
-        (r"\bzenyatta\b", "Zenyatta"),
-        (r"\bbrigitte\b", "Brigitte"),
-        (r"\billari\b", "Illari"),
-        (r"\bfreja\b", "Freja"),
-        (r"\bventure\b", "Venture"),
-        (r"\bhaz\s*ard\b", "Hazard"),
-        # D.Va — Whisper loves "Diva" / "Zyva" / Cyrillic mangling
-        (r"\bd\.?\s*va\b", "D.Va"),
-        (r"\bdivas?\b", "D.Va"),
-        (r"\bdeevas?\b", "D.Va"),
-        (r"\bdee\s*va\b", "D.Va"),
-        (r"\bz[yi]vas?\b", "D.Va"),
-        (r"\bдив[аоуыеийюя]{0,3}\b", "D.Va"),
-        (r"\bдів[аоуеіийюя]{0,3}\b", "D.Va"),
-        (r"\bд\.?\s*ва\b", "D.Va"),
-    )
-)
 
 
 @dataclass
@@ -207,14 +161,6 @@ class HeroPatchHit:
 
 def _plain(text: str) -> str:
     return re.sub(r"[`*_]", "", text or "").strip()
-
-
-def fix_ow_asr(text: str) -> str:
-    """Correct common Whisper mangling of Overwatch hero names."""
-    out = text or ""
-    for pat, repl in _ASR_HERO_FIXES:
-        out = pat.sub(repl, out)
-    return out
 
 
 def _hero_lines(hero: HeroChange) -> list[str]:
@@ -326,9 +272,11 @@ _STOP_HERO_TOKENS = frozenset(
 
 
 def extract_hero_query(text: str) -> str | None:
-    """Best-effort hero name from a user question."""
-    text = fix_ow_asr(text or "")
-    low = text.lower()
+    """Best-effort hero name from a user question (aliases for intent only)."""
+    low = (text or "").lower()
+    # Normalize spaced D.Va variants for matching without rewriting the utterance
+    low = re.sub(r"\bd\s*\.\s*va\b", "d.va", low)
+    low = re.sub(r"\bdee\s*va\b", "d.va", low)
 
     # Prefer longer aliases / names so "junker queen" wins over "queen"
     # Word-boundary match — avoid "два" inside unrelated words

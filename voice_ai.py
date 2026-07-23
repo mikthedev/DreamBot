@@ -103,17 +103,22 @@ def _pcm_to_wav_bytes(
 
 
 def _pcm_to_whisper_wav(pcm_stereo_48k: bytes) -> bytes:
-    """Downmix Discord PCM to mono 16 kHz — Whisper hears this much more clearly."""
+    """Downmix Discord PCM to mono 16 kHz with gentle AGC for Whisper."""
     if not pcm_stereo_48k:
         return _pcm_to_wav_bytes(b"", rate=WHISPER_RATE, channels=1)
     try:
         mono = audioop.tomono(pcm_stereo_48k, SAMPLE_WIDTH, 0.5, 0.5)
-        # Mild gain — Discord VC is often quiet for Whisper
+        # Target a healthy speech level — Discord VC is often too quiet
         try:
             rms = audioop.rms(mono, SAMPLE_WIDTH) or 1
-            if 200 < rms < 900:
-                factor = min(2.2, 900 / rms)
+            target = 2800
+            if 80 < rms < target:
+                factor = min(3.5, target / rms)
                 mono = audioop.mul(mono, SAMPLE_WIDTH, factor)
+            # Soft peak guard after gain
+            peak = audioop.max(mono, SAMPLE_WIDTH) or 1
+            if peak > 30000:
+                mono = audioop.mul(mono, SAMPLE_WIDTH, 30000 / peak)
         except Exception:
             pass
         mono16, _ = audioop.ratecv(

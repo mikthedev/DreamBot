@@ -17,7 +17,6 @@ import config
 from ai_ow import (
     extract_hero_query,
     facts_block,
-    fix_ow_asr,
     lookup_hero_patch,
     patch_details_from_facts,
     patch_teaser,
@@ -572,7 +571,24 @@ async def generate_reply(
     return reply
 
 
-WHISPER_PROMPT = "Dream."
+# Whisper vocabulary bias — correct spellings so STT hears them (not post-hoc rewrites).
+# Keep under Groq's ~224-token prompt limit.
+WHISPER_VOCAB_PROMPT = (
+    "Dream. Overwatch heroes spelled: Ana, Ashe, Baptiste, Bastion, Brigitte, "
+    "Cassidy, D.Va, Doomfist, Echo, Freja, Genji, Hanzo, Hazard, Illari, Juno, "
+    "Junkrat, Junker Queen, Kiriko, Lifeweaver, Lúcio, Mauga, Mei, Mercy, Moira, "
+    "Orisa, Pharah, Ramattra, Reaper, Reinhardt, Roadhog, Sigma, Sojourn, "
+    "Soldier 76, Sombra, Symmetra, Torbjörn, Tracer, Venture, Widowmaker, Winston, "
+    "Wrecking Ball, Zarya, Zenyatta. Wake word: Dream."
+)
+
+
+@dataclass
+class WhisperResult:
+    text: str
+    no_speech: float
+    avg_logprob: float
+    language: str | None
 
 
 async def _whisper_once(
@@ -581,11 +597,9 @@ async def _whisper_once(
     session: aiohttp.ClientSession,
     filename: str,
     language: str | None,
-) -> tuple[str, float]:
-    """
-    Returns (text, no_speech_prob).
-    no_speech_prob is 0..1 from verbose_json segments (1 = likely silence).
-    """
+    prompt: str | None = None,
+) -> WhisperResult:
+    """Raw Whisper pass — no post-hoc 'corrections' of what was heard."""
     form = aiohttp.FormData()
     form.add_field(
         "file",
@@ -596,7 +610,7 @@ async def _whisper_once(
     form.add_field("model", config.GROQ_WHISPER_MODEL)
     form.add_field("response_format", "verbose_json")
     form.add_field("temperature", "0")
-    form.add_field("prompt", WHISPER_PROMPT)
+    form.add_field("prompt", prompt if prompt is not None else WHISPER_VOCAB_PROMPT)
     if language:
         form.add_field("language", language)
     headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
@@ -615,32 +629,42 @@ async def _whisper_once(
 
     text_out = ""
     no_speech = 0.0
+    avg_logprob = -1.0
+    detected_lang: str | None = None
     if isinstance(data, dict):
         text_out = str(data.get("text") or "").strip()
+        raw_lang = data.get("language")
+        if isinstance(raw_lang, str) and raw_lang.strip():
+            detected_lang = raw_lang.strip().lower()[:8]
         segs = data.get("segments") or []
         if isinstance(segs, list) and segs:
-            probs = [
-                float(s.get("no_speech_prob") or 0.0)
-                for s in segs
-                if isinstance(s, dict)
-            ]
-            if probs:
-                no_speech = sum(probs) / len(probs)
-    return _fix_common_asr(fix_ow_asr(text_out)), no_speech
-
-
-def _fix_common_asr(text: str) -> str:
-    """Light cleanup for frequent Whisper mistakes (not just OW heroes)."""
-    out = text or ""
-    fixes = (
-        (r"(?i)\b(?:эпибары|бибары|капибаррский)\b", "капибары"),
-        (r"(?i)\bкапибар+ы?\b", "капибары"),
-        (r"(?i)\bкапібар+и?\b", "капібари"),
-        (r"(?i)\bcapybaras?\b", "capybaras"),
+            ns_probs: list[float] = []
+            lp_probs: list[float] = []
+            for s in segs:
+                if not isinstance(s, dict):
+                    continue
+                ns_probs.append(float(s.get("no_speech_prob") or 0.0))
+                if s.get("avg_logprob") is not None:
+                    lp_probs.append(float(s["avg_logprob"]))
+            if ns_probs:
+                no_speech = sum(ns_probs) / len(ns_probs)
+            if lp_probs:
+                avg_logprob = sum(lp_probs) / len(lp_probs)
+    return WhisperResult(
+        text=text_out,
+        no_speech=no_speech,
+        avg_logprob=avg_logprob,
+        language=detected_lang,
     )
-    for pat, repl in fixes:
-        out = re.sub(pat, repl, out)
-    return out
+
+
+def _whisper_score(result: WhisperResult) -> float:
+    """Higher is better. Prefer real speech + higher confidence."""
+    if _looks_like_hallucination(result.text):
+        return -100.0
+    # avg_logprob closer to 0 is better; typical good ~ -0.2, bad < -0.6
+    conf = result.avg_logprob if result.avg_logprob > -10 else -1.0
+    return conf * 2.0 - result.no_speech * 3.0 + min(len(result.text), 40) * 0.01
 
 
 def _looks_like_hallucination(text: str) -> bool:
@@ -652,17 +676,35 @@ def _looks_like_hallucination(text: str) -> bool:
     if len(letters) < 3:
         return True
     low = t.lower()
+    # Prompt vocab bleed alone (model echoed the prompt, no real speech)
     if re.fullmatch(
         r"(?i)[\s.]*"
-        r"(thanks?\s*for\s*watching|subscribe|thank\s*you|"
+        r"(dream|дрим|дрім|thanks?\s*for\s*watching|subscribe|thank\s*you|"
         r"amara\.org|www\.|http|music|\[?\s*music\s*\]?|"
         r"you|the end|\.\.\.)[\s.]*",
         t,
     ):
         return True
-    if "капибаррский day" in low:
+    # Entire clip is just a hero name from the vocab prompt
+    if re.fullmatch(
+        r"(?i)[\s.]*(ana|ashe|genji|tracer|doomfist|d\.?va|mercy)[\s.]*",
+        t,
+    ):
         return True
     return False
+
+
+def _script_of(text: str) -> str:
+    """Dominant script: 'latin' | 'cyrillic' | 'mixed' | 'other'."""
+    latin = len(re.findall(r"[A-Za-z]", text or ""))
+    cyr = len(re.findall(r"[а-яА-ЯёЁіІїЇєЄґҐ]", text or ""))
+    if latin >= 3 and latin >= cyr * 2:
+        return "latin"
+    if cyr >= 3 and cyr >= latin * 2:
+        return "cyrillic"
+    if latin and cyr:
+        return "mixed"
+    return "other"
 
 
 async def transcribe_audio(
@@ -672,70 +714,107 @@ async def transcribe_audio(
     filename: str = "clip.wav",
 ) -> str:
     """
-    Transcribe with Whisper. Drop high no-speech / hallucinated clips.
-    Retry uk/ru only when first pass has real speech but missed Dream —
-    never overwrite a clear English (Latin) transcript with Cyrillic.
+    Transcribe with Whisper large-v3 + vocabulary prompt.
+    Pick the best pass by confidence — do not 'fix' wrong words into right ones.
     """
     if not config.GROQ_API_KEY:
         raise AIError("GROQ_API_KEY not set.")
 
     forced = config.GROQ_WHISPER_LANGUAGE or None
     try:
-        text, no_speech = await _whisper_once(
+        first = await _whisper_once(
             wav_bytes, session=session, filename=filename, language=forced
         )
     except aiohttp.ClientError as exc:
         raise AIError("Could not reach Groq Whisper.") from exc
 
-    if no_speech >= 0.55 or _looks_like_hallucination(text):
+    if first.no_speech >= 0.55 or _looks_like_hallucination(first.text):
         log.info(
-            "Ignoring likely non-speech (no_speech=%.2f text=%r)",
-            no_speech,
-            text[:80],
+            "Ignoring likely non-speech (no_speech=%.2f logprob=%.2f text=%r)",
+            first.no_speech,
+            first.avg_logprob,
+            first.text[:80],
         )
         return ""
 
-    if forced or extract_wake_question(text) is not None:
-        return text
+    candidates = [first]
 
-    latin = len(re.findall(r"[A-Za-z]", text or ""))
-    cyr = len(re.findall(r"[а-яА-ЯёЁіІїЇєЄґҐ]", text or ""))
-    clearly_english = latin >= 4 and latin >= cyr * 2 and not looks_cyrillic(text)
+    # Language-locked second pass (Groq: language hint improves short-clip accuracy).
+    # Trust the text script over Whisper's language label when they disagree —
+    # that disagreement is what caused EN→UK swaps before.
+    script = _script_of(first.text)
+    if forced:
+        lang_code = forced
+    elif script == "latin":
+        lang_code = "en"
+    elif first.language in {"ru", "russian"}:
+        lang_code = "ru"
+    elif first.language in {"uk", "ukrainian"}:
+        lang_code = "uk"
+    elif script == "cyrillic":
+        # Default Cyrillic → ru unless Ukrainian letters present
+        lang_code = (
+            "uk"
+            if re.search(r"[іїєґІЇЄҐ]", first.text or "")
+            else "ru"
+        )
+    else:
+        lang_code = None
 
-    for lang_code in ("uk", "ru"):
-        try:
-            alt, alt_ns = await _whisper_once(
-                wav_bytes,
-                session=session,
-                filename=filename,
-                language=lang_code,
-            )
-        except (AIError, aiohttp.ClientError):
-            continue
-        if alt_ns >= 0.55 or _looks_like_hallucination(alt):
-            continue
-        if extract_wake_question(alt) is not None:
-            # Don't replace clear EN speech with a Cyrillic "translation"
-            if clearly_english and looks_cyrillic(alt):
-                log.info(
-                    "Whisper %s wake ignored — keeping English: %r",
-                    lang_code,
-                    text[:80],
+    need_lock = lang_code and (
+        forced
+        or first.avg_logprob < -0.30
+        or extract_wake_question(first.text) is None
+        or (script == "latin" and first.language not in {None, "en", "english"})
+    )
+    if need_lock:
+        # Skip if we already ran with this exact language
+        already = forced == lang_code
+        if not already:
+            try:
+                locked = await _whisper_once(
+                    wav_bytes,
+                    session=session,
+                    filename=filename,
+                    language=lang_code,
                 )
-                continue
-            log.info(
-                "Whisper %s retry caught wake: %r → %r",
-                lang_code,
-                text[:80],
-                alt[:80],
-            )
-            return alt
-        if looks_cyrillic(alt) and not looks_cyrillic(text):
-            if clearly_english:
-                continue
-            text = alt
-    return text
+                if not (
+                    locked.no_speech >= 0.55 or _looks_like_hallucination(locked.text)
+                ):
+                    candidates.append(locked)
+            except (AIError, aiohttp.ClientError):
+                pass
 
+    # Never prefer a Cyrillic pass over a clear Latin one (EN≠UK/RU swap)
+    latin_ok = [
+        c for c in candidates if _script_of(c.text) == "latin" and c.text.strip()
+    ]
+    if latin_ok:
+        best = max(latin_ok, key=_whisper_score)
+    else:
+        best = max(candidates, key=_whisper_score)
+
+    # If wake missing on best but another candidate has it with ok confidence, use that
+    # — only within the same script family
+    if extract_wake_question(best.text) is None:
+        script = _script_of(best.text)
+        for c in candidates:
+            if c is best:
+                continue
+            if script == "latin" and _script_of(c.text) != "latin":
+                continue
+            if extract_wake_question(c.text) is not None and _whisper_score(c) > -50:
+                best = c
+                break
+
+    log.info(
+        "STT lang=%s no_speech=%.2f logprob=%.2f text=%r",
+        best.language,
+        best.no_speech,
+        best.avg_logprob,
+        best.text[:120],
+    )
+    return best.text
 
 
 def _normalize_wake_transcript(transcript: str) -> str:
@@ -851,7 +930,6 @@ def _patch_question(text: str) -> bool:
 
 def _wants_hero_lookup(text: str) -> str | None:
     """If the user is asking about an OW hero's balance, return the hero query."""
-    text = fix_ow_asr(text or "")
     hero = extract_hero_query(text)
     if not hero:
         return None
@@ -880,7 +958,8 @@ async def handle_user_turn(
     voice: bool = True,
 ) -> str:
     """Answer a user turn (after wake word, convo follow-up, or pending yes)."""
-    raw = fix_ow_asr((question or "").strip())
+    # Keep STT text as-heard — do not rewrite misheard words into "correct" ones
+    raw = (question or "").strip()
     sess = peek_session(guild_id, user_id)
     # Affirmatives / tiny follow-ups keep session language; long Latin = EN
     lang = detect_user_language(

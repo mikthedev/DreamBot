@@ -79,6 +79,7 @@ def _patch_voice_recv_router() -> None:
 
 def _quiet_rtcp_logs() -> None:
     # SenderReportPacket spam is harmless and drowns real voice logs
+    logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
     logging.getLogger("discord.ext.voice_recv.reader").setLevel(logging.WARNING)
 
 
@@ -100,6 +101,14 @@ def _pcm_to_whisper_wav(pcm_stereo_48k: bytes) -> bytes:
         return _pcm_to_wav_bytes(b"", rate=WHISPER_RATE, channels=1)
     try:
         mono = audioop.tomono(pcm_stereo_48k, SAMPLE_WIDTH, 0.5, 0.5)
+        # Mild gain — Discord VC is often quiet for Whisper
+        try:
+            rms = audioop.rms(mono, SAMPLE_WIDTH) or 1
+            if rms < 1200:
+                factor = min(4.0, 1200 / rms)
+                mono = audioop.mul(mono, SAMPLE_WIDTH, factor)
+        except Exception:
+            pass
         mono16, _ = audioop.ratecv(
             mono, SAMPLE_WIDTH, 1, SAMPLE_RATE, WHISPER_RATE, None
         )

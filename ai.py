@@ -49,14 +49,16 @@ GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 _WAKE_RE = re.compile(
-    r"(?:^|[\s,.\!?])(?:hey\s+|эй\s+|эй,\s*)?"
+    r"(?:^|[\s,.\!?])(?:hey\s+|эй\s+|эй,\s*|ok\s+)?"
     r"(?:dream(?:\s+team)?|дрим(?:\s+тим)?|"
-    r"dre+m+|dr[ei]m+|drum|grim|cream|drin|дримм?)"
+    r"dre+m+|dr[ei]m+|drum|grim|cream|drin|дримм?|"
+    r"дрень|дрейм|джейм|джеймс|дреам|дримы|дримс|грим|"
+    r"dmv|d\.m\.v)"
     r"[\s,.\!?:\-]*",
     re.IGNORECASE,
 )
 
-# Common Whisper mishearings of the wake word (accents / noisy VC)
+# Exact / near-exact first tokens Whisper invents for "Dream" (RU/UA accents)
 _WAKE_FIRST_TOKENS = frozenset(
     {
         "dream",
@@ -64,6 +66,20 @@ _WAKE_FIRST_TOKENS = frozenset(
         "dreamteam",
         "дрим",
         "дрима",
+        "дримм",
+        "дримы",
+        "дримс",
+        "дрейм",
+        "дрень",
+        "дреам",
+        "дримт",
+        "джейм",
+        "джеймс",
+        "джейми",
+        "дримтим",
+        "грим",
+        "грем",
+        "дрин",
         "дримм",
         "dreem",
         "drem",
@@ -74,11 +90,66 @@ _WAKE_FIRST_TOKENS = frozenset(
         "cream",
         "drean",
         "drain",
+        "dmv",
+        "дмв",
     }
 )
 
+_WAKE_FUZZY_TARGETS = (
+    "dream",
+    "dreams",
+    "дрим",
+    "дримм",
+    "дрейм",
+    "дрень",
+    "джейм",
+)
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(
+                min(
+                    prev[j] + 1,
+                    cur[j - 1] + 1,
+                    prev[j - 1] + (0 if ca == cb else 1),
+                )
+            )
+        prev = cur
+    return prev[-1]
+
+
+def _token_looks_like_dream(token: str) -> bool:
+    t = re.sub(r"[^\wа-яё]", "", (token or "").lower(), flags=re.UNICODE)
+    if not t:
+        return False
+    # D.M.V. / D M V style
+    compact = re.sub(r"[\s.]+", "", (token or "").lower())
+    if compact in {"dmv", "d.m.v", "дмв"}:
+        return True
+    if t in _WAKE_FIRST_TOKENS:
+        return True
+    for target in _WAKE_FUZZY_TARGETS:
+        if abs(len(t) - len(target)) > 2:
+            continue
+        # Allow 2 edits for short RU mangling (дрень≈дрим)
+        if _levenshtein(t, target) <= 2:
+            return True
+    return False
+
+
 _YES_RE = re.compile(
-    r"(?i)^\s*(?:dream[\s,.\!?:\-]*)?(?:yes|yeah|yep|sure|ok|okay|"
+    r"(?i)^\s*(?:(?:dream|дрим|дрень|джейм|дрейм)[\s,.\!?:\-]*)?"
+    r"(?:yes|yeah|yep|sure|ok|okay|"
     r"да|ага|угу|конечно|давай|расскажи|tell me|go ahead)\b",
 )
 
@@ -291,28 +362,22 @@ async def generate_reply(
     return _strip_markdown(text.strip())
 
 
-WHISPER_OW_PROMPT = (
-    "Dream. Dream, hello. Dream, tell me a joke. "
-    "Overwatch heroes: Doomfist, Tracer, Genji, Hanzo, Widowmaker, Reinhardt, "
-    "Winston, D.Va, Roadhog, Junkrat, Mei, Ana, Mercy, Lucio, Kiriko, "
-    "Junker Queen, Ramattra, Orisa, Sigma, Cassidy, Ashe, Soldier 76, "
-    "Sojourn, Sombra, Symmetra, Torbjorn, Pharah, Echo, Freja, Venture, "
-    "Illari, Lifeweaver, Baptiste, Zenyatta, Moira, Brigitte, Zarya, "
-    "Wrecking Ball, Mauga, Hazard, Reaper, Bastion, Juno, Wuyang. "
-    "Dream, was Doomfist nerfed? Dream, how is Tracer? "
-    "Эй Dream. Дрим, думфист нерфнули? Дрим, как трейсер?"
+WHISPER_PROMPT = (
+    "Dream. The wake word is Dream. "
+    "Dream, hello. Dream, tell me a joke. Dream, where do capybaras live? "
+    "Дрим, привет. Дрим, где живут капибары? Дрим, расскажи шутку. "
+    "Эй Dream, как дела? Dream, was Doomfist nerfed? "
+    "Overwatch: Doomfist, Tracer, Genji, Kiriko, Widowmaker, Reinhardt."
 )
 
 
-async def transcribe_audio(
+async def _whisper_once(
     wav_bytes: bytes,
     *,
     session: aiohttp.ClientSession,
-    filename: str = "clip.wav",
+    filename: str,
+    language: str | None,
 ) -> str:
-    if not config.GROQ_API_KEY:
-        raise AIError("GROQ_API_KEY not set.")
-
     form = aiohttp.FormData()
     form.add_field(
         "file",
@@ -323,55 +388,120 @@ async def transcribe_audio(
     form.add_field("model", config.GROQ_WHISPER_MODEL)
     form.add_field("response_format", "json")
     form.add_field("temperature", "0")
-    form.add_field("prompt", WHISPER_OW_PROMPT)
+    form.add_field("prompt", WHISPER_PROMPT)
+    if language:
+        form.add_field("language", language)
     headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
 
-    try:
-        async with session.post(
-            GROQ_TRANSCRIBE_URL,
-            data=form,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=45),
-        ) as resp:
-            data = await resp.json(content_type=None)
-            if resp.status >= 400:
-                message = _api_error_message(data) or f"HTTP {resp.status}"
-                log.warning("Groq Whisper error %s: %s", resp.status, message)
-                raise AIError(f"Speech recognition failed: {message}")
-    except aiohttp.ClientError as exc:
-        raise AIError("Could not reach Groq Whisper.") from exc
+    async with session.post(
+        GROQ_TRANSCRIBE_URL,
+        data=form,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=45),
+    ) as resp:
+        data = await resp.json(content_type=None)
+        if resp.status >= 400:
+            message = _api_error_message(data) or f"HTTP {resp.status}"
+            log.warning("Groq Whisper error %s: %s", resp.status, message)
+            raise AIError(f"Speech recognition failed: {message}")
 
     text = ""
     if isinstance(data, dict):
         text = str(data.get("text") or "").strip()
-    return fix_ow_asr(text)
+    return _fix_common_asr(fix_ow_asr(text))
+
+
+def _fix_common_asr(text: str) -> str:
+    """Light cleanup for frequent Whisper mistakes (not just OW heroes)."""
+    out = text or ""
+    fixes = (
+        (r"(?i)\b(?:эпибары|бибары|капибар+ы?|капибаррский)\b", "капибары"),
+        (r"(?i)\bcapybaras?\b", "capybaras"),
+    )
+    for pat, repl in fixes:
+        out = re.sub(pat, repl, out)
+    return out
+
+
+async def transcribe_audio(
+    wav_bytes: bytes,
+    *,
+    session: aiohttp.ClientSession,
+    filename: str = "clip.wav",
+) -> str:
+    """
+    Transcribe with Whisper (large-v3 by default).
+    If the first pass misses the Dream wake word, retry in Russian — RU/UA
+    accents often get mangled when language is auto-detected as English.
+    """
+    if not config.GROQ_API_KEY:
+        raise AIError("GROQ_API_KEY not set.")
+
+    forced = config.GROQ_WHISPER_LANGUAGE or None
+    try:
+        text = await _whisper_once(
+            wav_bytes, session=session, filename=filename, language=forced
+        )
+    except aiohttp.ClientError as exc:
+        raise AIError("Could not reach Groq Whisper.") from exc
+
+    if forced or extract_wake_question(text) is not None:
+        return text
+
+    try:
+        ru = await _whisper_once(
+            wav_bytes, session=session, filename=filename, language="ru"
+        )
+    except (AIError, aiohttp.ClientError):
+        return text
+
+    if extract_wake_question(ru) is not None:
+        log.info("Whisper RU retry caught wake: %r → %r", text[:80], ru[:80])
+        return ru
+    if looks_cyrillic(ru) and not looks_cyrillic(text):
+        return ru
+    return text
 
 
 def _normalize_wake_transcript(transcript: str) -> str:
-    """Fix common ASR mangling of the Dream wake word at the start."""
+    """Rewrite Whisper mangling of the Dream wake word at the start."""
     text = (transcript or "").strip()
     if not text:
         return text
-    # "No, look" / "Know look" style starts are rare Dream mishears — leave them
-    # unless the first token is a known near-miss.
-    parts = re.split(r"([\s,.\!?:\-]+)", text, maxsplit=2)
-    if not parts:
-        return text
-    first = parts[0]
-    token = re.sub(r"[^\wа-яёА-ЯЁ]", "", first, flags=re.UNICODE).lower()
-    if token in _WAKE_FIRST_TOKENS and token not in {"dream", "dreams", "дрим", "дрима"}:
-        rest = "".join(parts[1:]) if len(parts) > 1 else ""
-        return f"Dream{rest}"
-    # "hey green," → Dream
+
+    text = re.sub(
+        r"(?i)^\s*(?:d\s*\.?\s*m\s*\.?\s*v|д\s*\.?\s*м\s*\.?\s*в)\b[\s,.\!?:\-]*",
+        "Dream, ",
+        text,
+        count=1,
+    )
+
     m = re.match(
-        r"(?i)^\s*(hey\s+|эй\s+|эй,\s*)?([a-zа-яё]+)\b(.*)$",
+        r"(?i)^\s*(hey\s+|эй\s+|эй,\s*|ok\s+)?"
+        r"([a-zа-яё0-9.]+)"
+        r"([\s,.\!?:\-]+)(.*)$",
+        text,
+        flags=re.DOTALL,
+    )
+    if m:
+        prefix, word, sep, rest = (
+            m.group(1) or "",
+            m.group(2),
+            m.group(3),
+            m.group(4) or "",
+        )
+        if _token_looks_like_dream(word):
+            return f"{prefix}Dream{sep}{rest}"
+        return text
+
+    m = re.match(
+        r"(?i)^\s*(hey\s+|эй\s+|эй,\s*)?([a-zа-яё0-9.]+)(.*)$",
         text,
         flags=re.DOTALL,
     )
     if m:
         prefix, word, rest = m.group(1) or "", m.group(2), m.group(3) or ""
-        w = word.lower()
-        if w in _WAKE_FIRST_TOKENS:
+        if _token_looks_like_dream(word):
             return f"{prefix}Dream{rest}"
     return text
 
@@ -383,13 +513,8 @@ def extract_wake_question(transcript: str) -> str | None:
         return None
     match = _WAKE_RE.search(text)
     if not match:
-        if not re.match(
-            r"(?i)^\s*(?:hey\s+|эй\s+)?(?:dream|дрим)\b", text
-        ):
-            return None
         match = re.match(
-            r"(?i)^\s*(?:hey\s+|эй\s+)?(?:dream(?:\s+team)?|дрим(?:\s+тим)?)"
-            r"[\s,.\!?:\-]*",
+            r"(?i)^\s*(?:hey\s+|эй\s+)?dream(?:\s+team)?[\s,.\!?:\-]*",
             text,
         )
         if not match:

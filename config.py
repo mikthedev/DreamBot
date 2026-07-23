@@ -62,9 +62,11 @@ GROQ_MODEL = (
     or "llama-3.3-70b-versatile"
 )
 GROQ_WHISPER_MODEL = (
-    os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo").strip()
-    or "whisper-large-v3-turbo"
+    os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3").strip()
+    or "whisper-large-v3"
 )
+# Optional: force Whisper language (ru / en / uk). Empty = auto-detect.
+GROQ_WHISPER_LANGUAGE = os.getenv("GROQ_WHISPER_LANGUAGE", "").strip().lower()
 
 # Free edge-tts — masculine default; Russian replies use TTS_VOICE_RU
 TTS_VOICE = os.getenv("TTS_VOICE", "en-US-GuyNeural").strip() or "en-US-GuyNeural"

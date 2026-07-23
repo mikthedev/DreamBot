@@ -54,9 +54,9 @@ OW_TIER_URL = "https://www.counterwatch.gg/stats/overwatch/tier-list"
 OW_TIER_INTERVAL_DAYS = max(1, int(os.getenv("OW_TIER_INTERVAL_DAYS", "14")))
 OW_TIER_CHECK_HOURS = max(1, int(os.getenv("OW_TIER_CHECK_HOURS", "24")))
 
-# Google Gemini (optional — /ask, @mention, /listen). Get a key at https://aistudio.google.com/apikey
+# Google Gemini (optional — /ask, @mention, /join). Get a key at https://aistudio.google.com/apikey
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
 
-# Free edge-tts voice for /listen spoken replies
+# Free edge-tts voice for /join spoken replies
 TTS_VOICE = os.getenv("TTS_VOICE", "en-US-JennyNeural").strip() or "en-US-JennyNeural"

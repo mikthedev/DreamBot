@@ -533,7 +533,7 @@ class GuildPlayer:
             self.voice = existing
             return existing
 
-        # Prefer VoiceRecvClient so /listen can share this connection
+        # Prefer VoiceRecvClient so /join can share this connection
         connect_kwargs: dict = {"reconnect": True, "self_deaf": True}
         try:
             from discord.ext import voice_recv
@@ -1077,5 +1077,9 @@ class MusicCog(commands.Cog):
                 "Use this in a server.", ephemeral=True
             )
             return
-        await self.get_player(interaction.guild_id).stop()
+        voice_ai = self.bot.get_cog("VoiceAICog")
+        if voice_ai is not None and hasattr(voice_ai, "_leave_voice"):
+            await voice_ai._leave_voice(interaction.guild_id)
+        else:
+            await self.get_player(interaction.guild_id).stop()
         await interaction.response.send_message("Left the voice channel.")

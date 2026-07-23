@@ -62,7 +62,7 @@ class DreamTeamBot(commands.Bot):
         if config.GEMINI_API_KEY:
             log.info("Gemini AI enabled (model=%s)", config.GEMINI_MODEL)
         else:
-            log.warning("GEMINI_API_KEY not set — /ask, @mention, and /listen AI disabled")
+            log.warning("GEMINI_API_KEY not set — /ask, @mention, and /join AI disabled")
 
     async def on_ready(self) -> None:
         # Sync to each guild only (instant). Clear globals so Discord doesn't show duplicates.

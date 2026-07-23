@@ -31,9 +31,45 @@ SAMPLE_WIDTH = 2
 SILENCE_SECONDS = 0.85
 MIN_UTTERANCE_SECONDS = 0.7
 MAX_UTTERANCE_SECONDS = 12.0
-RMS_THRESHOLD = 400
+RMS_THRESHOLD = 350
 WAKE_COOLDOWN_SECONDS = 4.0
+ALONE_LEAVE_SECONDS = 10.0
 NO_WAKE = "NO_WAKE"
+
+
+def _patch_voice_recv_router() -> None:
+    """Keep the packet router alive if a single Opus frame fails to decode."""
+    try:
+        from discord.ext.voice_recv import router as vr_router
+    except ImportError:
+        return
+
+    if getattr(vr_router.PacketRouter, "_dream_team_patched", False):
+        return
+
+    def _do_run_safe(self) -> None:  # type: ignore[no-untyped-def]
+        while not self._end_thread.is_set():
+            self.waiter.wait()
+            with self._lock:
+                for decoder in list(self.waiter.items):
+                    try:
+                        data = decoder.pop_data()
+                    except Exception as exc:
+                        log.debug("Skipping bad voice frame: %s", exc)
+                        try:
+                            decoder.reset()
+                        except Exception:
+                            pass
+                        continue
+                    if data is not None:
+                        try:
+                            self.sink.write(data.source, data)
+                        except Exception:
+                            log.exception("Sink write failed")
+
+    vr_router.PacketRouter._do_run = _do_run_safe  # type: ignore[method-assign]
+    vr_router.PacketRouter._dream_team_patched = True  # type: ignore[attr-defined]
+    log.info("Patched voice_recv packet router for Opus error resilience")
 
 WAKE_PROMPT = (
     "You are listening to a Discord voice clip from the Dream Team server.\n"
@@ -133,11 +169,16 @@ def _build_sink_class():
             self.cog = cog
             self.guild_id = guild_id
             self._buffers: dict[int, UtteranceBuffer] = defaultdict(UtteranceBuffer)
+            self._packets_seen = 0
 
         def wants_opus(self) -> bool:
+            # Library still DAVE-decrypts before handing us PCM when False.
             return False
 
         def write(self, user: discord.User | discord.Member | None, data) -> None:
+            self._packets_seen += 1
+            if self._packets_seen == 1:
+                log.info("Voice packets flowing in guild %s", self.guild_id)
             if user is None or getattr(user, "bot", False):
                 return
             if self.cog.is_paused(self.guild_id):
@@ -262,8 +303,10 @@ class VoiceAICog(commands.Cog):
         self._busy: set[int] = set()
         self._poll_task: asyncio.Task | None = None
         self._text_channel: dict[int, int] = {}
+        self._alone_timers: dict[int, asyncio.Task] = {}
 
     async def cog_load(self) -> None:
+        _patch_voice_recv_router()
         self._session = aiohttp.ClientSession()
         self._poll_task = asyncio.create_task(self._poll_loop())
 
@@ -276,6 +319,8 @@ class VoiceAICog(commands.Cog):
                 pass
         for guild_id in list(self._listening):
             await self._stop_listening(guild_id, leave=False)
+        for guild_id in list(self._alone_timers):
+            self._cancel_alone_timer(guild_id)
         if self._session and not self._session.closed:
             await self._session.close()
 
@@ -323,8 +368,21 @@ class VoiceAICog(commands.Cog):
                 log.info("Voice clip too large in guild %s — skipped", guild_id)
                 return
 
+            log.info(
+                "Processing voice clip in guild %s user %s (%s bytes wav)",
+                guild_id,
+                user_id,
+                len(wav),
+            )
+            await self._announce_status(guild_id, "Hearing you…")
             reply = await gemini_voice_reply(wav, session=self._session_or_raise())
             if not reply:
+                log.info("No wake word in clip (guild %s)", guild_id)
+                await self._announce_status(
+                    guild_id,
+                    "I heard you, but no **Dream** wake word — try: "
+                    "*Dream, was Genji patched?*",
+                )
                 return
 
             guild = self.bot.get_guild(guild_id)
@@ -338,11 +396,23 @@ class VoiceAICog(commands.Cog):
             await self._announce_text(guild_id, who, reply)
         except GeminiError as exc:
             log.warning("Voice AI: %s", exc)
+            await self._announce_status(guild_id, f"Voice AI error: {exc}")
         except Exception:
             log.exception("Voice AI utterance failed")
+            await self._announce_status(guild_id, "Voice AI failed — check bot logs.")
         finally:
             self._busy.discard(guild_id)
             self.pause_listening(guild_id, WAKE_COOLDOWN_SECONDS)
+
+    async def _announce_status(self, guild_id: int, text: str) -> None:
+        channel_id = self._text_channel.get(guild_id)
+        channel = self.bot.get_channel(channel_id) if channel_id else None
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            await channel.send(text, delete_after=12)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     async def _announce_text(self, guild_id: int, who: str, reply: str) -> None:
         channel_id = self._text_channel.get(guild_id)
@@ -422,10 +492,10 @@ class VoiceAICog(commands.Cog):
                 pass
 
     @app_commands.command(
-        name="listen",
+        name="join",
         description="Join your VC and answer when you say Dream …",
     )
-    async def listen_cmd(self, interaction: discord.Interaction) -> None:
+    async def join_cmd(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message(
                 "Use this in a server.", ephemeral=True
@@ -486,7 +556,21 @@ class VoiceAICog(commands.Cog):
             )
             return
 
-        listen_fn(sink)
+        def _after_listen(err: Exception | None) -> None:
+            if err:
+                log.warning("Listen stopped with error: %s", err)
+            # Auto-restart listen if we still expect to be listening
+            if interaction.guild_id in self._listening:
+
+                def _restart() -> None:
+                    asyncio.create_task(self._restart_listen(interaction.guild_id))
+
+                try:
+                    self.bot.loop.call_soon_threadsafe(_restart)
+                except RuntimeError:
+                    pass
+
+        listen_fn(sink, after=_after_listen)
         self._listening[interaction.guild.id] = sink
         if isinstance(interaction.channel, discord.TextChannel):
             self._text_channel[interaction.guild.id] = interaction.channel.id
@@ -497,19 +581,66 @@ class VoiceAICog(commands.Cog):
             if player is not None:
                 player.voice = vc
 
+        # Confirm DAVE session is ready (needed to decrypt voice on discord.py 2.7+)
+        conn = getattr(vc, "_connection", None)
+        dave = getattr(conn, "dave_session", None) if conn else None
+        dave_ver = getattr(conn, "dave_protocol_version", None) if conn else None
+        log.info(
+            "Listen started guild=%s dave_ready=%s dave_ver=%s",
+            interaction.guild.id,
+            bool(dave and getattr(dave, "ready", False)),
+            dave_ver,
+        )
+
         await interaction.followup.send(
-            f"Listening in **{channel.name}**.\n"
-            "Say **Dream**, then your question — e.g. "
-            "*Dream, was Genji patched?*\n"
-            "Use `/unlisten` to stop. Music and listen share the same VC.",
+            f"Joined **{channel.name}** — listening for **Dream** …\n"
+            "Example: *Dream, was Genji patched?*\n"
+            "Use `/disconnect` to leave.",
             ephemeral=True,
         )
 
+    async def _restart_listen(self, guild_id: int) -> None:
+        await asyncio.sleep(0.6)
+        if guild_id not in self._listening:
+            return
+        guild = self.bot.get_guild(guild_id)
+        if guild is None or guild.voice_client is None:
+            return
+        vc = guild.voice_client
+        if not vc.is_connected():
+            return
+        if getattr(vc, "is_listening", lambda: False)():
+            return
+        SinkCls = _build_sink_class()
+        sink = SinkCls(self, guild_id)
+        listen_fn = getattr(vc, "listen", None)
+        if not callable(listen_fn):
+            return
+
+        def _after(err: Exception | None) -> None:
+            if err:
+                log.warning("Listen stopped again: %s", err)
+            if guild_id in self._listening:
+                try:
+                    self.bot.loop.call_soon_threadsafe(
+                        lambda: asyncio.create_task(self._restart_listen(guild_id))
+                    )
+                except RuntimeError:
+                    pass
+
+        try:
+            listen_fn(sink, after=_after)
+            self._listening[guild_id] = sink
+            log.info("Re-started voice listen in guild %s", guild_id)
+            await self._announce_status(guild_id, "Reconnected voice listen.")
+        except Exception:
+            log.exception("Failed to restart listen in guild %s", guild_id)
+
     @app_commands.command(
-        name="unlisten",
-        description="Stop wake-word listening (stays in VC if music is playing)",
+        name="disconnect",
+        description="Leave the voice channel (stops music and Dream voice AI)",
     )
-    async def unlisten_cmd(self, interaction: discord.Interaction) -> None:
+    async def disconnect_cmd(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message(
                 "Use this in a server.", ephemeral=True
@@ -517,34 +648,101 @@ class VoiceAICog(commands.Cog):
             return
 
         guild_id = interaction.guild.id
-        was = guild_id in self._listening
-        music = self.bot.get_cog("MusicCog")
-        playing = False
-        if music is not None and hasattr(music, "get_player"):
-            player = music.get_player(guild_id)
-            playing = bool(player and player.current)
-
-        await self._stop_listening(guild_id, leave=not playing)
-
+        was_listening = guild_id in self._listening
         vc = interaction.guild.voice_client
-        if vc and vc.is_connected() and playing:
-            try:
-                await interaction.guild.change_voice_state(
-                    channel=vc.channel, self_deaf=True, self_mute=False
-                )
-            except Exception:
-                pass
+        was_connected = bool(vc and vc.is_connected())
 
-        if was:
+        await self._leave_voice(guild_id)
+
+        if was_connected or was_listening:
             await interaction.response.send_message(
-                "Stopped listening."
-                + (" Still in VC for music." if playing else ""),
-                ephemeral=True,
+                "Disconnected from voice.", ephemeral=True
             )
         else:
             await interaction.response.send_message(
-                "I wasn't listening.", ephemeral=True
+                "I'm not in a voice channel.", ephemeral=True
             )
+
+    async def _leave_voice(self, guild_id: int) -> None:
+        """Stop wake listening, stop music, and disconnect from VC."""
+        self._cancel_alone_timer(guild_id)
+
+        await self._stop_listening(guild_id, leave=False)
+
+        music = self.bot.get_cog("MusicCog")
+        if music is not None and hasattr(music, "get_player"):
+            player = music.get_player(guild_id)
+            if player is not None:
+                try:
+                    await player.stop()
+                    return
+                except Exception:
+                    log.exception("Music stop failed during disconnect")
+
+        guild = self.bot.get_guild(guild_id)
+        if guild and guild.voice_client and guild.voice_client.is_connected():
+            try:
+                await guild.voice_client.disconnect(force=True)
+            except Exception:
+                pass
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        # Re-check every guild voice channel the bot is in
+        guild = member.guild
+        vc = guild.voice_client
+        if vc is None or not vc.is_connected() or vc.channel is None:
+            self._cancel_alone_timer(guild.id)
+            return
+
+        if self._humans_in_channel(vc.channel) == 0:
+            self._schedule_alone_leave(guild.id)
+        else:
+            self._cancel_alone_timer(guild.id)
+
+    def _humans_in_channel(self, channel: discord.VoiceChannel | discord.StageChannel) -> int:
+        return sum(1 for m in channel.members if not m.bot)
+
+    def _cancel_alone_timer(self, guild_id: int) -> None:
+        task = self._alone_timers.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    def _schedule_alone_leave(self, guild_id: int) -> None:
+        if guild_id in self._alone_timers and not self._alone_timers[guild_id].done():
+            return
+        self._alone_timers[guild_id] = asyncio.create_task(
+            self._alone_leave_after(guild_id, ALONE_LEAVE_SECONDS)
+        )
+
+    async def _alone_leave_after(self, guild_id: int, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
+            vc = guild.voice_client
+            if vc is None or not vc.is_connected() or vc.channel is None:
+                return
+            if self._humans_in_channel(vc.channel) > 0:
+                return
+            log.info(
+                "Leaving VC in %s — alone for %.0fs",
+                guild.name,
+                delay,
+            )
+            await self._leave_voice(guild_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Alone-leave failed in guild %s", guild_id)
+        finally:
+            self._alone_timers.pop(guild_id, None)
 
 
 async def setup(bot: commands.Bot) -> None:

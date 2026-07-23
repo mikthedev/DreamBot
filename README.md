@@ -60,8 +60,8 @@ Setup that used to be separate slash commands (welcome channel, auto-role, names
 |---|---|
 | `/help` | How to use the bot |
 | `/ask <question>` | Ask Gemini AI (also works if you @mention the bot) |
-| `/listen` | Join VC; answer when you say **Dream**, … |
-| `/unlisten` | Stop wake-word listening |
+| `/join` | Join VC; answer when you say **Dream**, … |
+| `/disconnect` | Leave voice (stops music + Dream voice AI) |
 | `/setbirthday 15.03` | Save your birthday (`DD.MM` or `DD.MM.YYYY`) |
 | `/mybirthday` | Show your saved birthday |
 | `/clearbirthday` | Remove your birthday |
@@ -78,10 +78,12 @@ GEMINI_API_KEY=your_key_here
 # TTS_VOICE=en-US-JennyNeural
 ```
 
-3. Restart the bot. Use `/ask`, mention the bot, or `/listen` in voice.
+3. Restart the bot. Use `/ask`, mention the bot, or `/join` in voice.
 
-**Voice wake word:** join a VC → `/listen` → say *Dream, was Genji patched?*  
-The bot only runs STT after you finish speaking (silence), and only answers if it hears **Dream**. Spoken replies use free **edge-tts** (skipped while music is playing; text reply still posts in the channel where you ran `/listen`).
+**Voice wake word:** join a VC → `/join` → say *Dream, was Genji patched?*  
+The bot only runs STT after you finish speaking (silence), and only answers if it hears **Dream**. Spoken replies use free **edge-tts** (skipped while music is playing; text reply still posts in the channel where you ran `/join`). If everyone leaves the VC, the bot disconnects after **10 seconds**.
+
+> **Note:** Discord voice is E2EE (DAVE). Voice listen needs the patched `discord-ext-voice-recv` from `requirements.txt` (the `dave-decrypt` branch). Without it you get `OpusError: corrupted stream` and nothing happens.
 
 If an admin sets someone’s birthday to **today**, the celebration posts immediately in the birthday channel (and still runs daily at the configured hour).
 

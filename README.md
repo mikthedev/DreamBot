@@ -49,27 +49,39 @@ Only the **server owner** or members with **Administrator** / **Manage Server**:
 
 | Command | What it does |
 |---|---|
-| `/panel` | **Control panel** — buttons for setup, birthday preview & announce |
+| `/panel` | **Control panel** — channels, names, birthdays, Overwatch, onboarding, anniversary |
 | `/help` | Command guide (admins get a button into the panel) |
-| `/birthdayannounce` | Compose & post signup panel (edit text, @everyone / @role) |
-| `/birthdayannouncepreview` | Preview/edit that panel (only you see it) |
-| `/birthdays` | List all saved birthdays |
-| `/anniversarypreview` | Preview/edit yearly Dream Team anniversary (28.06.2017) |
-| `/anniversarypost` | Compose & post anniversary (for testing or manual post) |
-| `/setwelcome #channel` | Where join prompts are posted |
-| `/setautorole @Role` | Role given to new members |
-| `/setname @user Миша` | Set/fix someone’s real name + nickname |
-| `/setbirthdaychannel #channel` | Where birthday messages are posted |
-| `/syncnicks` | Force nickname sync now |
+
+Setup that used to be separate slash commands (welcome channel, auto-role, names, birthday signup, anniversary, Overwatch) lives in **`/panel`**.
 
 ### Everyone
 
 | Command | What it does |
 |---|---|
 | `/help` | How to use the bot |
+| `/ask <question>` | Ask Gemini AI (also works if you @mention the bot) |
+| `/listen` | Join VC; answer when you say **Dream**, … |
+| `/unlisten` | Stop wake-word listening |
 | `/setbirthday 15.03` | Save your birthday (`DD.MM` or `DD.MM.YYYY`) |
 | `/mybirthday` | Show your saved birthday |
 | `/clearbirthday` | Remove your birthday |
+
+### Gemini AI (optional)
+
+1. Create a free API key at [Google AI Studio](https://aistudio.google.com/apikey).
+2. Add to `.env`:
+
+```bash
+GEMINI_API_KEY=your_key_here
+# optional:
+# GEMINI_MODEL=gemini-2.0-flash
+# TTS_VOICE=en-US-JennyNeural
+```
+
+3. Restart the bot. Use `/ask`, mention the bot, or `/listen` in voice.
+
+**Voice wake word:** join a VC → `/listen` → say *Dream, was Genji patched?*  
+The bot only runs STT after you finish speaking (silence), and only answers if it hears **Dream**. Spoken replies use free **edge-tts** (skipped while music is playing; text reply still posts in the channel where you ran `/listen`).
 
 If an admin sets someone’s birthday to **today**, the celebration posts immediately in the birthday channel (and still runs daily at the configured hour).
 

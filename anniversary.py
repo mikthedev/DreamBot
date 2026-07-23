@@ -8,7 +8,6 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import discord
-from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
@@ -334,45 +333,3 @@ class AnniversaryCog(commands.Cog):
     async def before_check(self) -> None:
         await self.bot.wait_until_ready()
 
-    @app_commands.command(
-        name="anniversarypreview",
-        description="Admin: preview/edit the yearly Dream Team anniversary message",
-    )
-    async def anniversarypreview(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "Use this inside the server.", ephemeral=True
-            )
-            return
-        if not is_guild_manager(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True)
-            return
-        await open_anniversary_composer(
-            interaction, self.bot, channel=None, preview_only=True
-        )
-
-    @app_commands.command(
-        name="anniversarypost",
-        description="Admin: compose & post the anniversary announcement (also for testing)",
-    )
-    @app_commands.describe(channel="Where to post (default: this channel)")
-    async def anniversarypost(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "Use this inside the server.", ephemeral=True
-            )
-            return
-        if not is_guild_manager(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True)
-            return
-
-        target = channel
-        if target is None and isinstance(interaction.channel, discord.TextChannel):
-            target = interaction.channel
-        await open_anniversary_composer(
-            interaction, self.bot, channel=target, preview_only=False
-        )

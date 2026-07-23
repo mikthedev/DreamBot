@@ -533,7 +533,16 @@ class GuildPlayer:
             self.voice = existing
             return existing
 
-        self.voice = await channel.connect(reconnect=True, self_deaf=True)
+        # Prefer VoiceRecvClient so /listen can share this connection
+        connect_kwargs: dict = {"reconnect": True, "self_deaf": True}
+        try:
+            from discord.ext import voice_recv
+
+            connect_kwargs["cls"] = voice_recv.VoiceRecvClient
+        except ImportError:
+            pass
+
+        self.voice = await channel.connect(**connect_kwargs)
         await asyncio.sleep(0.5)
         return self.voice
 

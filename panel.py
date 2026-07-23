@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -106,15 +107,17 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
         name="Everyone",
         value=(
             "`/help`\n"
+            "`/ask` — Gemini chat (or @mention the bot)\n"
+            "`/listen` · `/unlisten` — voice AI (say **Dream**, …)\n"
             "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"
-            "`/play` · `/pause` · `/skip` · `/queue` · `/stop`"
+            "`/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave`"
         ),
         inline=False,
     )
     if is_admin:
         embed.add_field(
             name="Admins",
-            value="`/panel` — setup, names, birthdays, Overwatch patches, welcome",
+            value="`/panel` — channels, names, birthdays, Overwatch, onboarding, anniversary",
             inline=False,
         )
     return embed
@@ -698,6 +701,39 @@ class AdminHubView(discord.ui.View):
 
         refresh.callback = on_refresh
         self.add_item(refresh)
+
+        sync_btn = discord.ui.Button(
+            label="Sync nicknames", style=discord.ButtonStyle.primary, row=2
+        )
+
+        async def on_sync_nicks(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            await interaction.response.defer(ephemeral=True)
+            guild = interaction.guild
+            assert guild is not None
+            from nicknames import build_nickname, display_base
+
+            updated = 0
+            for row in self.bot.db.all_real_names(guild.id):
+                member = guild.get_member(row["user_id"])
+                if member is None or member.bot or member.id == guild.owner_id:
+                    continue
+                desired = build_nickname(display_base(member), row["real_name"])
+                if member.nick == desired:
+                    continue
+                try:
+                    await member.edit(nick=desired, reason="Panel nickname sync")
+                    updated += 1
+                    await asyncio.sleep(0.5)
+                except (discord.Forbidden, discord.HTTPException):
+                    continue
+            await interaction.followup.send(
+                f"Synced **{updated}** nickname(s).", ephemeral=True
+            )
+
+        sync_btn.callback = on_sync_nicks
+        self.add_item(sync_btn)
 
     def _add_welcome_controls(self) -> None:
         edit = discord.ui.Button(
@@ -1293,28 +1329,6 @@ class PanelCog(commands.Cog):
         await interaction.response.send_message(
             embed=hub.embed_for(interaction.guild),
             view=hub,
-            ephemeral=True,
-        )
-
-    @app_commands.command(
-        name="birthdays",
-        description="Admin: list all saved birthdays in this server",
-    )
-    async def birthdays_cmd(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "Use this inside the server.", ephemeral=True
-            )
-            return
-        if not is_guild_manager(interaction.user):
-            await interaction.response.send_message(
-                "Only the server owner or admins can view all birthdays.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            embed=birthdays_list_embed(interaction.guild, self.bot),
             ephemeral=True,
         )
 

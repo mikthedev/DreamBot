@@ -23,13 +23,13 @@ from overwatch_tierlist import OverwatchTierCog
 from onboarding import OnboardingView
 from panel import PanelCog
 from anniversary import AnniversaryCog
+from ai import AICog
+from voice_ai import VoiceAICog
 from birthday_signup import (
     BirthdaySignupView,
     OpenSignupModalView,
     SIGNUP_EMOJI,
     is_signup_message,
-    open_signup_composer,
-    require_admin as require_signup_admin,
 )
 
 log = logging.getLogger("dream_team")
@@ -54,10 +54,15 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(AnniversaryCog(self))
         await self.add_cog(MusicCog(self))
-        await self.add_cog(AdminCog(self))
         await self.add_cog(PanelCog(self))
         await self.add_cog(OverwatchPatchCog(self))
         await self.add_cog(OverwatchTierCog(self))
+        await self.add_cog(AICog(self))
+        await self.add_cog(VoiceAICog(self))
+        if config.GEMINI_API_KEY:
+            log.info("Gemini AI enabled (model=%s)", config.GEMINI_MODEL)
+        else:
+            log.warning("GEMINI_API_KEY not set — /ask, @mention, and /listen AI disabled")
 
     async def on_ready(self) -> None:
         # Sync to each guild only (instant). Clear globals so Discord doesn't show duplicates.
@@ -517,50 +522,6 @@ class BirthdayCog(commands.Cog):
         self.bot.db.clear_birthday(interaction.guild_id, interaction.user.id)
         await interaction.response.send_message("Birthday removed.", ephemeral=True)
 
-    @app_commands.command(
-        name="birthdayannounce",
-        description="Admin: compose & post a birthday signup panel (@ roles / everyone)",
-    )
-    @app_commands.describe(
-        channel="Where to post (default: this channel)",
-    )
-    async def birthdayannounce(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        err = require_signup_admin(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        target = channel
-        if target is None and isinstance(interaction.channel, discord.TextChannel):
-            target = interaction.channel
-        if target is None:
-            await interaction.response.send_message(
-                "Pick a text channel.", ephemeral=True
-            )
-            return
-
-        await open_signup_composer(
-            interaction, self.bot, channel=target, preview_only=False
-        )
-
-    @app_commands.command(
-        name="birthdayannouncepreview",
-        description="Admin: preview/edit the birthday signup panel (only you see it)",
-    )
-    async def birthdayannouncepreview(self, interaction: discord.Interaction) -> None:
-        err = require_signup_admin(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        await open_signup_composer(
-            interaction, self.bot, channel=None, preview_only=True
-        )
-
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         if payload.user_id == (self.bot.user.id if self.bot.user else None):
@@ -623,243 +584,6 @@ class BirthdayCog(commands.Cog):
     @check_birthdays.before_loop
     async def before_birthday_check(self) -> None:
         await self.bot.wait_until_ready()
-
-
-class AdminCog(commands.Cog):
-    def __init__(self, bot: DreamTeamBot) -> None:
-        self.bot = bot
-
-    def _deny_if_not_manager(self, interaction: discord.Interaction) -> str | None:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return "Use this command inside the server."
-        if not is_guild_manager(interaction.user):
-            return "Only the server owner or admins can use this."
-        return None
-
-    @app_commands.command(
-        name="setname",
-        description="Set a member's real name and update their nickname",
-    )
-    @app_commands.describe(
-        member="Who to rename",
-        real_name="Real name to show in parentheses",
-    )
-    async def setname(
-        self,
-        interaction: discord.Interaction,
-        member: discord.Member,
-        real_name: str,
-    ) -> None:
-        err = self._deny_if_not_manager(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        _ok, detail = await apply_real_name(
-            self.bot,
-            member,
-            real_name,
-            reason=f"Set by {interaction.user}",
-        )
-        await interaction.response.send_message(detail, ephemeral=True)
-
-    @app_commands.command(
-        name="setautorole",
-        description="Role automatically given to new members",
-    )
-    @app_commands.describe(role="Role to assign on join (omit to clear)")
-    async def setautorole(
-        self,
-        interaction: discord.Interaction,
-        role: discord.Role | None = None,
-    ) -> None:
-        err = self._deny_if_not_manager(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        self.bot.db.set_auto_role(interaction.guild_id, role.id if role else None)
-        if role:
-            await interaction.response.send_message(
-                f"New members will get {role.mention}.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message("Auto-role cleared.", ephemeral=True)
-
-    @app_commands.command(
-        name="setwelcome",
-        description="Channel used for welcome + name prompts",
-    )
-    @app_commands.describe(channel="Welcome channel (omit to clear)")
-    async def setwelcome(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        err = self._deny_if_not_manager(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        self.bot.db.set_welcome_channel(
-            interaction.guild_id,
-            channel.id if channel else None,
-        )
-        if channel:
-            await interaction.response.send_message(
-                f"Welcome prompts will go to {channel.mention}.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                "Welcome channel cleared (will try system channel / DMs).",
-                ephemeral=True,
-            )
-
-    @app_commands.command(
-        name="setbirthdaychannel",
-        description="Channel for birthday celebration messages",
-    )
-    @app_commands.describe(channel="Birthday channel (omit to clear)")
-    async def setbirthdaychannel(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        err = self._deny_if_not_manager(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        self.bot.db.set_birthday_channel(
-            interaction.guild_id,
-            channel.id if channel else None,
-        )
-        if channel:
-            await interaction.response.send_message(
-                f"Birthday messages will go to {channel.mention}.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                "Birthday channel cleared (falls back to welcome / system channel).",
-                ephemeral=True,
-            )
-
-    @app_commands.command(
-        name="setmusicchannel",
-        description="Channel for the live now-playing panel (cover art card)",
-    )
-    @app_commands.describe(channel="Music panel channel (omit to clear)")
-    async def setmusicchannel(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        err = self._deny_if_not_manager(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        if channel is None:
-            self.bot.db.set_now_playing_panel(interaction.guild_id, None, None)
-            await interaction.response.send_message(
-                "Now-playing panel cleared.", ephemeral=True
-            )
-            return
-
-        self.bot.db.set_now_playing_panel(interaction.guild_id, channel.id, None)
-        music = self.bot.get_cog("MusicCog")
-        if isinstance(music, MusicCog):
-            player = music.get_player(interaction.guild_id)
-            await music.refresh_now_playing_panel(
-                interaction.guild_id,
-                track=player.current,
-                queue_len=len(player.queue),
-                paused=bool(
-                    player._sync_voice() and player._sync_voice().is_paused()
-                ),
-            )
-
-        await interaction.response.send_message(
-            f"Now-playing panel will live in {channel.mention}. "
-            "This is the fancy card Discord allows for bots "
-            "(profile Rich Presence stays limited).",
-            ephemeral=True,
-        )
-
-    @app_commands.command(
-        name="testpresence",
-        description="Force a Rich Presence update (admin) to verify icons/text",
-    )
-    async def testpresence(self, interaction: discord.Interaction) -> None:
-        err = self._deny_if_not_manager(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        from rich_presence import DiscordRichPresence, update_presence
-        import time
-
-        app_id = self.bot.application_id or (
-            self.bot.user.id if self.bot.user else None
-        )
-        presence = DiscordRichPresence(
-            name="Dream Team Bot",
-            activity_type=discord.ActivityType.playing,
-            details="Competitive",
-            state="Playing Solo",
-            start_timestamp=int(time.time()),
-            end_timestamp=int(time.time()) + 15 * 60,
-            large_image_key="dreamteam",
-            large_image_text="Numbani",
-            small_image_key="youtube",
-            small_image_text="Rogue - Level 100",
-            party_id="ae488379-351d-4a4f-ad32-2b9b01c91657",
-            party_size=1,
-            party_max=5,
-            application_id=int(app_id) if app_id else None,
-        )
-        await update_presence(self.bot, presence)
-        await interaction.response.send_message(
-            "Presence forced.\n"
-            "• Member list: usually only shows short text for bots\n"
-            "• Click the bot profile to check for the activity card/icons\n"
-            "• Portal Visualizer only changes when you **select** image keys "
-            "in the dropdown (upload alone does nothing)",
-            ephemeral=True,
-        )
-
-    @app_commands.command(
-        name="syncnicks",
-        description="Force a nickname sync for this server now",
-    )
-    async def syncnicks(self, interaction: discord.Interaction) -> None:
-        err = self._deny_if_not_manager(interaction)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        guild = interaction.guild
-        updated = 0
-        rows = self.bot.db.all_real_names(guild.id)
-        for row in rows:
-            member = guild.get_member(row["user_id"])
-            if member is None or member.bot or member.id == guild.owner_id:
-                continue
-            desired = build_nickname(display_base(member), row["real_name"])
-            if member.nick == desired:
-                continue
-            try:
-                await member.edit(nick=desired, reason="Manual nickname sync")
-                updated += 1
-                await asyncio.sleep(0.5)
-            except (discord.Forbidden, discord.HTTPException):
-                continue
-
-        await interaction.followup.send(f"Synced {updated} nickname(s).", ephemeral=True)
 
 
 def main() -> None:

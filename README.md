@@ -34,17 +34,15 @@ If the channel empties, the bot leaves after **10 seconds**.
 
 ## Dream AI
 
-**100% free** — Llama on [Groq](https://console.groq.com/keys) (no Google billing). Whisper for voice, edge-tts for speech.
+**100% free** — Llama on [Groq](https://console.groq.com/keys) (no Google billing). Whisper for voice, edge-tts for speech (masculine EN / RU voices).
 
 | How | What happens |
 |---|---|
-| `/ask …` | Text chat in an embed |
+| `/ask …` | Short casual chat |
 | @mention the bot | Same, in the channel |
-| `/join` then say **Dream, …** | Hears you in VC, answers out loud (and posts text) |
+| `/join` then say **Dream, …** | Voice answers (understands Russian; wake word stays **Dream**) |
 
-Example: *Dream, was Genji patched?*
-
-`/disconnect` (or `/leave`) stops voice AI and music. Wake word only — casual talk without **Dream** is ignored.
+Overwatch balance questions use the bot’s live + archived patch notes — e.g. *Dream, was Genji nerfed?* → short take, then offer details; say **yes** / **да** to hear the highlights.
 
 ---
 

@@ -64,5 +64,11 @@ GROQ_WHISPER_MODEL = (
     or "whisper-large-v3-turbo"
 )
 
-# Free edge-tts voice for /join spoken replies
-TTS_VOICE = os.getenv("TTS_VOICE", "en-US-JennyNeural").strip() or "en-US-JennyNeural"
+# Free edge-tts — masculine default; Russian replies use TTS_VOICE_RU
+TTS_VOICE = os.getenv("TTS_VOICE", "en-US-GuyNeural").strip() or "en-US-GuyNeural"
+TTS_VOICE_RU = (
+    os.getenv("TTS_VOICE_RU", "ru-RU-DmitryNeural").strip() or "ru-RU-DmitryNeural"
+)
+# Slightly more expressive delivery
+TTS_RATE = os.getenv("TTS_RATE", "+8%").strip() or "+8%"
+TTS_PITCH = os.getenv("TTS_PITCH", "+4Hz").strip() or "+4Hz"

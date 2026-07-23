@@ -19,7 +19,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
-from ai import AIError, ai_configured, voice_reply_from_wav
+from ai import AIError, ai_configured, looks_cyrillic, voice_reply_from_wav
 
 log = logging.getLogger("dream_team.voice_ai")
 
@@ -224,7 +224,17 @@ def _build_sink_class():
 async def synthesize_speech(text: str, out_path: Path) -> Path:
     import edge_tts
 
-    communicate = edge_tts.Communicate(text, config.TTS_VOICE)
+    # Masculine + a bit more punchy; Russian → Dmitry
+    if looks_cyrillic(text):
+        voice = config.TTS_VOICE_RU
+    else:
+        voice = config.TTS_VOICE
+    communicate = edge_tts.Communicate(
+        text,
+        voice,
+        rate=config.TTS_RATE,
+        pitch=config.TTS_PITCH,
+    )
     await communicate.save(str(out_path))
     return out_path
 
@@ -310,13 +320,20 @@ class VoiceAICog(commands.Cog):
                 len(wav),
             )
             await self._announce_status(guild_id, "Hearing you…")
-            reply = await voice_reply_from_wav(wav, session=self._session_or_raise())
+            reply = await voice_reply_from_wav(
+                wav,
+                session=self._session_or_raise(),
+                bot=self.bot,
+                guild_id=guild_id,
+                user_id=user_id,
+            )
             if not reply:
                 log.info("No wake word in clip (guild %s)", guild_id)
                 await self._announce_status(
                     guild_id,
                     "I heard you, but no **Dream** wake word — try: "
-                    "*Dream, was Genji patched?*",
+                    "*Dream, was Genji patched?* "
+                    "(after I offer details you can just say **yes** / **да**)",
                 )
                 return
 

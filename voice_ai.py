@@ -33,13 +33,13 @@ SAMPLE_RATE = 48000
 CHANNELS = 2
 SAMPLE_WIDTH = 2
 # Wait for a clear end-of-phrase pause, but keep it snappy for voice latency.
-SILENCE_SECONDS = 1.1
-MIN_UTTERANCE_SECONDS = 0.7
+SILENCE_SECONDS = 0.65
+MIN_UTTERANCE_SECONDS = 0.45
 MAX_UTTERANCE_SECONDS = 12.0
 RMS_THRESHOLD = 420
 # Clip must have enough real speech (not just noise spikes)
-MIN_VOICED_RATIO = 0.22
-WAKE_COOLDOWN_SECONDS = 1.8
+MIN_VOICED_RATIO = 0.18
+WAKE_COOLDOWN_SECONDS = 0.6
 ALONE_LEAVE_SECONDS = 10.0
 # Leave VC if nobody wakes Dream with the wake word
 IDLE_LEAVE_SECONDS = 150.0  # 2.5 minutes
@@ -443,11 +443,9 @@ class VoiceAICog(commands.Cog):
             self._bump_idle_timer(guild_id)
             reply = (turn.reply or "").strip()
             if reply:
-                # Speak + private transcript (join user only) in parallel
-                await asyncio.gather(
-                    self._speak(guild, reply),
-                    self._announce_text(guild_id, who, reply),
-                )
+                # Speak first; transcript is secondary (don't add Discord RTT)
+                asyncio.create_task(self._announce_text(guild_id, who, reply))
+                await self._speak(guild, reply)
             if turn.leave:
                 await self._leave_voice(guild_id)
                 return
@@ -541,7 +539,7 @@ class VoiceAICog(commands.Cog):
                 log.info("Skipping TTS while music is playing in %s", guild.name)
                 return
 
-        self.pause_listening(guild.id, 30.0)
+        self.pause_listening(guild.id, 12.0)
         tmp = Path(tempfile.mkdtemp(prefix="dream_tts_"))
         mp3 = tmp / "reply.mp3"
         try:
@@ -714,8 +712,8 @@ class VoiceAICog(commands.Cog):
         await interaction.followup.send(
             f"Listening in **{channel.name}**. Say **Dream, …** to talk "
             f"(~90s follow-ups without repeating Dream). "
-            f"**Dream, leave** / **thank Dream** to exit (EN/RU/UK). "
-            f"Idle 2.5 min → I leave. "
+            f"To leave: **Dream leave** / **disconnect** / **выйди** / **вийди** / "
+            f"**thank Dream** (EN/RU/UK). Idle 2.5 min → I leave. "
             f"Replies show only to you. Use `/disconnect` anytime.",
             ephemeral=True,
         )

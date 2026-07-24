@@ -61,14 +61,11 @@ GROQ_MODEL = (
     os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
     or "llama-3.3-70b-versatile"
 )
-# Force whisper-large-v3 (best accuracy on Groq). Turbo is faster but worse WER.
+# Default turbo for lower voice latency; set GROQ_WHISPER_MODEL=whisper-large-v3 for max accuracy
 GROQ_WHISPER_MODEL = (
-    os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3").strip()
-    or "whisper-large-v3"
+    os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo").strip()
+    or "whisper-large-v3-turbo"
 )
-if GROQ_WHISPER_MODEL == "whisper-large-v3-turbo":
-    # Accuracy matters more than latency for Dream wake + hero names
-    GROQ_WHISPER_MODEL = "whisper-large-v3"
 # Optional: force Whisper language (ru / en / uk). Empty = auto-detect.
 GROQ_WHISPER_LANGUAGE = os.getenv("GROQ_WHISPER_LANGUAGE", "").strip().lower()
 

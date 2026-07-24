@@ -314,43 +314,98 @@ def leave_goodbye(lang: str, *, thanks: bool) -> str:
     return "Alright, leaving."
 
 
-_LEAVE_CMD_RE = re.compile(
-    r"(?i)^\s*(?:please\s+)?(?:"
-    r"leave|disconnect|go\s+away|get\s+out|"
-    r"выйди|выйти|уходи|отключись|покинь|"
-    r"вийди|піди\s+геть|виходь|залиши"
-    r")(?:\s+please)?\s*[.!]?\s*$"
+# Clear leave / disconnect intents (EN / RU / UK)
+_LEAVE_STRONG_RE = re.compile(
+    r"(?i)(?:"
+    r"\b(?:please\s+|just\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
+    r"(?:leave|disconnect|disconnected?|go\s+away|get\s+out|stop\s+listening|"
+    r"drop\s+out|hop\s+off|log\s+off|sign\s+off|exit|quit|"
+    r"leave\s+(?:the\s+)?(?:voice|channel|vc|chat|call|server)|"
+    r"disconnect\s+(?:from\s+)?(?:voice|the\s+channel|vc|chat|call)|"
+    r"you\s+can\s+(?:go|leave)|go\s+ahead\s+and\s+leave|"
+    r"see\s+ya|see\s+you(?:\s+later)?|bye\s*bye|good\s*bye|goodbye|"
+    r"shut\s+down|power\s+off|kick\s+yourself)\b|"
+    # Russian
+    r"\b(?:пожалуйста\s+|можешь\s+|можешь\s+пожалуйста\s+)?"
+    r"(?:выйди|выйти|уходи|уйди|отключись|отключи|покинь|проваливай|"
+    r"выйди\s+из\s+(?:войса|голосового|канала|чата)|"
+    r"отключись\s+(?:от\s+)?(?:войса|канала)|"
+    r"покинь\s+(?:канал|войс)|хватит\s+слушать|"
+    r"до\s+свидания|прощай)\b|"
+    # Ukrainian
+    r"\b(?:будь\s+ласка\s+|можеш\s+)?"
+    r"(?:вийди|вийти|уходи|піди\s+геть|виходь|залиши|відключись|відключи|"
+    r"вийди\s+з\s+(?:войсу|голосового|каналу|чату)|"
+    r"відключись\s+(?:від\s+)?(?:войсу|каналу)|"
+    r"покинь\s+(?:канал|войс)|до\s+побачення|бувай)\b"
+    r")"
+)
+
+# Soft bye — only after wake / active convo (too easy to false-trigger alone)
+_LEAVE_SOFT_RE = re.compile(
+    r"(?i)^\s*(?:(?:hey\s+|эй\s+)?)?(?:"
+    r"bye|cya|later|peace|"
+    r"пока|вс[её]|хватит|"
+    r"бувай|все"
+    r")\s*[.!]?\s*$"
 )
 
 _THANKS_LEAVE_RE = re.compile(
-    r"(?i)^\s*(?:(?:hey\s+|эй\s+)?)?(?:"
-    r"thanks?(?:\s+you)?(?:\s+so\s+much)?\s+(?:dream|дрим|дрім)|"
-    r"thank\s+(?:you\s+)?(?:dream|дрим|дрім)|ty\s+(?:dream|дрим|дрім)|"
-    r"спасибо(?:\s+тебе)?\s+(?:дрим|dream|дрім)|"
-    r"благодарю\s+(?:дрим|dream|дрім)|"
-    r"дякую(?:\s+тобі)?\s+(?:дрім|dream|дрим)"
-    r")\s*[.!]?\s*$"
+    r"(?i)\b(?:"
+    r"thanks?(?:\s+you)?(?:\s+so\s+much)?(?:\s+(?:dream|дрим|дрім))?|"
+    r"thank\s+(?:you\s+)?(?:dream|дрим|дрім)|ty(?:\s+(?:dream|дрим|дрім))?|"
+    r"cheers(?:\s+(?:dream|дрим|дрім))?|"
+    r"спасибо(?:\s+(?:тебе|большое))?(?:\s+(?:дрим|dream|дрім))?|"
+    r"благодарю(?:\s+(?:дрим|dream|дрім))?|"
+    r"дякую(?:\s+(?:тобі|гарно))?(?:\s+(?:дрім|dream|дрим))?"
+    r")\b"
 )
 
-# After wake word stripped: "thanks" / "спасибо" alone still counts
+# After wake word stripped: bare thanks still counts
 _THANKS_AFTER_WAKE_RE = re.compile(
     r"(?i)^\s*(?:"
     r"thanks?(?:\s+you)?(?:\s+so\s+much)?|"
-    r"thank\s+you|ty|"
-    r"спасибо(?:\s+тебе)?|благодарю|дякую(?:\s+тобі)?"
+    r"thank\s+you|ty|cheers|"
+    r"спасибо(?:\s+(?:тебе|большое))?|благодарю|"
+    r"дякую(?:\s+(?:тобі|гарно))?"
     r")\s*[.!]?\s*$"
 )
 
 
-def is_leave_command(text: str) -> bool:
-    return bool(_LEAVE_CMD_RE.match((text or "").strip()))
+def is_leave_command(text: str, *, after_wake: bool = False) -> bool:
+    t = (text or "").strip()
+    if not t or len(t) > 100:
+        return False
+    # Don't treat game talk as leave ("did he leave the meta?")
+    if re.search(
+        r"(?i)\b(meta|patch|nerf|buff|hero|гендж|tracer|doomfist|патч|нерф|бафф)\b",
+        t,
+    ):
+        return False
+    if len(t.split()) > 14:
+        return False
+    if _LEAVE_STRONG_RE.search(t):
+        return True
+    if after_wake and _LEAVE_SOFT_RE.match(t):
+        return True
+    return False
 
 
 def is_thanks_leave_command(text: str, *, after_wake: bool = False) -> bool:
     t = (text or "").strip()
+    if not t or len(t.split()) > 12:
+        return False
     if after_wake and _THANKS_AFTER_WAKE_RE.match(t):
         return True
-    return bool(_THANKS_LEAVE_RE.match(t))
+    # Prefer thanks that mention Dream, or short thanks-only lines
+    if _THANKS_LEAVE_RE.search(t):
+        if re.search(r"(?i)\b(dream|дрим|дрім)\b", t):
+            return True
+        if len(t.split()) <= 5 and _THANKS_AFTER_WAKE_RE.match(t):
+            return True
+        if after_wake:
+            return True
+    return False
 
 
 @dataclass
@@ -574,12 +629,13 @@ async def generate_reply(
 # Whisper vocabulary bias — correct spellings so STT hears them (not post-hoc rewrites).
 # Keep under Groq's ~224-token prompt limit.
 WHISPER_VOCAB_PROMPT = (
-    "Dream. Overwatch heroes spelled: Ana, Ashe, Baptiste, Bastion, Brigitte, "
-    "Cassidy, D.Va, Doomfist, Echo, Freja, Genji, Hanzo, Hazard, Illari, Juno, "
-    "Junkrat, Junker Queen, Kiriko, Lifeweaver, Lúcio, Mauga, Mei, Mercy, Moira, "
-    "Orisa, Pharah, Ramattra, Reaper, Reinhardt, Roadhog, Sigma, Sojourn, "
-    "Soldier 76, Sombra, Symmetra, Torbjörn, Tracer, Venture, Widowmaker, Winston, "
-    "Wrecking Ball, Zarya, Zenyatta. Wake word: Dream."
+    "Dream. Leave. Disconnect. Thank you. "
+    "Overwatch: Ana, Ashe, Baptiste, Bastion, Brigitte, Cassidy, D.Va, Doomfist, "
+    "Echo, Freja, Genji, Hanzo, Hazard, Illari, Junkrat, Junker Queen, Kiriko, "
+    "Lifeweaver, Lúcio, Mauga, Mei, Mercy, Moira, Orisa, Pharah, Ramattra, Reaper, "
+    "Reinhardt, Roadhog, Sigma, Sojourn, Soldier 76, Sombra, Tracer, Widowmaker, "
+    "Winston, Wrecking Ball, Zarya, Zenyatta. "
+    "Russian: выйди, уходи, спасибо. Ukrainian: вийди, дякую. Wake word: Dream."
 )
 
 
@@ -761,29 +817,34 @@ async def transcribe_audio(
     else:
         lang_code = None
 
-    need_lock = lang_code and (
-        forced
-        or first.avg_logprob < -0.30
-        or extract_wake_question(first.text) is None
-        or (script == "latin" and first.language not in {None, "en", "english"})
+    # Second Whisper pass only when confidence is poor or language label
+    # clearly disagrees with the script — dual STT doubles latency.
+    already = bool(forced and lang_code and forced == lang_code)
+    need_lock = bool(
+        lang_code
+        and not already
+        and (
+            first.avg_logprob < -0.45
+            or (
+                script == "latin"
+                and first.language not in {None, "en", "english"}
+            )
+        )
     )
     if need_lock:
-        # Skip if we already ran with this exact language
-        already = forced == lang_code
-        if not already:
-            try:
-                locked = await _whisper_once(
-                    wav_bytes,
-                    session=session,
-                    filename=filename,
-                    language=lang_code,
-                )
-                if not (
-                    locked.no_speech >= 0.55 or _looks_like_hallucination(locked.text)
-                ):
-                    candidates.append(locked)
-            except (AIError, aiohttp.ClientError):
-                pass
+        try:
+            locked = await _whisper_once(
+                wav_bytes,
+                session=session,
+                filename=filename,
+                language=lang_code,
+            )
+            if not (
+                locked.no_speech >= 0.55 or _looks_like_hallucination(locked.text)
+            ):
+                candidates.append(locked)
+        except (AIError, aiohttp.ClientError):
+            pass
 
     # Never prefer a Cyrillic pass over a clear Latin one (EN≠UK/RU swap)
     latin_ok = [
@@ -1135,14 +1196,15 @@ async def voice_reply_from_wav(
     sess = peek_session(guild_id, user_id)
     raw_t = transcript.strip()
 
-    # "Thank Dream" / "дякую Dream" even if wake parsing is odd
-    if is_thanks_leave_command(raw_t):
+    # "Thank Dream" / leave phrases on the full transcript
+    if is_thanks_leave_command(raw_t) or is_leave_command(raw_t):
         lang = detect_user_language(
             raw_t, fallback=(sess.last_lang if sess else None)
         )
         touch_session(guild_id, user_id, last_lang=lang)
+        thanks = is_thanks_leave_command(raw_t)
         return VoiceTurnResult(
-            reply=leave_goodbye(lang, thanks=True), leave=True
+            reply=leave_goodbye(lang, thanks=thanks), leave=True
         )
 
     wake_q = extract_wake_question(transcript)
@@ -1156,7 +1218,7 @@ async def voice_reply_from_wav(
         touch_session(guild_id, user_id)
     elif sess is not None and (
         _looks_like_followup(transcript)
-        or is_leave_command(raw_t)
+        or is_leave_command(raw_t, after_wake=True)
         or is_thanks_leave_command(raw_t, after_wake=True)
     ):
         # Same user, still in the post-wake conversation window
@@ -1175,7 +1237,8 @@ async def voice_reply_from_wav(
     thanks = is_thanks_leave_command(
         question, after_wake=from_wake or in_convo
     )
-    if thanks or is_leave_command(question):
+    leave = is_leave_command(question, after_wake=from_wake or in_convo)
+    if thanks or leave:
         bye = leave_goodbye(lang, thanks=bool(thanks))
         touch_session(guild_id, user_id, last_lang=lang)
         return VoiceTurnResult(reply=bye, leave=True)

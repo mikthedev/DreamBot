@@ -282,53 +282,62 @@ async def fetch_meta_summary(
 
 def _pick_card_text(pick: MetaPick) -> str:
     lines = [
-        f"**{pick.name}** · Tier {pick.tier}",
-        f"**{pick.win_rate}** win",
+        f"**{pick.name}** · Tier {pick.tier} · **{pick.win_rate}** win",
     ]
     if pick.why:
         lines.append(pick.why)
     if pick.scores:
-        bits = " · ".join(f"{k} `{v}`" for k, v in pick.scores.items())
+        # Short labels keep the scoreboard on one line
+        short = {
+            "Win rate": "Win",
+            "Consistency": "Cons",
+            "Vs meta": "Meta",
+            "Synergy": "Syn",
+            "Confidence": "Conf",
+        }
+        bits = " · ".join(
+            f"{short.get(k, k)} `{v}`" for k, v in pick.scores.items()
+        )
         lines.append(bits)
     return "\n".join(lines)
 
 
-def _mention_card_text(m: MetaMention) -> str:
-    lines = [
-        f"**{m.name}** · **{m.win_rate}**",
-        f"_{m.kind}_",
-    ]
+def _mention_line(m: MetaMention) -> str:
+    kind = {
+        "Rank-specific": "Rank",
+        "Map pool pick": "Maps",
+        "Counter pick": "Counter",
+    }.get(m.kind, m.kind)
+    line = f"**{m.name}** · **{m.win_rate}** · _{kind}_"
     if m.note:
-        lines.append(m.note)
+        line += f" — {m.note}"
+    return line
+
+
+def _mentions_block(mentions: list[MetaMention]) -> str:
+    if not mentions:
+        return ""
+    lines = ["**Honourable**", *(_mention_line(m) for m in mentions)]
     return "\n".join(lines)
 
 
 def build_meta_layouts(
     summary: MetaSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
+    """
+    One message only: header + 3 role containers.
+    Top pick keeps a portrait card; honourable mentions stay compact text
+    so we never spill into thread follow-ups.
+    """
     date_label = summary.updated or "latest"
     if preview:
         header = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
     else:
         header = f"**[{date_label}]({summary.url})**"
-    header += "\n_Best one-trick per role · Counterwatch_"
+    header += "\n_Best one-trick per role_"
 
-    BUDGET = 38
-    HERO_COST = 3
-    views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(header))
-
-    def flush() -> None:
-        nonlocal view
-        views.append(view)
-        view = discord.ui.LayoutView(timeout=None)
-        cont = (
-            f"🧪 **Preview** · **[{date_label}]({summary.url})** · cont."
-            if preview
-            else f"**[{date_label}]({summary.url})** · cont."
-        )
-        view.add_item(discord.ui.TextDisplay(cont))
 
     for role in ROLE_ORDER:
         pick = summary.roles.get(role)
@@ -336,11 +345,6 @@ def build_meta_layouts(
             continue
         colour = ROLE_COLOR.get(role, OW_ORANGE)
         label = ROLE_HEADER.get(role, role)
-
-        # Role container needs title + top pick (+ optional mentions)
-        needed = 1 + 1 + HERO_COST
-        if view._total_children + needed > BUDGET:
-            flush()
 
         container = discord.ui.Container(accent_colour=colour)
         view.add_item(container)
@@ -357,51 +361,23 @@ def build_meta_layouts(
         else:
             container.add_item(discord.ui.TextDisplay(card))
 
-        if pick.mentions:
-            if view._total_children + 1 <= BUDGET:
-                container.add_item(
-                    discord.ui.Separator(
-                        visible=True,
-                        spacing=discord.SeparatorSpacing.small,
-                    )
+        mentions = _mentions_block(pick.mentions)
+        if mentions:
+            container.add_item(
+                discord.ui.Separator(
+                    visible=True,
+                    spacing=discord.SeparatorSpacing.small,
                 )
-                container.add_item(
-                    discord.ui.TextDisplay("**Honourable mentions**")
-                )
+            )
+            container.add_item(discord.ui.TextDisplay(mentions))
 
-            for i, mention in enumerate(pick.mentions):
-                if view._total_children + HERO_COST > BUDGET:
-                    flush()
-                    container = discord.ui.Container(accent_colour=colour)
-                    view.add_item(container)
-                    container.add_item(
-                        discord.ui.TextDisplay(f"**{label}** · mentions")
-                    )
-
-                mcard = _mention_card_text(mention)
-                if mention.icon_url:
-                    container.add_item(
-                        discord.ui.Section(
-                            mcard,
-                            accessory=discord.ui.Thumbnail(mention.icon_url),
-                        )
-                    )
-                else:
-                    container.add_item(discord.ui.TextDisplay(mcard))
-
-                if (
-                    i < len(pick.mentions) - 1
-                    and view._total_children + 1 + HERO_COST <= BUDGET
-                ):
-                    container.add_item(
-                        discord.ui.Separator(
-                            visible=True,
-                            spacing=discord.SeparatorSpacing.small,
-                        )
-                    )
-
-    views.append(view)
-    return views
+    # Must stay a single starter message (forum "comments" = follow-ups).
+    if view._total_children > 40:
+        log.warning(
+            "META layout has %s components (cap 40) — content may fail to send",
+            view._total_children,
+        )
+    return [view]
 
 
 def build_meta_embeds(
@@ -422,9 +398,9 @@ def build_meta_embeds(
         if pick is None:
             continue
         body = [_pick_card_text(pick)]
-        if pick.mentions:
-            body.append("**Honourable mentions**")
-            body.extend(_mention_card_text(m) for m in pick.mentions)
+        mentions = _mentions_block(pick.mentions)
+        if mentions:
+            body.append(mentions)
         emb = discord.Embed(
             title=ROLE_HEADER.get(role, role),
             description="\n\n".join(body)[:4096],

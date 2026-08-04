@@ -812,7 +812,7 @@ def build_patch_layouts(
     elif archive:
         header = f"📜 **Archive** · **[{date_label}]({summary.url})**"
     else:
-        header = f"**Overwatch** · **[{date_label}]({summary.url})**"
+        header = f"**[{date_label}]({summary.url})**"
 
     if not summary.heroes:
         view = discord.ui.LayoutView(timeout=None)
@@ -832,12 +832,13 @@ def build_patch_layouts(
         nonlocal view
         views.append(view)
         view = discord.ui.LayoutView(timeout=None)
-        prefix = "📜 **Archive**" if archive else "**Overwatch**"
-        view.add_item(
-            discord.ui.TextDisplay(
-                f"{prefix} · **[{date_label}]({summary.url})** · cont."
-            )
-        )
+        if archive:
+            cont = f"📜 **Archive** · **[{date_label}]({summary.url})** · cont."
+        elif preview:
+            cont = f"🧪 **Preview** · **[{date_label}]({summary.url})** · cont."
+        else:
+            cont = f"**[{date_label}]({summary.url})** · cont."
+        view.add_item(discord.ui.TextDisplay(cont))
 
     for role in ROLE_ORDER:
         heroes = by_role.get(role, [])

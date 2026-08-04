@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Sequence
 
 import discord
@@ -19,6 +20,7 @@ OW_CHANNEL_TYPES = (
 # Prefer the server's emoji tags; never invent plain "Patch" / "Tier"
 OW_PATCH_TAG_NAMES = ("Patch Notes",)
 OW_TIER_TAG_NAMES = ("Tier List",)
+OW_META_TAG_NAMES = ("META",)
 # Bot-created leftovers to strip when cleaning a forum
 OW_PLAIN_TAGS_TO_REMOVE = frozenset({"patch", "tier"})
 
@@ -38,22 +40,18 @@ def forum_thread_name(title: str) -> str:
 
 
 def patch_thread_title(*, date: str | None = None, title: str | None = None) -> str:
-    """Forum list already shows the date + Patch Notes tag — keep the title short."""
-    raw = (title or "").strip()
-    # Blizzard titles are often "Overwatch Retail Patch Notes – July 30, 2026"
-    for prefix in (
-        "Overwatch Retail Patch Notes",
-        "Overwatch Patch Notes",
-        "Patch Notes",
-    ):
-        if raw.casefold().startswith(prefix.casefold()):
-            raw = raw[len(prefix) :].lstrip(" –—-:·|")
-            break
-    if date and raw and date.casefold() in raw.casefold():
-        raw = ""
-    if not raw:
-        raw = "Hero Balance Update"
-    return forum_thread_name(raw)
+    """Tag already says Patch Notes — keep a short title with the date for freshness."""
+    label = (date or "").strip()
+    if not label and title:
+        m = re.search(
+            r"([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+            title,
+        )
+        if m:
+            label = m.group(1)
+    if label:
+        return forum_thread_name(f"Hero Balance ({label})")
+    return forum_thread_name("Hero Balance")
 
 
 def tier_thread_title(*, season: str | None, updated: str | None = None) -> str:
@@ -63,29 +61,48 @@ def tier_thread_title(*, season: str | None, updated: str | None = None) -> str:
     return forum_thread_name("Tierlist")
 
 
+def meta_thread_title(*, season: str | None) -> str:
+    if season:
+        return forum_thread_name(f"Best to main · Season {season}")
+    return forum_thread_name("Best to main")
+
+
 async def resolve_forum_tags(
     forum: discord.ForumChannel, names: Sequence[str]
 ) -> list[discord.ForumTag]:
-    """Match existing tags by name only — never create new ones."""
+    """Match existing tags by name; create META (🎮) if that tag is requested and missing."""
     if not names:
         return []
-    available = list(forum.available_tags)
+    available = {t.name.casefold(): t for t in forum.available_tags}
+    # Also index without leading emoji in the name field
     resolved: list[discord.ForumTag] = []
     for want in names:
         want_cf = want.casefold()
-        tag = next((t for t in available if t.name.casefold() == want_cf), None)
+        tag = available.get(want_cf)
         if tag is None:
-            # e.g. want "Patch Notes" → match a tag whose name contains that phrase
-            tag = next(
-                (t for t in available if want_cf in t.name.casefold()),
-                None,
-            )
+            # strip game-controller emoji prefix variants: "🎮META" / "🎮 META"
+            for t in forum.available_tags:
+                bare = re.sub(r"^[\W_]+", "", t.name).casefold()
+                if bare == want_cf or want_cf in t.name.casefold():
+                    tag = t
+                    break
+        if tag is None and want_cf == "meta":
+            try:
+                tag = await forum.create_tag(
+                    name="META",
+                    emoji="🎮",
+                    reason="OW META / best one-tricks posts",
+                )
+                available[tag.name.casefold()] = tag
+                log.info("Created forum tag META in #%s", forum.name)
+            except discord.HTTPException as exc:
+                log.warning("Could not create META tag in #%s: %s", forum.name, exc)
         if tag is None:
             log.warning(
                 "Forum #%s has no tag matching %r (available: %s)",
                 forum.name,
                 want,
-                [t.name for t in available],
+                [t.name for t in forum.available_tags],
             )
             continue
         if tag not in resolved:

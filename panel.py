@@ -24,6 +24,7 @@ from birthdays import Birthday, celebration_embed
 from names import SetNameModal, WelcomeNameView, names_list_embed
 from overwatch_patches import PATCH_URL, build_patch_embeds
 from overwatch_tierlist import TIER_URL
+from overwatch_meta import META_URL
 from ow_forum import OW_CHANNEL_TYPES, is_ow_destination
 from nicknames import is_guild_manager
 from onboarding import (
@@ -242,9 +243,16 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
     tier_ch = bot.db.get_ow_tier_channel(guild.id)
     last_tier = bot.db.get_ow_tier_last_id(guild.id)
     last_tier_at = bot.db.get_ow_tier_last_posted(guild.id)
+    last_meta = bot.db.get_ow_meta_last_id(guild.id)
+    last_meta_at = bot.db.get_ow_meta_last_posted(guild.id)
     tier_when = (
         last_tier_at.strftime("%Y-%m-%d")
         if last_tier_at
+        else "_never_"
+    )
+    meta_when = (
+        last_meta_at.strftime("%Y-%m-%d")
+        if last_meta_at
         else "_never_"
     )
     embed = discord.Embed(
@@ -256,12 +264,14 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "**Previous patches** still opens archives privately.\n\n"
             "**Tier list** — [Counterwatch]({tier_url}), about every "
             "**{days} days**. Same single-post overwrite with hero emojis + win / pick "
-            "rates (first sync uploads icons once).\n\n"
-            "_Pick a **Forum** channel below. Uses your existing "
-            "**Patch Notes** / **Tier List** tags._"
+            "rates.\n\n"
+            "**META** — [best one-tricks]({meta_url}), same cadence. Patch-notes style "
+            "cards per role with honourable mentions. Uses tag **META** (🎮).\n\n"
+            "_Pick a **Forum** below. Tags: **Patch Notes** / **Tier List** / **META**._"
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,
+            meta_url=META_URL,
             days=config.OW_TIER_INTERVAL_DAYS,
         ),
         color=discord.Color.from_rgb(249, 158, 26),
@@ -272,18 +282,20 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="Tier-list channel",
+        name="Tier / META channel",
         value=(
             f"{_ch(guild, tier_ch)}\n"
-            f"Last post: {tier_when}"
+            f"Tier: {tier_when}"
             + (f" · `{last_tier}`" if last_tier else "")
+            + f"\nMETA: {meta_when}"
+            + (f" · `{last_meta}`" if last_meta else "")
         ),
         inline=False,
     )
     embed.set_footer(
         text=(
             f"Patches every {config.OW_PATCH_CHECK_HOURS}h · "
-            f"Tier check every {config.OW_TIER_CHECK_HOURS}h"
+            f"Tier/META check every {config.OW_TIER_CHECK_HOURS}h"
         )
     )
     return embed
@@ -903,7 +915,7 @@ class AdminHubView(discord.ui.View):
             row=1,
         )
         tier_pick = discord.ui.ChannelSelect(
-            placeholder="Set tier-list forum…",
+            placeholder="Set tier / META forum…",
             channel_types=list(OW_CHANNEL_TYPES),
             min_values=1,
             max_values=1,
@@ -983,15 +995,17 @@ class AdminHubView(discord.ui.View):
             )
             self.bot.db.set_ow_tier_channel(self.guild_id, int(channel_id))
             self.bot.db.set_ow_tier_thread_id(self.guild_id, None)
+            self.bot.db.set_ow_meta_thread_id(self.guild_id, None)
             # Start the 2-week clock so enabling doesn't instantly dump a post
             self.bot.db.touch_ow_tier_schedule(self.guild_id)
+            self.bot.db.touch_ow_meta_schedule(self.guild_id)
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Done",
                 value=(
-                    f"Tier-list channel set to {mention}.\n"
+                    f"Tier / META channel set to {mention}.\n"
                     f"Auto-posts about every **{config.OW_TIER_INTERVAL_DAYS} days** "
-                    "from now. Use **Post tier list** to announce immediately."
+                    "from now. Use **Post tier list** / **Post META** immediately."
                 ),
                 inline=False,
             )
@@ -1013,13 +1027,23 @@ class AdminHubView(discord.ui.View):
             style=discord.ButtonStyle.success,
             row=3,
         )
+        preview_meta = discord.ui.Button(
+            label="Preview META",
+            style=discord.ButtonStyle.primary,
+            row=3,
+        )
         preview_tier = discord.ui.Button(
-            label="Preview tier list",
+            label="Preview tier",
             style=discord.ButtonStyle.primary,
             row=4,
         )
         post_tier = discord.ui.Button(
-            label="Post tier list",
+            label="Post tier",
+            style=discord.ButtonStyle.success,
+            row=4,
+        )
+        post_meta = discord.ui.Button(
+            label="Post META",
             style=discord.ButtonStyle.success,
             row=4,
         )
@@ -1170,14 +1194,95 @@ class AdminHubView(discord.ui.View):
             self._rebuild()
             await interaction.edit_original_response(embed=embed, view=self)
 
+        async def on_preview_meta(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            cog = self.bot.get_cog("OverwatchMetaCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "META cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer(ephemeral=True)
+            try:
+                await cog.send_preview_ephemeral(interaction)
+            except Exception as exc:
+                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+
+        async def on_post_meta(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            channel_id = (
+                self.bot.db.get_ow_tier_channel(self.guild_id)
+                or self.bot.db.get_ow_patch_channel(self.guild_id)
+            )
+            if not channel_id:
+                await interaction.response.send_message(
+                    "Set a tier / META forum first.", ephemeral=True
+                )
+                return
+            channel = (
+                interaction.guild.get_channel(channel_id) if interaction.guild else None
+            )
+            if channel is None and interaction.guild is not None:
+                try:
+                    channel = await interaction.guild.fetch_channel(channel_id)
+                except discord.HTTPException:
+                    channel = None
+            if not is_ow_destination(channel):
+                await interaction.response.send_message(
+                    "META channel missing — pick the tier forum again.",
+                    ephemeral=True,
+                )
+                return
+            cog = self.bot.get_cog("OverwatchMetaCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "META cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            try:
+                summary = await cog.get_summary()
+            except Exception as exc:
+                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+                return
+            if summary is None:
+                await interaction.followup.send(
+                    "Could not parse the Counterwatch one-tricks page.",
+                    ephemeral=True,
+                )
+                return
+            await cog.publish_live(channel, summary)
+            kind = (
+                "forum post (edited in place)"
+                if isinstance(channel, discord.ForumChannel)
+                else "channel"
+            )
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Posted",
+                value=(
+                    f"**{summary.title}** → {channel.mention}\n"
+                    f"_(Live META {kind}; tag META / 🎮.)_"
+                ),
+                inline=False,
+            )
+            self._rebuild()
+            await interaction.edit_original_response(embed=embed, view=self)
+
         preview_patch.callback = on_preview_patch
         post_patch.callback = on_post_patch
         preview_tier.callback = on_preview_tier
         post_tier.callback = on_post_tier
+        preview_meta.callback = on_preview_meta
+        post_meta.callback = on_post_meta
         self.add_item(preview_patch)
         self.add_item(post_patch)
+        self.add_item(preview_meta)
         self.add_item(preview_tier)
         self.add_item(post_tier)
+        self.add_item(post_meta)
 
     def _add_onboard_controls(self) -> None:
         ch_select = discord.ui.ChannelSelect(

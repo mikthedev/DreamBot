@@ -79,6 +79,10 @@ class Database:
             self._ensure_column(conn, "guild_settings", "ow_tier_message_ids", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_tier_last_id", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_tier_thread_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "ow_meta_thread_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "ow_meta_message_ids", "TEXT")
+            self._ensure_column(conn, "guild_settings", "ow_meta_last_id", "TEXT")
+            self._ensure_column(conn, "guild_settings", "ow_meta_last_posted_at", "TEXT")
             self._ensure_column(conn, "guild_settings", "onboard_channel_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "onboard_message_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "onboard_title", "TEXT")
@@ -666,6 +670,92 @@ class Database:
                 VALUES (?, ?)
                 ON CONFLICT(guild_id) DO UPDATE SET
                     ow_tier_last_posted_at = excluded.ow_tier_last_posted_at
+                """,
+                (guild_id, stamped),
+            )
+
+    def get_ow_meta_thread_id(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["ow_meta_thread_id"]:
+            return None
+        return int(settings["ow_meta_thread_id"])
+
+    def set_ow_meta_thread_id(self, guild_id: int, thread_id: int | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_meta_thread_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_meta_thread_id = excluded.ow_meta_thread_id
+                """,
+                (guild_id, thread_id),
+            )
+
+    def get_ow_meta_last_posted(self, guild_id: int) -> datetime | None:
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["ow_meta_last_posted_at"]:
+            return None
+        raw = settings["ow_meta_last_posted_at"]
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def get_ow_meta_message_ids(self, guild_id: int) -> list[int]:
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["ow_meta_message_ids"]:
+            return []
+        try:
+            raw = json.loads(settings["ow_meta_message_ids"])
+        except json.JSONDecodeError:
+            return []
+        return [int(x) for x in raw if str(x).isdigit() or isinstance(x, int)]
+
+    def get_ow_meta_last_id(self, guild_id: int) -> str | None:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return None
+        return settings["ow_meta_last_id"]
+
+    def save_ow_meta_live(
+        self,
+        guild_id: int,
+        meta_id: str,
+        message_ids: list[int],
+    ) -> None:
+        ids_json = json.dumps(message_ids)
+        stamped = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id,
+                    ow_meta_message_ids,
+                    ow_meta_last_posted_at,
+                    ow_meta_last_id
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_meta_message_ids = excluded.ow_meta_message_ids,
+                    ow_meta_last_posted_at = excluded.ow_meta_last_posted_at,
+                    ow_meta_last_id = excluded.ow_meta_last_id
+                """,
+                (guild_id, ids_json, stamped, meta_id),
+            )
+
+    def touch_ow_meta_schedule(self, guild_id: int) -> None:
+        stamped = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_meta_last_posted_at)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_meta_last_posted_at = excluded.ow_meta_last_posted_at
                 """,
                 (guild_id, stamped),
             )

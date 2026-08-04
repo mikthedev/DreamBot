@@ -280,45 +280,58 @@ async def fetch_meta_summary(
     return parse_meta_page(html)
 
 
-def _pick_card_text(pick: MetaPick, *, role_label: str) -> str:
-    """Top OTP only — win% lives in the why-line; separation marks them as #1."""
+def _role_header(role: str) -> str:
+    return f"**{ROLE_HEADER.get(role, role)}**"
+
+
+def _pick_card_text(pick: MetaPick) -> str:
+    """Featured OTP — win% stays in the why-line; layout elevates this card."""
     lines = [
-        f"**{role_label}**",
+        "✦ **Featured one-trick**",
         f"**{pick.name}**",
     ]
     if pick.why:
+        lines.append("")
         lines.append(pick.why)
     return "\n".join(lines)
 
 
-def _mention_card_text(m: MetaMention, *, honourable_header: bool = False) -> str:
+def _mention_line(m: MetaMention) -> str:
     kind = {
-        "Rank-specific": "Rank",
-        "Map pool pick": "Maps",
+        "Rank-specific": "Rank pick",
+        "Map pool pick": "Map flex",
         "Counter pick": "Counter",
     }.get(m.kind, m.kind)
-    lines: list[str] = []
-    if honourable_header:
-        # Visual break under the role's top pick (no extra component cost)
-        lines.append("────────")
-        lines.append("**Honourable**")
-    lines.append(f"**{m.name}** · **{m.win_rate}** · _{kind}_")
+    head = f"**{m.name}** · **{m.win_rate}** · _{kind}_"
     if m.note:
-        lines.append(m.note)
-    return "\n".join(lines)
+        return f"{head}\n{m.note}"
+    return head
 
 
-def _meta_intro(*, date_label: str, url: str, preview: bool) -> str:
+def _mentions_block(mentions: list[MetaMention]) -> str:
+    if not mentions:
+        return ""
+    body = ["**Honourable mentions**"]
+    for i, m in enumerate(mentions):
+        body.append("")
+        body.append(_mention_line(m))
+    return "\n".join(body)
+
+
+def _meta_intro(
+    summary: MetaSummary, *, preview: bool
+) -> str:
+    date_label = summary.updated or "latest"
     if preview:
-        head = f"🧪 **Preview** · **[{date_label}]({url})**"
+        head = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
     else:
-        head = f"**[{date_label}]({url})**"
+        head = f"**[{date_label}]({summary.url})**"
+    season = f"Season {summary.season}" if summary.season else "Current season"
     blurb = (
-        "These picks are based on win rates, how consistent heroes are across "
-        "matches, and how they sit in the current meta — with the trade-offs that "
-        "come with that. Use the list as a statistical guide to who's strong right "
-        "now and who can help you climb, but don't treat it as a must-pick: "
-        "**skill on the hero matters most.**"
+        f"**{season} · Best heroes to main**\n"
+        "Picks weigh win rate, consistency across matches, and fit in the current "
+        "meta — including the trade-offs. Treat this as a statistical guide to who's "
+        "strong right now, not a must-pick list: **skill on the hero matters most.**"
     )
     return f"{head}\n{blurb}"
 
@@ -327,29 +340,24 @@ def build_meta_layouts(
     summary: MetaSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
     """
-    Single starter message only.
-    Budget: header(1) + 3×(container(1) + top section(3) + 3 mention sections(9)) = 40.
-    Top pick is name + why only; a divider line separates them from honourable mentions.
+    Single starter message with clearer hierarchy:
+    role header → featured portrait card → hard separator → honourable text + portraits.
     """
-    date_label = summary.updated or "latest"
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(
-        discord.ui.TextDisplay(
-            _meta_intro(date_label=date_label, url=summary.url, preview=preview)
-        )
-    )
+    view.add_item(discord.ui.TextDisplay(_meta_intro(summary, preview=preview)))
 
     for role in ROLE_ORDER:
         pick = summary.roles.get(role)
         if pick is None:
             continue
         colour = ROLE_COLOR.get(role, OW_ORANGE)
-        label = ROLE_HEADER.get(role, role)
 
         container = discord.ui.Container(accent_colour=colour)
         view.add_item(container)
 
-        card = _pick_card_text(pick, role_label=label)
+        container.add_item(discord.ui.TextDisplay(_role_header(role)))
+
+        card = _pick_card_text(pick)
         if pick.icon_url:
             container.add_item(
                 discord.ui.Section(
@@ -360,17 +368,26 @@ def build_meta_layouts(
         else:
             container.add_item(discord.ui.TextDisplay(card))
 
-        for i, mention in enumerate(pick.mentions):
-            mcard = _mention_card_text(mention, honourable_header=(i == 0))
-            if mention.icon_url:
-                container.add_item(
-                    discord.ui.Section(
-                        mcard,
-                        accessory=discord.ui.Thumbnail(mention.icon_url),
-                    )
+        container.add_item(
+            discord.ui.Separator(
+                visible=True,
+                spacing=discord.SeparatorSpacing.large,
+            )
+        )
+
+        mentions = _mentions_block(pick.mentions)
+        if mentions:
+            container.add_item(discord.ui.TextDisplay(mentions))
+            gallery_items = [
+                discord.MediaGalleryItem(
+                    m.icon_url,
+                    description=f"{m.name} · {m.win_rate}",
                 )
-            else:
-                container.add_item(discord.ui.TextDisplay(mcard))
+                for m in pick.mentions
+                if m.icon_url
+            ]
+            if gallery_items:
+                container.add_item(discord.ui.MediaGallery(*gallery_items))
 
     if view._total_children > 40:
         log.warning(
@@ -383,12 +400,9 @@ def build_meta_layouts(
 def build_meta_embeds(
     summary: MetaSummary, *, preview: bool = False
 ) -> list[discord.Embed]:
-    date_label = summary.updated or "latest"
     head = discord.Embed(
         title="Best heroes to main",
-        description=_meta_intro(
-            date_label=date_label, url=summary.url, preview=preview
-        ),
+        description=_meta_intro(summary, preview=preview),
         color=OW_ORANGE,
         url=summary.url,
     )
@@ -397,10 +411,10 @@ def build_meta_embeds(
         pick = summary.roles.get(role)
         if pick is None:
             continue
-        label = ROLE_HEADER.get(role, role)
-        body = [_pick_card_text(pick, role_label=label)]
-        for i, mention in enumerate(pick.mentions):
-            body.append(_mention_card_text(mention, honourable_header=(i == 0)))
+        body = [_role_header(role), _pick_card_text(pick)]
+        mentions = _mentions_block(pick.mentions)
+        if mentions:
+            body.append(mentions)
         emb = discord.Embed(
             description="\n\n".join(body)[:4096],
             color=ROLE_COLOR.get(role, OW_ORANGE),

@@ -280,64 +280,61 @@ async def fetch_meta_summary(
     return parse_meta_page(html)
 
 
-def _pick_card_text(pick: MetaPick) -> str:
+def _pick_card_text(pick: MetaPick, *, role_label: str) -> str:
     lines = [
+        f"**{role_label}**",
         f"**{pick.name}** · Tier {pick.tier} · **{pick.win_rate}** win",
     ]
     if pick.why:
         lines.append(pick.why)
-    if pick.scores:
-        # Short labels keep the scoreboard on one line
-        short = {
-            "Win rate": "Win",
-            "Consistency": "Cons",
-            "Vs meta": "Meta",
-            "Synergy": "Syn",
-            "Confidence": "Conf",
-        }
-        bits = " · ".join(
-            f"{short.get(k, k)} `{v}`" for k, v in pick.scores.items()
-        )
-        lines.append(bits)
     return "\n".join(lines)
 
 
-def _mention_line(m: MetaMention) -> str:
+def _mention_card_text(m: MetaMention, *, honourable_header: bool = False) -> str:
     kind = {
         "Rank-specific": "Rank",
         "Map pool pick": "Maps",
         "Counter pick": "Counter",
     }.get(m.kind, m.kind)
-    line = f"**{m.name}** · **{m.win_rate}** · _{kind}_"
+    lines: list[str] = []
+    if honourable_header:
+        lines.append("**Honourable**")
+    lines.append(f"**{m.name}** · **{m.win_rate}** · _{kind}_")
     if m.note:
-        line += f" — {m.note}"
-    return line
-
-
-def _mentions_block(mentions: list[MetaMention]) -> str:
-    if not mentions:
-        return ""
-    lines = ["**Honourable**", *(_mention_line(m) for m in mentions)]
+        lines.append(m.note)
     return "\n".join(lines)
+
+
+def _meta_intro(*, date_label: str, url: str, preview: bool) -> str:
+    if preview:
+        head = f"🧪 **Preview** · **[{date_label}]({url})**"
+    else:
+        head = f"**[{date_label}]({url})**"
+    blurb = (
+        "These picks are based on win rates, how consistent heroes are across "
+        "matches, and how they sit in the current meta — with the trade-offs that "
+        "come with that. Use the list as a statistical guide to who's strong right "
+        "now and who can help you climb, but don't treat it as a must-pick: "
+        "**skill on the hero matters most.**"
+    )
+    return f"{head}\n{blurb}"
 
 
 def build_meta_layouts(
     summary: MetaSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
     """
-    One message only: header + 3 role containers.
-    Top pick keeps a portrait card; honourable mentions stay compact text
-    so we never spill into thread follow-ups.
+    Single starter message only.
+    Budget: header(1) + 3×(container(1) + top section(3) + 3 mention sections(9)) = 40.
+    Role title lives inside the top-pick card so portraits fit for honourable mentions.
     """
     date_label = summary.updated or "latest"
-    if preview:
-        header = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
-    else:
-        header = f"**[{date_label}]({summary.url})**"
-    header += "\n_Best one-trick per role_"
-
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.TextDisplay(header))
+    view.add_item(
+        discord.ui.TextDisplay(
+            _meta_intro(date_label=date_label, url=summary.url, preview=preview)
+        )
+    )
 
     for role in ROLE_ORDER:
         pick = summary.roles.get(role)
@@ -348,9 +345,8 @@ def build_meta_layouts(
 
         container = discord.ui.Container(accent_colour=colour)
         view.add_item(container)
-        container.add_item(discord.ui.TextDisplay(f"**{label}**"))
 
-        card = _pick_card_text(pick)
+        card = _pick_card_text(pick, role_label=label)
         if pick.icon_url:
             container.add_item(
                 discord.ui.Section(
@@ -361,17 +357,18 @@ def build_meta_layouts(
         else:
             container.add_item(discord.ui.TextDisplay(card))
 
-        mentions = _mentions_block(pick.mentions)
-        if mentions:
-            container.add_item(
-                discord.ui.Separator(
-                    visible=True,
-                    spacing=discord.SeparatorSpacing.small,
+        for i, mention in enumerate(pick.mentions):
+            mcard = _mention_card_text(mention, honourable_header=(i == 0))
+            if mention.icon_url:
+                container.add_item(
+                    discord.ui.Section(
+                        mcard,
+                        accessory=discord.ui.Thumbnail(mention.icon_url),
+                    )
                 )
-            )
-            container.add_item(discord.ui.TextDisplay(mentions))
+            else:
+                container.add_item(discord.ui.TextDisplay(mcard))
 
-    # Must stay a single starter message (forum "comments" = follow-ups).
     if view._total_children > 40:
         log.warning(
             "META layout has %s components (cap 40) — content may fail to send",
@@ -383,11 +380,11 @@ def build_meta_layouts(
 def build_meta_embeds(
     summary: MetaSummary, *, preview: bool = False
 ) -> list[discord.Embed]:
+    date_label = summary.updated or "latest"
     head = discord.Embed(
         title="Best heroes to main",
-        description=(
-            ("🧪 **Preview**\n" if preview else "")
-            + f"**[One-tricks]({summary.url})** · {summary.updated or 'latest'}"
+        description=_meta_intro(
+            date_label=date_label, url=summary.url, preview=preview
         ),
         color=OW_ORANGE,
         url=summary.url,
@@ -397,12 +394,11 @@ def build_meta_embeds(
         pick = summary.roles.get(role)
         if pick is None:
             continue
-        body = [_pick_card_text(pick)]
-        mentions = _mentions_block(pick.mentions)
-        if mentions:
-            body.append(mentions)
+        label = ROLE_HEADER.get(role, role)
+        body = [_pick_card_text(pick, role_label=label)]
+        for i, mention in enumerate(pick.mentions):
+            body.append(_mention_card_text(mention, honourable_header=(i == 0)))
         emb = discord.Embed(
-            title=ROLE_HEADER.get(role, role),
             description="\n\n".join(body)[:4096],
             color=ROLE_COLOR.get(role, OW_ORANGE),
         )

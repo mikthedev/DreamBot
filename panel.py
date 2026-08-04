@@ -255,6 +255,8 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         if last_meta_at
         else "_never_"
     )
+    news_ch = bot.db.get_ow_news_channel(guild.id)
+    news_seeded = bot.db.is_ow_news_seeded(guild.id)
     embed = discord.Embed(
         title="Overwatch",
         description=(
@@ -267,7 +269,10 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "rates (tag **META**).\n\n"
             "**Best to main** — [one-tricks]({meta_url}), same cadence. Patch-notes style "
             "cards per role with honourable mentions (tag **META**).\n\n"
-            "_Pick a **Forum** below. Tags: **Patch Notes** / **META**._"
+            "**News** — filtered Bluesky feed (map/mode/lore updates only — no shop, "
+            "skins, OWCS, vault, loot boxes, or patch notes). Checks hourly; posts "
+            "when new. Tag **News**.\n\n"
+            "_Pick a **Forum** below. Tags: **Patch Notes** / **META** / **News**._"
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,
@@ -292,10 +297,20 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         ),
         inline=False,
     )
+    embed.add_field(
+        name="News",
+        value=(
+            f"{_ch(guild, news_ch)}\n"
+            f"Seeded: {'yes' if news_seeded else 'no'} · "
+            f"check every {config.OW_NEWS_CHECK_HOURS}h"
+        ),
+        inline=False,
+    )
     embed.set_footer(
         text=(
             f"Patches every {config.OW_PATCH_CHECK_HOURS}h · "
-            f"Tier/META check every {config.OW_TIER_CHECK_HOURS}h"
+            f"Tier/META check every {config.OW_TIER_CHECK_HOURS}h · "
+            f"News every {config.OW_NEWS_CHECK_HOURS}h"
         )
     )
     return embed
@@ -1283,6 +1298,42 @@ class AdminHubView(discord.ui.View):
         self.add_item(preview_tier)
         self.add_item(post_tier)
         self.add_item(post_meta)
+
+        post_news = discord.ui.Button(
+            label="Post news (~24h)",
+            style=discord.ButtonStyle.success,
+            row=3,
+        )
+
+        async def on_post_news(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            cog = self.bot.get_cog("OverwatchNewsCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "News cog not loaded.", ephemeral=True
+                )
+                return
+            if interaction.guild is None:
+                await interaction.response.send_message(
+                    "Guild only.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            # Force a seed pass for ~24h filtered items
+            self.bot.db.set_ow_news_seeded(self.guild_id, False)
+            try:
+                n, detail = await cog.seed_day_old(interaction.guild)
+            except Exception as exc:
+                await interaction.followup.send(f"News failed: {exc}", ephemeral=True)
+                return
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(name="News", value=detail, inline=False)
+            self._rebuild()
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        post_news.callback = on_post_news
+        self.add_item(post_news)
 
     def _add_onboard_controls(self) -> None:
         ch_select = discord.ui.ChannelSelect(

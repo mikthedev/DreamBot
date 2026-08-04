@@ -21,6 +21,7 @@ from nicknames import build_nickname, display_base, is_guild_manager
 from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
 from overwatch_tierlist import OverwatchTierCog
 from overwatch_meta import OverwatchMetaCog
+from overwatch_news import OverwatchNewsCog
 from onboarding import OnboardingView
 from panel import PanelCog
 from anniversary import AnniversaryCog
@@ -59,6 +60,7 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(OverwatchPatchCog(self))
         await self.add_cog(OverwatchTierCog(self))
         await self.add_cog(OverwatchMetaCog(self))
+        await self.add_cog(OverwatchNewsCog(self))
         await self.add_cog(AICog(self))
         await self.add_cog(VoiceAICog(self))
         if config.GROQ_API_KEY:

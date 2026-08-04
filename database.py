@@ -83,6 +83,23 @@ class Database:
             self._ensure_column(conn, "guild_settings", "ow_meta_message_ids", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_meta_last_id", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_meta_last_posted_at", "TEXT")
+            self._ensure_column(conn, "guild_settings", "ow_news_channel_id", "INTEGER")
+            self._ensure_column(conn, "guild_settings", "ow_news_seeded", "INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ow_news_posts (
+                    guild_id INTEGER NOT NULL,
+                    bsky_uri TEXT NOT NULL,
+                    thread_id INTEGER,
+                    posted_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (guild_id, bsky_uri)
+                )
+                """
+            )
+            self._ensure_column(
+                conn, "ow_news_posts", "auto_close", "INTEGER NOT NULL DEFAULT 0"
+            )
+            self._ensure_column(conn, "ow_news_posts", "closed_at", "TEXT")
             self._ensure_column(conn, "guild_settings", "onboard_channel_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "onboard_message_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "onboard_title", "TEXT")
@@ -758,6 +775,122 @@ class Database:
                     ow_meta_last_posted_at = excluded.ow_meta_last_posted_at
                 """,
                 (guild_id, stamped),
+            )
+
+    def get_ow_news_channel(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return None
+        # Prefer dedicated news channel; fall back to shared OW forum
+        channel_id = settings["ow_news_channel_id"] or settings["ow_patch_channel_id"]
+        if not channel_id:
+            return None
+        return int(channel_id)
+
+    def set_ow_news_channel(self, guild_id: int, channel_id: int | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_news_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_news_channel_id = excluded.ow_news_channel_id
+                """,
+                (guild_id, channel_id),
+            )
+
+    def is_ow_news_seeded(self, guild_id: int) -> bool:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return False
+        return bool(settings["ow_news_seeded"])
+
+    def set_ow_news_seeded(self, guild_id: int, seeded: bool = True) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_news_seeded)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_news_seeded = excluded.ow_news_seeded
+                """,
+                (guild_id, 1 if seeded else 0),
+            )
+
+    def was_ow_news_posted(self, guild_id: int, bsky_uri: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM ow_news_posts
+                WHERE guild_id = ? AND bsky_uri = ?
+                """,
+                (guild_id, bsky_uri),
+            ).fetchone()
+        return row is not None
+
+    def mark_ow_news_posted(
+        self,
+        guild_id: int,
+        bsky_uri: str,
+        thread_id: int | None = None,
+        *,
+        auto_close: bool = True,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ow_news_posts (
+                    guild_id, bsky_uri, thread_id, auto_close
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, bsky_uri) DO UPDATE SET
+                    thread_id = COALESCE(excluded.thread_id, ow_news_posts.thread_id),
+                    auto_close = CASE
+                        WHEN ow_news_posts.auto_close = 1 THEN 1
+                        ELSE excluded.auto_close
+                    END
+                """,
+                (guild_id, bsky_uri, thread_id, 1 if auto_close else 0),
+            )
+
+    def unmark_ow_news_posted(self, guild_id: int, bsky_uri: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM ow_news_posts
+                WHERE guild_id = ? AND bsky_uri = ?
+                """,
+                (guild_id, bsky_uri),
+            )
+
+    def list_ow_news_due_to_close(
+        self, *, older_than_hours: int
+    ) -> list[sqlite3.Row]:
+        """Upcoming-era news posts past the close delay (auto_close=1, not yet closed)."""
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT guild_id, bsky_uri, thread_id, posted_at
+                FROM ow_news_posts
+                WHERE auto_close = 1
+                  AND closed_at IS NULL
+                  AND thread_id IS NOT NULL
+                  AND datetime(posted_at) <= datetime('now', ?)
+                ORDER BY posted_at ASC
+                """,
+                (f"-{int(older_than_hours)} hours",),
+            ).fetchall()
+
+    def mark_ow_news_closed(self, guild_id: int, bsky_uri: str) -> None:
+        stamped = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE ow_news_posts
+                SET closed_at = ?
+                WHERE guild_id = ? AND bsky_uri = ?
+                """,
+                (stamped, guild_id, bsky_uri),
             )
 
     def get_onboard_channel(self, guild_id: int) -> int | None:

@@ -59,6 +59,24 @@ OW_META_URL = "https://www.counterwatch.gg/stats/overwatch/best-onetricks"
 OW_META_INTERVAL_DAYS = max(1, int(os.getenv("OW_META_INTERVAL_DAYS", "14")))
 OW_META_CHECK_HOURS = max(1, int(os.getenv("OW_META_CHECK_HOURS", "24")))
 
+# Bluesky Overwatch news (filtered) — hourly checks
+OW_NEWS_BSKY_ACTOR = (
+    os.getenv("OW_NEWS_BSKY_ACTOR", "owcavalry.com").strip() or "owcavalry.com"
+)
+OW_NEWS_CHECK_HOURS = max(1, int(os.getenv("OW_NEWS_CHECK_HOURS", "1")))
+# First-run seed: ~1 day old posts only (not older archive dumps)
+OW_NEWS_SEED_MIN_HOURS = max(1, int(os.getenv("OW_NEWS_SEED_MIN_HOURS", "12")))
+OW_NEWS_SEED_MAX_HOURS = max(
+    OW_NEWS_SEED_MIN_HOURS + 1,
+    int(os.getenv("OW_NEWS_SEED_MAX_HOURS", "36")),
+)
+OW_NEWS_SEED_MAX_POSTS = max(1, int(os.getenv("OW_NEWS_SEED_MAX_POSTS", "10")))
+# After seeding, only auto-post items this fresh (hourly catch-up)
+OW_NEWS_FRESH_MAX_HOURS = max(1, int(os.getenv("OW_NEWS_FRESH_MAX_HOURS", "3")))
+# Close (archive) news forum posts after this many hours so the feed stays clean
+OW_NEWS_CLOSE_HOURS = max(1, int(os.getenv("OW_NEWS_CLOSE_HOURS", "6")))
+OW_NEWS_CLOSE_CHECK_MINUTES = max(5, int(os.getenv("OW_NEWS_CLOSE_CHECK_MINUTES", "15")))
+
 # Free Llama via Groq (no billing) — https://console.groq.com/keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # 70B is still very fast on Groq LPUs and much smarter than 8B

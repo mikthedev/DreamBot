@@ -22,6 +22,7 @@ OW_PATCH_TAG_NAMES = ("Patch Notes",)
 # Tier list + best-to-main both sit under META
 OW_TIER_TAG_NAMES = ("META",)
 OW_META_TAG_NAMES = ("META",)
+OW_NEWS_TAG_NAMES = ("News",)
 # Bot-created leftovers / retired tags to strip when cleaning a forum
 OW_PLAIN_TAGS_TO_REMOVE = frozenset({"patch", "tier"})
 OW_RETIRED_TAG_NAMES = frozenset({"tier list"})
@@ -145,6 +146,23 @@ async def lock_thread_for_reactions_only(thread: discord.Thread) -> None:
         await thread.edit(locked=True, reason="OW announcement — reactions only")
     except discord.HTTPException as exc:
         log.warning("Could not lock forum thread %s: %s", thread.id, exc)
+
+
+async def close_forum_post(thread: discord.Thread, *, reason: str | None = None) -> bool:
+    """Discord 'Close Post' — archives the forum thread so it leaves the active feed."""
+    try:
+        kwargs: dict = {"archived": True}
+        # Keep locked (reactions-only) if we already set that
+        if not thread.locked:
+            kwargs["locked"] = True
+        await thread.edit(
+            **kwargs,
+            reason=reason or "OW news — close after delay",
+        )
+        return True
+    except discord.HTTPException as exc:
+        log.warning("Could not close forum thread %s: %s", thread.id, exc)
+        return False
 
 
 async def _fetch_forum_thread(

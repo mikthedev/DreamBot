@@ -954,7 +954,7 @@ class OverwatchPatchCog(commands.Cog):
         layouts = build_patch_layouts(summary, preview=preview)
         return await post_ow_announcement(
             channel,
-            thread_name=patch_thread_title(date=summary.date or summary.title),
+            thread_name=patch_thread_title(date=summary.date, title=summary.title),
             layouts=layouts,
             embeds_fallback=lambda: build_patch_embeds(summary, preview=preview),
             tag_names=OW_PATCH_TAG_NAMES,

@@ -37,15 +37,30 @@ def forum_thread_name(title: str) -> str:
     return raw[:100]
 
 
-def patch_thread_title(*, date: str | None) -> str:
-    label = (date or "Latest").strip() or "Latest"
-    return forum_thread_name(f"🛠️  Patch Notes  ·  {label}")
+def patch_thread_title(*, date: str | None = None, title: str | None = None) -> str:
+    """Forum list already shows the date + Patch Notes tag — keep the title short."""
+    raw = (title or "").strip()
+    # Blizzard titles are often "Overwatch Retail Patch Notes – July 30, 2026"
+    for prefix in (
+        "Overwatch Retail Patch Notes",
+        "Overwatch Patch Notes",
+        "Patch Notes",
+    ):
+        if raw.casefold().startswith(prefix.casefold()):
+            raw = raw[len(prefix) :].lstrip(" –—-:·|")
+            break
+    if date and raw and date.casefold() in raw.casefold():
+        raw = ""
+    if not raw:
+        raw = "Hero Balance Update"
+    return forum_thread_name(raw)
 
 
-def tier_thread_title(*, season: str | None, updated: str | None) -> str:
-    season_bit = f"Season {season}" if season else "Current Season"
-    date_bit = (updated or "latest").strip() or "latest"
-    return forum_thread_name(f"📈  Tier List  ·  {season_bit}  ·  {date_bit}")
+def tier_thread_title(*, season: str | None, updated: str | None = None) -> str:
+    """Forum list already shows the date + Tier List tag."""
+    if season:
+        return forum_thread_name(f"Tierlist for Season {season}")
+    return forum_thread_name("Tierlist")
 
 
 async def resolve_forum_tags(

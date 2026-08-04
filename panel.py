@@ -251,12 +251,14 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Overwatch",
         description=(
             "**Patches** — [official notes]({patch_url}), checked daily. "
-            "Each update becomes a **forum post** (locked — reactions only, no comments). "
-            "Older posts stay in the forum; **Previous patches** also opens archives privately.\n\n"
+            "One locked **forum post** is updated in place (title + body) when a new "
+            "patch drops — reactions only, no comments. "
+            "**Previous patches** still opens archives privately.\n\n"
             "**Tier list** — [Counterwatch]({tier_url}), about every "
-            "**{days} days**. Same forum style with square hero emojis + win / pick rates "
-            "(first sync uploads icons once).\n\n"
-            "_Pick a **Forum** channel below (text still works as a fallback)._"
+            "**{days} days**. Same single-post overwrite with hero emojis + win / pick "
+            "rates (first sync uploads icons once).\n\n"
+            "_Pick a **Forum** channel below. Uses your existing "
+            "**Patch Notes** / **Tier List** tags._"
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,
@@ -929,6 +931,7 @@ class AdminHubView(discord.ui.View):
                 else f"<#{channel_id}>"
             )
             self.bot.db.set_ow_patch_channel(self.guild_id, int(channel_id))
+            self.bot.db.set_ow_patch_thread_id(self.guild_id, None)
             cog = self.bot.get_cog("OverwatchPatchCog")
             note = f"Patch channel set to {mention}."
             if cog is not None:
@@ -979,6 +982,7 @@ class AdminHubView(discord.ui.View):
                 else f"<#{channel_id}>"
             )
             self.bot.db.set_ow_tier_channel(self.guild_id, int(channel_id))
+            self.bot.db.set_ow_tier_thread_id(self.guild_id, None)
             # Start the 2-week clock so enabling doesn't instantly dump a post
             self.bot.db.touch_ow_tier_schedule(self.guild_id)
             embed = hub_overwatch_embed(interaction.guild, self.bot)
@@ -1076,13 +1080,17 @@ class AdminHubView(discord.ui.View):
                 )
                 return
             await cog.publish_live(channel, summary)
-            kind = "forum post" if isinstance(channel, discord.ForumChannel) else "channel"
+            kind = (
+                "forum post (edited in place)"
+                if isinstance(channel, discord.ForumChannel)
+                else "channel"
+            )
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Posted",
                 value=(
                     f"**{summary.title}** → {channel.mention}\n"
-                    f"_(New locked {kind}; reactions allowed, no comments.)_"
+                    f"_(Live {kind}; reactions allowed, no comments.)_"
                 ),
                 inline=False,
             )
@@ -1145,13 +1153,17 @@ class AdminHubView(discord.ui.View):
                 )
                 return
             await cog.publish_live(channel, summary)
-            kind = "forum post" if isinstance(channel, discord.ForumChannel) else "channel"
+            kind = (
+                "forum post (edited in place)"
+                if isinstance(channel, discord.ForumChannel)
+                else "channel"
+            )
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Posted",
                 value=(
                     f"**{summary.title}** → {channel.mention}\n"
-                    f"_(New locked {kind}; reactions allowed, no comments.)_"
+                    f"_(Live {kind}; reactions allowed, no comments.)_"
                 ),
                 inline=False,
             )

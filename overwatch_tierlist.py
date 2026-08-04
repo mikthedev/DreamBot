@@ -18,7 +18,12 @@ from discord.ext import commands, tasks
 from PIL import Image
 
 import config
-from ow_forum import is_ow_destination, post_ow_announcement
+from ow_forum import (
+    OW_TIER_TAG_NAMES,
+    is_ow_destination,
+    post_ow_announcement,
+    tier_thread_title,
+)
 
 log = logging.getLogger("dream_team.ow_tier")
 
@@ -453,29 +458,31 @@ class OverwatchTierCog(commands.Cog):
         summary: TierListSummary,
         *,
         preview: bool = False,
-    ) -> list[discord.Message]:
+        existing_thread_id: int | None = None,
+    ) -> tuple[list[discord.Message], int | None]:
         emoji_map = await self.ensure_hero_emojis(summary)
         layouts = build_tier_layouts(
             summary,
             preview=preview,
             emoji_map=emoji_map,
         )
-        season = f"S{summary.season}" if summary.season else "Tier list"
-        date_bit = summary.updated or "latest"
         return await post_ow_announcement(
             channel,
-            thread_name=f"Tier list · {season} · {date_bit}",
+            thread_name=tier_thread_title(
+                season=summary.season, updated=summary.updated
+            ),
             layouts=layouts,
             embeds_fallback=lambda: build_tier_embeds(
                 summary, preview=preview, emoji_map=emoji_map
             ),
-            tag_names=("Tier",),
+            tag_names=OW_TIER_TAG_NAMES,
+            existing_thread_id=existing_thread_id,
         )
 
     async def delete_live_messages(
         self, channel: discord.TextChannel, guild_id: int
     ) -> None:
-        """Only used for classic text channels — forum posts are kept as history."""
+        """Only used for classic text channels — forum posts are edited in place."""
         for mid in self.bot.db.get_ow_tier_message_ids(guild_id):
             try:
                 msg = await channel.fetch_message(mid)
@@ -491,9 +498,20 @@ class OverwatchTierCog(commands.Cog):
         summary: TierListSummary,
     ) -> list[discord.Message]:
         guild_id = channel.guild.id
+        existing_thread_id = None
         if isinstance(channel, discord.TextChannel):
             await self.delete_live_messages(channel, guild_id)
-        messages = await self.post_to_channel(channel, summary, preview=False)
+        else:
+            existing_thread_id = self.bot.db.get_ow_tier_thread_id(guild_id)
+
+        messages, thread_id = await self.post_to_channel(
+            channel,
+            summary,
+            preview=False,
+            existing_thread_id=existing_thread_id,
+        )
+        if thread_id is not None:
+            self.bot.db.set_ow_tier_thread_id(guild_id, thread_id)
         self.bot.db.save_ow_tier_live(
             guild_id,
             summary.fingerprint,

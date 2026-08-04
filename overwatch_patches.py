@@ -16,7 +16,12 @@ import discord
 from discord.ext import commands, tasks
 
 import config
-from ow_forum import is_ow_destination, post_ow_announcement
+from ow_forum import (
+    OW_PATCH_TAG_NAMES,
+    is_ow_destination,
+    patch_thread_title,
+    post_ow_announcement,
+)
 
 log = logging.getLogger("dream_team.overwatch")
 
@@ -944,23 +949,24 @@ class OverwatchPatchCog(commands.Cog):
         *,
         preview: bool = False,
         with_history: bool = False,
-    ) -> list[discord.Message]:
+        existing_thread_id: int | None = None,
+    ) -> tuple[list[discord.Message], int | None]:
         layouts = build_patch_layouts(summary, preview=preview)
-        date_label = summary.date or summary.title or "Patch"
         return await post_ow_announcement(
             channel,
-            thread_name=f"Patch · {date_label}",
+            thread_name=patch_thread_title(date=summary.date or summary.title),
             layouts=layouts,
             embeds_fallback=lambda: build_patch_embeds(summary, preview=preview),
-            tag_names=("Patch",),
+            tag_names=OW_PATCH_TAG_NAMES,
             trailing_content="Earlier balance notes:" if with_history else None,
             trailing_view=OwPatchHistoryView() if with_history else None,
+            existing_thread_id=existing_thread_id,
         )
 
     async def delete_live_messages(
         self, channel: discord.TextChannel, guild_id: int
     ) -> None:
-        """Only used for classic text channels — forum posts are kept as history."""
+        """Only used for classic text channels — forum posts are edited in place."""
         for mid in self.bot.db.get_ow_live_message_ids(guild_id):
             try:
                 msg = await channel.fetch_message(mid)
@@ -975,14 +981,23 @@ class OverwatchPatchCog(commands.Cog):
         channel: discord.TextChannel | discord.ForumChannel,
         summary: PatchSummary,
     ) -> list[discord.Message]:
-        """Post the new patch (forum: new locked post; text: replace previous live)."""
+        """Overwrite the live patch post (forum thread or text messages)."""
         guild_id = channel.guild.id
+        existing_thread_id = None
         if isinstance(channel, discord.TextChannel):
             await self.delete_live_messages(channel, guild_id)
+        else:
+            existing_thread_id = self.bot.db.get_ow_patch_thread_id(guild_id)
 
-        messages = await self.post_to_channel(
-            channel, summary, preview=False, with_history=True
+        messages, thread_id = await self.post_to_channel(
+            channel,
+            summary,
+            preview=False,
+            with_history=True,
+            existing_thread_id=existing_thread_id,
         )
+        if thread_id is not None:
+            self.bot.db.set_ow_patch_thread_id(guild_id, thread_id)
 
         self.bot.db.save_ow_patch_live(
             guild_id,

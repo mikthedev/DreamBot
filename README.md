@@ -50,7 +50,7 @@ Voice transcript embeds (text copies of what Dream said) go to a channel you set
 
 ## Overwatch
 
-Automatic **forum posts** for Blizzard patch notes and Counterwatch tier lists (Components V2 cards, hero icons, win/pick rates). Each post is **locked** so members can react but not comment. Set the forum(s) and use preview/post under **`/panel` → Overwatch**.
+Automatic **forum posts** for Blizzard patch notes and Counterwatch tier lists (Components V2 cards, hero icons, win/pick rates). Each stream keeps **one locked post** that is edited in place on updates (members can react, not comment). Uses your forum’s **Patch Notes** / **Tier List** tags. Set the forum(s) under **`/panel` → Overwatch**.
 
 ---
 

@@ -281,9 +281,10 @@ async def fetch_meta_summary(
 
 
 def _pick_card_text(pick: MetaPick, *, role_label: str) -> str:
+    """Top OTP only — win% lives in the why-line; separation marks them as #1."""
     lines = [
         f"**{role_label}**",
-        f"**{pick.name}** · Tier {pick.tier} · **{pick.win_rate}** win",
+        f"**{pick.name}**",
     ]
     if pick.why:
         lines.append(pick.why)
@@ -298,6 +299,8 @@ def _mention_card_text(m: MetaMention, *, honourable_header: bool = False) -> st
     }.get(m.kind, m.kind)
     lines: list[str] = []
     if honourable_header:
+        # Visual break under the role's top pick (no extra component cost)
+        lines.append("────────")
         lines.append("**Honourable**")
     lines.append(f"**{m.name}** · **{m.win_rate}** · _{kind}_")
     if m.note:
@@ -326,7 +329,7 @@ def build_meta_layouts(
     """
     Single starter message only.
     Budget: header(1) + 3×(container(1) + top section(3) + 3 mention sections(9)) = 40.
-    Role title lives inside the top-pick card so portraits fit for honourable mentions.
+    Top pick is name + why only; a divider line separates them from honourable mentions.
     """
     date_label = summary.updated or "latest"
     view = discord.ui.LayoutView(timeout=None)
@@ -402,6 +405,8 @@ def build_meta_embeds(
             description="\n\n".join(body)[:4096],
             color=ROLE_COLOR.get(role, OW_ORANGE),
         )
+        if pick.icon_url:
+            emb.set_thumbnail(url=pick.icon_url)
         embeds.append(emb)
     return embeds
 

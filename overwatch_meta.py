@@ -280,13 +280,10 @@ async def fetch_meta_summary(
     return parse_meta_page(html)
 
 
-def _role_header(role: str) -> str:
-    return f"**{ROLE_HEADER.get(role, role)}**"
-
-
-def _pick_card_text(pick: MetaPick) -> str:
-    """Featured OTP — win% stays in the why-line; layout elevates this card."""
+def _pick_card_text(pick: MetaPick, *, role: str) -> str:
+    """Featured OTP with role header baked in."""
     lines = [
+        f"**{ROLE_HEADER.get(role, role)}**",
         "✦ **Featured one-trick**",
         f"**{pick.name}**",
     ]
@@ -296,31 +293,22 @@ def _pick_card_text(pick: MetaPick) -> str:
     return "\n".join(lines)
 
 
-def _mention_line(m: MetaMention) -> str:
+def _mention_card_text(m: MetaMention, *, honourable_header: bool = False) -> str:
     kind = {
         "Rank-specific": "Rank pick",
         "Map pool pick": "Map flex",
         "Counter pick": "Counter",
     }.get(m.kind, m.kind)
-    head = f"**{m.name}** · **{m.win_rate}** · _{kind}_"
+    lines: list[str] = []
+    if honourable_header:
+        lines.append("**Honourable mentions**")
+    lines.append(f"**{m.name}** · **{m.win_rate}** · _{kind}_")
     if m.note:
-        return f"{head}\n{m.note}"
-    return head
+        lines.append(m.note)
+    return "\n".join(lines)
 
 
-def _mentions_block(mentions: list[MetaMention]) -> str:
-    if not mentions:
-        return ""
-    body = ["**Honourable mentions**"]
-    for i, m in enumerate(mentions):
-        body.append("")
-        body.append(_mention_line(m))
-    return "\n".join(body)
-
-
-def _meta_intro(
-    summary: MetaSummary, *, preview: bool
-) -> str:
+def _meta_intro(summary: MetaSummary, *, preview: bool) -> str:
     date_label = summary.updated or "latest"
     if preview:
         head = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
@@ -340,8 +328,13 @@ def build_meta_layouts(
     summary: MetaSummary, *, preview: bool = False
 ) -> list[discord.ui.LayoutView]:
     """
-    Single starter message with clearer hierarchy:
-    role header → featured portrait card → hard separator → honourable text + portraits.
+    Single starter message.
+
+    Per role (accent container):
+      featured portrait card → honourable rows each with their own side portrait.
+
+    Budget: header(1) + 3×(container(1) + featured(3) + 3 mention sections(9)) = 40.
+    (A Discord Separator would push us over the cap and force a bottom image dump.)
     """
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(_meta_intro(summary, preview=preview)))
@@ -355,9 +348,7 @@ def build_meta_layouts(
         container = discord.ui.Container(accent_colour=colour)
         view.add_item(container)
 
-        container.add_item(discord.ui.TextDisplay(_role_header(role)))
-
-        card = _pick_card_text(pick)
+        card = _pick_card_text(pick, role=role)
         if pick.icon_url:
             container.add_item(
                 discord.ui.Section(
@@ -368,26 +359,17 @@ def build_meta_layouts(
         else:
             container.add_item(discord.ui.TextDisplay(card))
 
-        container.add_item(
-            discord.ui.Separator(
-                visible=True,
-                spacing=discord.SeparatorSpacing.large,
-            )
-        )
-
-        mentions = _mentions_block(pick.mentions)
-        if mentions:
-            container.add_item(discord.ui.TextDisplay(mentions))
-            gallery_items = [
-                discord.MediaGalleryItem(
-                    m.icon_url,
-                    description=f"{m.name} · {m.win_rate}",
+        for i, mention in enumerate(pick.mentions):
+            mcard = _mention_card_text(mention, honourable_header=(i == 0))
+            if mention.icon_url:
+                container.add_item(
+                    discord.ui.Section(
+                        mcard,
+                        accessory=discord.ui.Thumbnail(mention.icon_url),
+                    )
                 )
-                for m in pick.mentions
-                if m.icon_url
-            ]
-            if gallery_items:
-                container.add_item(discord.ui.MediaGallery(*gallery_items))
+            else:
+                container.add_item(discord.ui.TextDisplay(mcard))
 
     if view._total_children > 40:
         log.warning(
@@ -411,10 +393,9 @@ def build_meta_embeds(
         pick = summary.roles.get(role)
         if pick is None:
             continue
-        body = [_role_header(role), _pick_card_text(pick)]
-        mentions = _mentions_block(pick.mentions)
-        if mentions:
-            body.append(mentions)
+        body = [_pick_card_text(pick, role=role)]
+        for i, mention in enumerate(pick.mentions):
+            body.append(_mention_card_text(mention, honourable_header=(i == 0)))
         emb = discord.Embed(
             description="\n\n".join(body)[:4096],
             color=ROLE_COLOR.get(role, OW_ORANGE),

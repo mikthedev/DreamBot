@@ -50,7 +50,7 @@ Voice transcript embeds (text copies of what Dream said) go to a channel you set
 
 ## Overwatch
 
-Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](https://www.counterwatch.gg/stats/overwatch/tier-list), and [best one-tricks / META](https://www.counterwatch.gg/stats/overwatch/best-onetricks). Each stream keeps **one locked post** edited in place (react, don’t comment). Tags: **Patch Notes**, **Tier List**, **META**. Configure under **`/panel` → Overwatch**.
+Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](https://www.counterwatch.gg/stats/overwatch/tier-list), and [best one-tricks](https://www.counterwatch.gg/stats/overwatch/best-onetricks). Each stream keeps **one locked post** edited in place (react, don’t comment). Tags: **Patch Notes**, **META**. Configure under **`/panel` → Overwatch**.
 
 ---
 

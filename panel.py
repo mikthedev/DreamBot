@@ -264,10 +264,10 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "**Previous patches** still opens archives privately.\n\n"
             "**Tier list** — [Counterwatch]({tier_url}), about every "
             "**{days} days**. Same single-post overwrite with hero emojis + win / pick "
-            "rates.\n\n"
-            "**META** — [best one-tricks]({meta_url}), same cadence. Patch-notes style "
-            "cards per role with honourable mentions. Uses tag **META** (🎮).\n\n"
-            "_Pick a **Forum** below. Tags: **Patch Notes** / **Tier List** / **META**._"
+            "rates (tag **META**).\n\n"
+            "**Best to main** — [one-tricks]({meta_url}), same cadence. Patch-notes style "
+            "cards per role with honourable mentions (tag **META**).\n\n"
+            "_Pick a **Forum** below. Tags: **Patch Notes** / **META**._"
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,

@@ -19,10 +19,12 @@ OW_CHANNEL_TYPES = (
 
 # Prefer the server's emoji tags; never invent plain "Patch" / "Tier"
 OW_PATCH_TAG_NAMES = ("Patch Notes",)
-OW_TIER_TAG_NAMES = ("Tier List",)
+# Tier list + best-to-main both sit under META
+OW_TIER_TAG_NAMES = ("META",)
 OW_META_TAG_NAMES = ("META",)
-# Bot-created leftovers to strip when cleaning a forum
+# Bot-created leftovers / retired tags to strip when cleaning a forum
 OW_PLAIN_TAGS_TO_REMOVE = frozenset({"patch", "tier"})
+OW_RETIRED_TAG_NAMES = frozenset({"tier list"})
 
 OwDestination = discord.TextChannel | discord.ForumChannel
 
@@ -55,7 +57,7 @@ def patch_thread_title(*, date: str | None = None, title: str | None = None) -> 
 
 
 def tier_thread_title(*, season: str | None, updated: str | None = None) -> str:
-    """Forum list already shows the date + Tier List tag."""
+    """Forum list already shows the date + META tag."""
     if season:
         return forum_thread_name(f"Tierlist for Season {season}")
     return forum_thread_name("Tierlist")
@@ -111,11 +113,15 @@ async def resolve_forum_tags(
 
 
 async def remove_plain_ow_tags(forum: discord.ForumChannel) -> list[str]:
-    """Drop bot-created plain Patch/Tier tags; keep emoji tags like Patch Notes."""
+    """Drop retired / plain bot tags (e.g. Tier List); keep Patch Notes + META."""
     keep: list[discord.ForumTag] = []
     removed: list[str] = []
     for tag in forum.available_tags:
-        if tag.name.casefold() in OW_PLAIN_TAGS_TO_REMOVE and tag.emoji is None:
+        name_cf = tag.name.casefold()
+        if name_cf in OW_RETIRED_TAG_NAMES:
+            removed.append(tag.name)
+            continue
+        if name_cf in OW_PLAIN_TAGS_TO_REMOVE and tag.emoji is None:
             removed.append(tag.name)
             continue
         keep.append(tag)
@@ -124,11 +130,11 @@ async def remove_plain_ow_tags(forum: discord.ForumChannel) -> list[str]:
     try:
         await forum.edit(
             available_tags=keep,
-            reason="Remove plain bot-created OW tags (use Patch Notes / Tier List)",
+            reason="Remove retired OW tags (use Patch Notes / META)",
         )
         log.info("Removed forum tags %s from #%s", removed, forum.name)
     except discord.HTTPException as exc:
-        log.warning("Could not remove plain OW tags from #%s: %s", forum.name, exc)
+        log.warning("Could not remove OW tags from #%s: %s", forum.name, exc)
         return []
     return removed
 

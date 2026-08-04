@@ -16,6 +16,7 @@ import discord
 from discord.ext import commands, tasks
 
 import config
+from ow_forum import is_ow_destination, post_ow_announcement
 
 log = logging.getLogger("dream_team.overwatch")
 
@@ -938,26 +939,28 @@ class OverwatchPatchCog(commands.Cog):
 
     async def post_to_channel(
         self,
-        channel: discord.TextChannel,
+        channel: discord.TextChannel | discord.ForumChannel,
         summary: PatchSummary,
         *,
         preview: bool = False,
+        with_history: bool = False,
     ) -> list[discord.Message]:
-        messages: list[discord.Message] = []
-        try:
-            layouts = build_patch_layouts(summary, preview=preview)
-            for layout in layouts:
-                messages.append(await channel.send(view=layout))
-        except Exception as exc:
-            log.warning("OW layout failed, using embeds: %s", exc)
-            messages.append(
-                await channel.send(embeds=build_patch_embeds(summary, preview=preview))
-            )
-        return messages
+        layouts = build_patch_layouts(summary, preview=preview)
+        date_label = summary.date or summary.title or "Patch"
+        return await post_ow_announcement(
+            channel,
+            thread_name=f"Patch · {date_label}",
+            layouts=layouts,
+            embeds_fallback=lambda: build_patch_embeds(summary, preview=preview),
+            tag_names=("Patch",),
+            trailing_content="Earlier balance notes:" if with_history else None,
+            trailing_view=OwPatchHistoryView() if with_history else None,
+        )
 
     async def delete_live_messages(
         self, channel: discord.TextChannel, guild_id: int
     ) -> None:
+        """Only used for classic text channels — forum posts are kept as history."""
         for mid in self.bot.db.get_ow_live_message_ids(guild_id):
             try:
                 msg = await channel.fetch_message(mid)
@@ -968,18 +971,18 @@ class OverwatchPatchCog(commands.Cog):
                 log.warning("Could not delete old OW patch message %s: %s", mid, exc)
 
     async def publish_live(
-        self, channel: discord.TextChannel, summary: PatchSummary
+        self,
+        channel: discord.TextChannel | discord.ForumChannel,
+        summary: PatchSummary,
     ) -> list[discord.Message]:
-        """Delete the previous live post, post the new one, archive payload for history."""
+        """Post the new patch (forum: new locked post; text: replace previous live)."""
         guild_id = channel.guild.id
-        await self.delete_live_messages(channel, guild_id)
+        if isinstance(channel, discord.TextChannel):
+            await self.delete_live_messages(channel, guild_id)
 
-        messages = await self.post_to_channel(channel, summary, preview=False)
-        history_msg = await channel.send(
-            "Earlier balance notes:",
-            view=OwPatchHistoryView(),
+        messages = await self.post_to_channel(
+            channel, summary, preview=False, with_history=True
         )
-        messages.append(history_msg)
 
         self.bot.db.save_ow_patch_live(
             guild_id,
@@ -1013,8 +1016,8 @@ class OverwatchPatchCog(commands.Cog):
         if not channel_id:
             return False, "No Overwatch patch channel set."
         channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            return False, "Patch channel missing."
+        if not is_ow_destination(channel):
+            return False, "Patch channel missing (set a forum or text channel)."
 
         try:
             summary = await self.get_summary()

@@ -18,6 +18,7 @@ from discord.ext import commands, tasks
 from PIL import Image
 
 import config
+from ow_forum import is_ow_destination, post_ow_announcement
 
 log = logging.getLogger("dream_team.ow_tier")
 
@@ -448,36 +449,33 @@ class OverwatchTierCog(commands.Cog):
 
     async def post_to_channel(
         self,
-        channel: discord.TextChannel,
+        channel: discord.TextChannel | discord.ForumChannel,
         summary: TierListSummary,
         *,
         preview: bool = False,
     ) -> list[discord.Message]:
         emoji_map = await self.ensure_hero_emojis(summary)
-        messages: list[discord.Message] = []
-
-        try:
-            layouts = build_tier_layouts(
-                summary,
-                preview=preview,
-                emoji_map=emoji_map,
-            )
-            for layout in layouts:
-                messages.append(await channel.send(view=layout))
-        except Exception as exc:
-            log.warning("OW tier layout failed, using embeds: %s", exc)
-            messages.append(
-                await channel.send(
-                    embeds=build_tier_embeds(
-                        summary, preview=preview, emoji_map=emoji_map
-                    )
-                )
-            )
-        return messages
+        layouts = build_tier_layouts(
+            summary,
+            preview=preview,
+            emoji_map=emoji_map,
+        )
+        season = f"S{summary.season}" if summary.season else "Tier list"
+        date_bit = summary.updated or "latest"
+        return await post_ow_announcement(
+            channel,
+            thread_name=f"Tier list · {season} · {date_bit}",
+            layouts=layouts,
+            embeds_fallback=lambda: build_tier_embeds(
+                summary, preview=preview, emoji_map=emoji_map
+            ),
+            tag_names=("Tier",),
+        )
 
     async def delete_live_messages(
         self, channel: discord.TextChannel, guild_id: int
     ) -> None:
+        """Only used for classic text channels — forum posts are kept as history."""
         for mid in self.bot.db.get_ow_tier_message_ids(guild_id):
             try:
                 msg = await channel.fetch_message(mid)
@@ -488,10 +486,13 @@ class OverwatchTierCog(commands.Cog):
                 log.warning("Could not delete old OW tier message %s: %s", mid, exc)
 
     async def publish_live(
-        self, channel: discord.TextChannel, summary: TierListSummary
+        self,
+        channel: discord.TextChannel | discord.ForumChannel,
+        summary: TierListSummary,
     ) -> list[discord.Message]:
         guild_id = channel.guild.id
-        await self.delete_live_messages(channel, guild_id)
+        if isinstance(channel, discord.TextChannel):
+            await self.delete_live_messages(channel, guild_id)
         messages = await self.post_to_channel(channel, summary, preview=False)
         self.bot.db.save_ow_tier_live(
             guild_id,
@@ -542,8 +543,8 @@ class OverwatchTierCog(commands.Cog):
         if not channel_id:
             return False, "No Overwatch tier-list channel set."
         channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            return False, "Tier-list channel missing."
+        if not is_ow_destination(channel):
+            return False, "Tier-list channel missing (set a forum or text channel)."
 
         if not self._due_for_post(guild.id):
             last = self.bot.db.get_ow_tier_last_posted(guild.id)

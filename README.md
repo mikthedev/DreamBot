@@ -50,7 +50,7 @@ Voice transcript embeds (text copies of what Dream said) go to a channel you set
 
 ## Overwatch
 
-Automatic patch-note posts from Blizzard and periodic Counterwatch tier lists, with hero icons and rates. Channel and preview/post controls live under **`/panel` → Overwatch**.
+Automatic **forum posts** for Blizzard patch notes and Counterwatch tier lists (Components V2 cards, hero icons, win/pick rates). Each post is **locked** so members can react but not comment. Set the forum(s) and use preview/post under **`/panel` → Overwatch**.
 
 ---
 

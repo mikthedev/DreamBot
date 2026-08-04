@@ -24,6 +24,7 @@ from birthdays import Birthday, celebration_embed
 from names import SetNameModal, WelcomeNameView, names_list_embed
 from overwatch_patches import PATCH_URL, build_patch_embeds
 from overwatch_tierlist import TIER_URL
+from ow_forum import OW_CHANNEL_TYPES, is_ow_destination
 from nicknames import is_guild_manager
 from onboarding import (
     EditOnboardModal,
@@ -250,10 +251,12 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Overwatch",
         description=(
             "**Patches** — [official notes]({patch_url}), checked daily. "
-            "One live post (old deleted on new patch); **Previous patches** is ephemeral.\n\n"
+            "Each update becomes a **forum post** (locked — reactions only, no comments). "
+            "Older posts stay in the forum; **Previous patches** also opens archives privately.\n\n"
             "**Tier list** — [Counterwatch]({tier_url}), about every "
-            "**{days} days**. Square hero emojis + win / pick rates "
-            "(first sync uploads icons once)."
+            "**{days} days**. Same forum style with square hero emojis + win / pick rates "
+            "(first sync uploads icons once).\n\n"
+            "_Pick a **Forum** channel below (text still works as a fallback)._"
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,
@@ -891,15 +894,15 @@ class AdminHubView(discord.ui.View):
 
     def _add_overwatch_controls(self) -> None:
         patch_pick = discord.ui.ChannelSelect(
-            placeholder="Set patch notes channel…",
-            channel_types=[discord.ChannelType.text],
+            placeholder="Set patch notes forum…",
+            channel_types=list(OW_CHANNEL_TYPES),
             min_values=1,
             max_values=1,
             row=1,
         )
         tier_pick = discord.ui.ChannelSelect(
-            placeholder="Set tier-list channel…",
-            channel_types=[discord.ChannelType.text],
+            placeholder="Set tier-list forum…",
+            channel_types=list(OW_CHANNEL_TYPES),
             min_values=1,
             max_values=1,
             row=2,
@@ -1049,9 +1052,9 @@ class AdminHubView(discord.ui.View):
                     channel = await interaction.guild.fetch_channel(channel_id)
                 except discord.HTTPException:
                     channel = None
-            if not isinstance(channel, discord.TextChannel):
+            if not is_ow_destination(channel):
                 await interaction.response.send_message(
-                    "Patch channel missing — pick it again in the dropdown.",
+                    "Patch channel missing — pick a forum (or text) channel again.",
                     ephemeral=True,
                 )
                 return
@@ -1073,12 +1076,13 @@ class AdminHubView(discord.ui.View):
                 )
                 return
             await cog.publish_live(channel, summary)
+            kind = "forum post" if isinstance(channel, discord.ForumChannel) else "channel"
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Posted",
                 value=(
                     f"**{summary.title}** → {channel.mention}\n"
-                    "_(Replaced any previous live patch post.)_"
+                    f"_(New locked {kind}; reactions allowed, no comments.)_"
                 ),
                 inline=False,
             )
@@ -1117,9 +1121,9 @@ class AdminHubView(discord.ui.View):
                     channel = await interaction.guild.fetch_channel(channel_id)
                 except discord.HTTPException:
                     channel = None
-            if not isinstance(channel, discord.TextChannel):
+            if not is_ow_destination(channel):
                 await interaction.response.send_message(
-                    "Tier-list channel missing — pick it again in the dropdown.",
+                    "Tier-list channel missing — pick a forum (or text) channel again.",
                     ephemeral=True,
                 )
                 return
@@ -1141,12 +1145,13 @@ class AdminHubView(discord.ui.View):
                 )
                 return
             await cog.publish_live(channel, summary)
+            kind = "forum post" if isinstance(channel, discord.ForumChannel) else "channel"
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Posted",
                 value=(
                     f"**{summary.title}** → {channel.mention}\n"
-                    "_(Replaced any previous live tier-list post.)_"
+                    f"_(New locked {kind}; reactions allowed, no comments.)_"
                 ),
                 inline=False,
             )

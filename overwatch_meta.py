@@ -293,18 +293,41 @@ def _pick_card_text(pick: MetaPick, *, role: str) -> str:
     return "\n".join(lines)
 
 
-def _mention_card_text(m: MetaMention, *, honourable_header: bool = False) -> str:
+def _emoji_name(name: str, slug: str = "") -> str:
+    raw = (slug or name).lower()
+    key = re.sub(r"[^a-z0-9]+", "_", raw).strip("_") or "hero"
+    return f"ows_{key}"[:32]
+
+
+def _mention_line(
+    m: MetaMention,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
     kind = {
         "Rank-specific": "Rank pick",
         "Map pool pick": "Map flex",
         "Counter pick": "Counter",
     }.get(m.kind, m.kind)
-    lines: list[str] = []
-    if honourable_header:
-        lines.append("**Honourable mentions**")
-    lines.append(f"**{m.name}** · **{m.win_rate}** · _{kind}_")
+    em = None
+    if emoji_map:
+        em = emoji_map.get(_emoji_name(m.name, m.slug))
+    prefix = f"{em}  " if em is not None else ""
+    head = f"{prefix}**{m.name}** · **{m.win_rate}** · _{kind}_"
     if m.note:
-        lines.append(m.note)
+        return f"{head}\n{m.note}"
+    return head
+
+
+def _mentions_block(
+    mentions: list[MetaMention],
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
+    if not mentions:
+        return ""
+    lines = ["**Honourable mentions**"]
+    for m in mentions:
+        lines.append("")
+        lines.append(_mention_line(m, emoji_map))
     return "\n".join(lines)
 
 
@@ -325,16 +348,17 @@ def _meta_intro(summary: MetaSummary, *, preview: bool) -> str:
 
 
 def build_meta_layouts(
-    summary: MetaSummary, *, preview: bool = False
+    summary: MetaSummary,
+    *,
+    preview: bool = False,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> list[discord.ui.LayoutView]:
     """
     Single starter message.
 
-    Per role (accent container):
-      featured portrait card → honourable rows each with their own side portrait.
-
-    Budget: header(1) + 3×(container(1) + featured(3) + 3 mention sections(9)) = 40.
-    (A Discord Separator would push us over the cap and force a bottom image dump.)
+    Featured pick keeps a portrait thumbnail; honourable mentions use app emojis
+    so we can afford a real Separator under the featured card.
+    Budget: header(1) + 3×(container(1) + featured(3) + sep(1) + mentions text(1)) = 19.
     """
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(_meta_intro(summary, preview=preview)))
@@ -359,17 +383,16 @@ def build_meta_layouts(
         else:
             container.add_item(discord.ui.TextDisplay(card))
 
-        for i, mention in enumerate(pick.mentions):
-            mcard = _mention_card_text(mention, honourable_header=(i == 0))
-            if mention.icon_url:
-                container.add_item(
-                    discord.ui.Section(
-                        mcard,
-                        accessory=discord.ui.Thumbnail(mention.icon_url),
-                    )
-                )
-            else:
-                container.add_item(discord.ui.TextDisplay(mcard))
+        container.add_item(
+            discord.ui.Separator(
+                visible=True,
+                spacing=discord.SeparatorSpacing.large,
+            )
+        )
+
+        mentions = _mentions_block(pick.mentions, emoji_map)
+        if mentions:
+            container.add_item(discord.ui.TextDisplay(mentions))
 
     if view._total_children > 40:
         log.warning(
@@ -380,7 +403,10 @@ def build_meta_layouts(
 
 
 def build_meta_embeds(
-    summary: MetaSummary, *, preview: bool = False
+    summary: MetaSummary,
+    *,
+    preview: bool = False,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> list[discord.Embed]:
     head = discord.Embed(
         title="Best heroes to main",
@@ -394,8 +420,9 @@ def build_meta_embeds(
         if pick is None:
             continue
         body = [_pick_card_text(pick, role=role)]
-        for i, mention in enumerate(pick.mentions):
-            body.append(_mention_card_text(mention, honourable_header=(i == 0)))
+        mentions = _mentions_block(pick.mentions, emoji_map)
+        if mentions:
+            body.append(mentions)
         emb = discord.Embed(
             description="\n\n".join(body)[:4096],
             color=ROLE_COLOR.get(role, OW_ORANGE),
@@ -433,6 +460,44 @@ class OverwatchMetaCog(commands.Cog):
             guild_id
         )
 
+    def _mention_heroes(self, summary: MetaSummary):
+        """TierHero stubs so we can reuse the tier-list app-emoji pipeline."""
+        from overwatch_tierlist import TierHero
+
+        heroes: list = []
+        for pick in summary.roles.values():
+            for m in pick.mentions:
+                heroes.append(
+                    TierHero(
+                        name=m.name,
+                        role=pick.role,
+                        win_rate=m.win_rate,
+                        pick_rate="",
+                        slug=m.slug,
+                        icon_url=m.icon_url,
+                    )
+                )
+        return heroes
+
+    async def ensure_mention_emojis(
+        self, summary: MetaSummary
+    ) -> dict[str, discord.Emoji]:
+        heroes = self._mention_heroes(summary)
+        if not heroes:
+            return {
+                e.name: e for e in await self.bot.fetch_application_emojis()
+            }
+        tier_cog = self.bot.get_cog("OverwatchTierCog")
+        if tier_cog is None:
+            return {
+                e.name: e for e in await self.bot.fetch_application_emojis()
+            }
+        from overwatch_tierlist import TierListSummary
+
+        stub = TierListSummary(season="0", updated="")
+        stub.tiers = {"S": heroes}
+        return await tier_cog.ensure_hero_emojis(stub)
+
     async def post_to_channel(
         self,
         channel: discord.TextChannel | discord.ForumChannel,
@@ -441,12 +506,17 @@ class OverwatchMetaCog(commands.Cog):
         preview: bool = False,
         existing_thread_id: int | None = None,
     ) -> tuple[list[discord.Message], int | None]:
-        layouts = build_meta_layouts(summary, preview=preview)
+        emoji_map = await self.ensure_mention_emojis(summary)
+        layouts = build_meta_layouts(
+            summary, preview=preview, emoji_map=emoji_map
+        )
         return await post_ow_announcement(
             channel,
             thread_name=meta_thread_title(season=summary.season),
             layouts=layouts,
-            embeds_fallback=lambda: build_meta_embeds(summary, preview=preview),
+            embeds_fallback=lambda: build_meta_embeds(
+                summary, preview=preview, emoji_map=emoji_map
+            ),
             tag_names=OW_META_TAG_NAMES,
             existing_thread_id=existing_thread_id,
         )
@@ -499,14 +569,23 @@ class OverwatchMetaCog(commands.Cog):
             )
             return
         try:
-            layouts = build_meta_layouts(summary, preview=True)
+            emoji_map = await self.ensure_mention_emojis(summary)
+            layouts = build_meta_layouts(
+                summary, preview=True, emoji_map=emoji_map
+            )
             await interaction.followup.send(view=layouts[0], ephemeral=True)
             for layout in layouts[1:]:
                 await interaction.followup.send(view=layout, ephemeral=True)
         except Exception as exc:
             log.warning("OW META preview failed: %s", exc)
+            try:
+                emoji_map = await self.ensure_mention_emojis(summary)
+            except Exception:
+                emoji_map = None
             await interaction.followup.send(
-                embeds=build_meta_embeds(summary, preview=True),
+                embeds=build_meta_embeds(
+                    summary, preview=True, emoji_map=emoji_map
+                ),
                 ephemeral=True,
             )
 

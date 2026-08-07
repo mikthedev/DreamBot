@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import discord
-from discord.ext import commands, tasks
 
 log = logging.getLogger("dream_team.presence")
 
@@ -42,6 +41,17 @@ def _clip(value: str | None, limit: int) -> str | None:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _status_title(title: str, *, limit: int = 120) -> str:
+    """Keep the full song name; only trim at Discord's hard length limit."""
+    text = " ".join((title or "Music").split()).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" -–—|·,") + "…"
 
 
 @dataclass
@@ -190,6 +200,7 @@ _IDLE_TITLES = (
     "Watching the lobby",
     "Ready for the squad",
     "Holding down the fort",
+    "Waiting for /play",
     "On standby for Dream Team",
 )
 
@@ -208,40 +219,71 @@ def presence_idle(*, application_id: int | None = None) -> DiscordRichPresence:
     )
 
 
-class IdlePresenceCog(commands.Cog):
-    """Rotate Watching title while the bot is online."""
+def presence_between_tracks(*, application_id: int | None = None) -> DiscordRichPresence:
+    """Short gap after music — same rotating titles, softer subtitle."""
+    title = random.choice(_IDLE_TITLES)
+    return DiscordRichPresence(
+        name=title,
+        activity_type=discord.ActivityType.watching,
+        details="DreamBot",
+        state="Back in a moment",
+        large_image_key="dreamteam",
+        large_image_text="DreamBot",
+        application_id=application_id,
+    )
 
-    def __init__(self, bot: commands.Bot) -> None:
-        self.bot = bot
-        self._last_rotate_at = 0.0
-        self.idle_watchdog.start()
 
-    def cog_unload(self) -> None:
-        self.idle_watchdog.cancel()
+def presence_now_playing(
+    *,
+    title: str,
+    platform: str,
+    requester: str,
+    uploader: str | None = None,
+    source_key: str = "soundcloud",
+    started_at: float | None = None,
+    duration: int | None = None,
+    queue_len: int = 0,
+    party_id: str | None = None,
+    track_url: str | None = None,
+    thumbnail_url: str | None = None,
+    application_id: int | None = None,
+    paused: bool = False,
+) -> DiscordRichPresence:
+    """Fancy status with the full song title."""
+    full = _status_title(title, limit=118)
 
-    async def force_idle(self) -> None:
-        app_id = self.bot.application_id or (
-            self.bot.user.id if self.bot.user else None
-        )
-        try:
-            await update_presence(
-                self.bot, presence_idle(application_id=int(app_id) if app_id else None)
-            )
-            self._last_rotate_at = time.time()
-        except Exception as exc:
-            log.warning("Could not set idle presence: %s", exc)
+    if paused:
+        name = _clip(f"⏸ {full}", 128) or full
+        details = "Paused"
+        state = _clip(f"✦ {platform} · {requester}", 128)
+        activity_type = discord.ActivityType.playing
+    else:
+        name = full
+        details = _clip(f"✦ {platform}", 128)
+        bits = [p for p in (uploader, requester) if p]
+        state = _clip(" · ".join(bits) if bits else platform, 128)
+        activity_type = discord.ActivityType.listening
 
-    @tasks.loop(seconds=30)
-    async def idle_watchdog(self) -> None:
-        import config
+    start_ts = int(started_at or time.time()) if (started_at or duration) else None
+    end_ts = (
+        int((started_at or time.time()) + duration)
+        if duration and duration > 0 and not paused
+        else None
+    )
 
-        now = time.time()
-        if now - self._last_rotate_at < config.IDLE_ROTATE_SECONDS:
-            return
-        await self.force_idle()
-        log.info("Rotated idle Watching title")
-
-    @idle_watchdog.before_loop
-    async def before_idle_watchdog(self) -> None:
-        await self.bot.wait_until_ready()
+    return DiscordRichPresence(
+        name=name,
+        activity_type=activity_type,
+        details=details,
+        state=state,
+        start_timestamp=start_ts,
+        end_timestamp=end_ts,
+        large_image_key=thumbnail_url or "dreamteam",
+        large_image_text=_clip(title, 128),
+        small_image_key=(
+            source_key if source_key in {"soundcloud", "spotify"} else "soundcloud"
+        ),
+        small_image_text=platform,
+        application_id=application_id,
+    )
 

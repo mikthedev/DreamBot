@@ -1,6 +1,6 @@
 # Dream Team Bot
 
-The Discord companion for **Dream Team** — nicknames, birthdays, Overwatch news, and a voice AI you can call by name.
+The Discord companion for **Dream Team** — nicknames, birthdays, music, Overwatch news, and a voice AI you can call by name.
 
 ---
 
@@ -19,6 +19,16 @@ Admins manage everything from **`/panel`** → Names (including a one-tap nickna
 Members save their day with `/setbirthday`. The bot celebrates at the configured hour, and admins can preview, announce, and post signup panels from the control panel.
 
 Once a year, Dream Team’s founding date (**28.06.2017**) gets its own anniversary post — also editable in `/panel`.
+
+---
+
+## Music
+
+SoundCloud in voice: `/play`, `/skip`, `/pause`, `/queue`, `/nowplaying`, `/stop`. Paste a SoundCloud link or search by name. YouTube is not supported; Spotify is planned later.
+
+While a track plays, the bot shows rich presence (title, artist, progress, queue). A live now-playing card can sit in a channel of your choice.
+
+If the channel empties, the bot leaves after **10 seconds**.
 
 ---
 
@@ -60,6 +70,7 @@ A persistent Ukrainian welcome panel with buttons — edit and republish without
 | `/ask` | Chat with free Llama (Groq) |
 | `/join` / `/disconnect` | Voice AI in / out |
 | `/setbirthday` · `/mybirthday` · `/clearbirthday` | Birthday self-service |
+| `/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave` | Music (SoundCloud) |
 
 **Admins**
 

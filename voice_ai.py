@@ -532,6 +532,13 @@ class VoiceAICog(commands.Cog):
         if voice is None or not voice.is_connected():
             return
 
+        music = self.bot.get_cog("MusicCog")
+        if music is not None:
+            player = getattr(music, "get_player", lambda _gid: None)(guild.id)
+            if player is not None and getattr(player, "current", None) is not None:
+                log.info("Skipping TTS while music is playing in %s", guild.name)
+                return
+
         self.pause_listening(guild.id, 12.0)
         tmp = Path(tempfile.mkdtemp(prefix="dream_tts_"))
         mp3 = tmp / "reply.mp3"
@@ -671,6 +678,12 @@ class VoiceAICog(commands.Cog):
         if isinstance(interaction.channel, discord.TextChannel):
             self._text_channel[interaction.guild.id] = interaction.channel.id
 
+        music = self.bot.get_cog("MusicCog")
+        if music is not None and hasattr(music, "get_player"):
+            player = music.get_player(interaction.guild.id)
+            if player is not None:
+                player.voice = vc
+
         # Confirm DAVE session is ready (needed to decrypt voice on discord.py 2.7+)
         conn = getattr(vc, "_connection", None)
         dave = getattr(conn, "dave_session", None) if conn else None
@@ -769,11 +782,21 @@ class VoiceAICog(commands.Cog):
             )
 
     async def _leave_voice(self, guild_id: int) -> None:
-        """Stop wake listening and disconnect from VC."""
+        """Stop wake listening, stop music, and disconnect from VC."""
         self._cancel_alone_timer(guild_id)
         self._cancel_idle_timer(guild_id)
 
         await self._stop_listening(guild_id, leave=False)
+
+        music = self.bot.get_cog("MusicCog")
+        if music is not None and hasattr(music, "get_player"):
+            player = music.get_player(guild_id)
+            if player is not None:
+                try:
+                    await player.stop()
+                    return
+                except Exception:
+                    log.exception("Music stop failed during disconnect")
 
         guild = self.bot.get_guild(guild_id)
         if guild and guild.voice_client and guild.voice_client.is_connected():

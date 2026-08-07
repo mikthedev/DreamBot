@@ -384,6 +384,15 @@ async def download_one_video(
                 break
         return await _download_direct(session, url, dest_dir / f"clip{ext}", max_bytes)
 
+    # YouTube on bot-hosting almost always hits "confirm you're not a bot".
+    # Don't burn CPU on the full client/cookie ladder — keep the link in the post.
+    if _is_youtube(url) and not config.YTDLP_PROXY:
+        log.info(
+            "Skipping YouTube download (no proxy; host IP usually blocked): %s",
+            url[:80],
+        )
+        return None
+
     return await asyncio.to_thread(_download_with_ytdl, url, dest_dir, max_bytes)
 
 

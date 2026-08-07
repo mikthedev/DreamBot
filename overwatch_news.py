@@ -30,6 +30,13 @@ log = logging.getLogger("dream_team.ow_news")
 USER_AGENT = "DreamTeamBot/1.0 (+discord; overwatch news)"
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 BSKY_FEED = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed"
+BSKY_THREAD = "https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread"
+BSKY_POST_URL_RE = re.compile(
+    r"""(?xi)
+    https?://(?:www\.)?bsky\.app/profile/
+    (?P<handle>[^/\s?#]+)/post/(?P<rkey>[A-Za-z0-9]+)
+    """
+)
 
 # Heavy deny-list: cosmetics, shop, esports, patch dumps, fluff
 _DENY = re.compile(
@@ -267,6 +274,76 @@ def _video_urls_from_post(post: dict) -> list[str]:
     return collect_video_candidates(text=text, explicit_urls=urls)
 
 
+def extract_bsky_post_urls(text: str) -> list[str]:
+    return list(dict.fromkeys(m.group(0) for m in BSKY_POST_URL_RE.finditer(text or "")))
+
+
+def _prefer_non_youtube(urls: list[str]) -> list[str]:
+    """Bluesky / direct first — YouTube is usually blocked on datacenter hosts."""
+    from media_attach import extract_youtube_urls
+
+    non_yt: list[str] = []
+    yt: list[str] = []
+    for u in urls:
+        if extract_youtube_urls(u):
+            yt.append(u)
+        else:
+            non_yt.append(u)
+    return non_yt + yt
+
+
+def bsky_post_at_uri(url: str) -> str | None:
+    match = BSKY_POST_URL_RE.search(url or "")
+    if not match:
+        return None
+    return (
+        f"at://{match.group('handle')}/app.bsky.feed.post/{match.group('rkey')}"
+    )
+
+
+async def resolve_bsky_post_url(
+    session: aiohttp.ClientSession, url: str
+) -> NewsItem | None:
+    """
+    Turn a public bsky.app/profile/.../post/... link into media URLs via the API.
+    Custom posts paste these links; they are not downloadable as files themselves.
+    """
+    at_uri = bsky_post_at_uri(url)
+    if not at_uri:
+        return None
+    try:
+        async with session.get(
+            BSKY_THREAD,
+            params={"uri": at_uri, "depth": "0"},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            ssl=_SSL_CTX,
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as resp:
+            if resp.status != 200:
+                log.warning(
+                    "Bluesky getPostThread %s → HTTP %s", at_uri, resp.status
+                )
+                return None
+            data = await resp.json()
+    except Exception as exc:
+        log.warning("Bluesky resolve failed for %s: %s", url[:80], exc)
+        return None
+
+    thread = data.get("thread") or {}
+    post = thread.get("post")
+    if not isinstance(post, dict):
+        return None
+    item = parse_feed_item({"post": post})
+    if item is None:
+        return None
+    log.info(
+        "Resolved Bluesky post → videos=%s images=%s",
+        len(item.video_urls),
+        len(item.image_urls),
+    )
+    return item
+
+
 def parse_feed_item(item: dict) -> NewsItem | None:
     post = item.get("post") or {}
     rec = post.get("record") or {}
@@ -446,7 +523,7 @@ class OverwatchNewsCog(commands.Cog):
         media_url: str | None = None,
         auto_close: bool = True,
     ) -> discord.Thread | discord.Message | None:
-        """Admin custom news-style post (title + body + optional YouTube/video URL)."""
+        """Admin custom news-style post (title + body + optional media URL)."""
         from uuid import uuid4
 
         from media_attach import (
@@ -463,15 +540,38 @@ class OverwatchNewsCog(commands.Cog):
 
         session = await self._get_session()
         image_urls: list[str] = []
-        video_candidates = collect_video_candidates(
-            text=f"{body}\n{media_url or ''}",
-            explicit_urls=[media_url] if media_url else None,
+        explicit_videos: list[str] = []
+        bsky_links = extract_bsky_post_urls(
+            "\n".join(x for x in (media_url, body) if x)
         )
 
-        if media_url and media_url not in video_candidates:
+        for link in bsky_links:
+            resolved = await resolve_bsky_post_url(session, link)
+            if resolved is None:
+                continue
+            for u in resolved.video_urls:
+                if u not in explicit_videos:
+                    explicit_videos.append(u)
+            for u in resolved.image_urls:
+                if u not in image_urls:
+                    image_urls.append(u)
+            # Fill empty body from the Bluesky post text (no source shout-out)
+            if not body and resolved.text:
+                body = clean_news_text(resolved.text)
+
+        video_candidates = collect_video_candidates(
+            text=f"{body}\n{media_url or ''}",
+            explicit_urls=explicit_videos
+            + ([media_url] if media_url and media_url not in bsky_links else []),
+        )
+        # Prefer Bluesky / direct files; YouTube rarely works on bot-hosting
+        video_candidates = _prefer_non_youtube(video_candidates)
+
+        if media_url and media_url not in video_candidates and media_url not in bsky_links:
             if media_url.startswith("http") and not extract_youtube_urls(media_url):
                 if not extract_direct_video_urls(media_url):
-                    image_urls.append(media_url)
+                    if media_url not in image_urls:
+                        image_urls.append(media_url)
 
         image_files = (
             await download_images(session, image_urls) if image_urls else []
@@ -482,17 +582,20 @@ class OverwatchNewsCog(commands.Cog):
         ) as (video_files, failed_links):
             files = [*image_files, *video_files]
             post_body = body
-            strip_list = list(video_candidates)
+            strip_list = list(video_candidates) + list(bsky_links)
             if media_url:
                 strip_list.append(media_url)
             if video_files:
                 post_body = strip_urls_from_text(post_body, strip_list)
             elif failed_links:
-                extra = "\n".join(failed_links)
-                if extra not in (post_body or ""):
-                    post_body = (
-                        f"{post_body}\n\n{extra}".strip() if post_body else extra
-                    )
+                # Keep watchable links (YouTube etc.) when attach fails
+                keep = [u for u in failed_links if not u.startswith("https://video.bsky.app/")]
+                if keep:
+                    extra = "\n".join(keep)
+                    if extra not in (post_body or ""):
+                        post_body = (
+                            f"{post_body}\n\n{extra}".strip() if post_body else extra
+                        )
 
             if not files and not post_body:
                 return None

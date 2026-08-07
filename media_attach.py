@@ -91,12 +91,96 @@ def _is_direct_file(url: str) -> bool:
     return bool(_DIRECT_VIDEO_RE.fullmatch(url.strip()))
 
 
-def _ytdl_download_opts(outtmpl: str, max_bytes: int) -> dict:
-    """Lightweight download opts — reuse cookies/proxy/deno from music when available."""
+def _duration_ok(info: dict) -> bool:
+    max_dur = config.OW_MEDIA_MAX_DURATION_SEC
+    if max_dur <= 0:
+        return True
+    duration = info.get("duration")
+    if duration is None:
+        return True
+    try:
+        return float(duration) <= max_dur
+    except (TypeError, ValueError):
+        return True
+
+
+def _pick_download_format_id(info: dict, max_bytes: int) -> str | None:
+    """
+    Prefer a single progressive file Discord can upload (no merge), under max_bytes.
+    Falls back to a mergeable pair only if nothing progressive fits.
+    """
+    formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    if not formats:
+        return None
+
+    def size_of(fmt: dict) -> int | None:
+        for key in ("filesize", "filesize_approx"):
+            val = fmt.get(key)
+            if val is not None:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    def has_url(fmt: dict) -> bool:
+        return bool(fmt.get("url") or fmt.get("fragment_base_url"))
+
+    progressive: list[dict] = []
+    for fmt in formats:
+        if not has_url(fmt):
+            continue
+        vcodec = (fmt.get("vcodec") or "none").lower()
+        acodec = (fmt.get("acodec") or "none").lower()
+        if vcodec == "none" or acodec == "none":
+            continue
+        # Progressive / single-file
+        protocol = (fmt.get("protocol") or "").lower()
+        if "m3u8" in protocol or "dash" in protocol:
+            # Still usable if yt-dlp can remux; prefer later
+            pass
+        height = fmt.get("height") or 0
+        try:
+            height = int(height)
+        except (TypeError, ValueError):
+            height = 0
+        if height and height > 720:
+            continue
+        sz = size_of(fmt)
+        if sz is not None and sz > max_bytes:
+            continue
+        progressive.append(fmt)
+
+    def score(fmt: dict) -> tuple:
+        height = fmt.get("height") or 0
+        try:
+            height = int(height)
+        except (TypeError, ValueError):
+            height = 0
+        ext = (fmt.get("ext") or "").lower()
+        # Prefer mp4 + higher (but ≤720) resolution
+        return (
+            1 if ext == "mp4" else 0,
+            height,
+            1 if (fmt.get("acodec") or "none") != "none" else 0,
+        )
+
+    if progressive:
+        best = max(progressive, key=score)
+        fid = best.get("format_id")
+        if fid:
+            return str(fid)
+
+    # Fallback: let yt-dlp choose a small ladder (may merge)
+    return None
+
+
+def _ytdl_base_opts(*, use_cookies: bool, outtmpl: str, max_bytes: int) -> dict:
     try:
         from music import _ytdl_opts
 
         base = _ytdl_opts(
+            use_cookies=use_cookies,
             quiet=True,
             no_warnings=True,
             noplaylist=True,
@@ -110,58 +194,37 @@ def _ytdl_download_opts(outtmpl: str, max_bytes: int) -> dict:
         }
         if config.YTDLP_PROXY:
             base["proxy"] = config.YTDLP_PROXY
-        cookies = Path(config.YTDLP_COOKIES)
-        if cookies.is_file():
-            base["cookiefile"] = str(cookies)
+        if use_cookies:
+            cookies = Path(config.YTDLP_COOKIES)
+            if cookies.is_file():
+                base["cookiefile"] = str(cookies)
 
-    # Prefer ≤720p small files; fall back to smaller ladders
-    fmt = (
-        f"bv*[height<=720][filesize_approx<={max_bytes}]+ba/"
-        f"b[height<=720][filesize_approx<={max_bytes}]/"
-        f"bv*[height<=480]+ba/b[height<=480]/"
-        f"bv*[height<=360]+ba/b[height<=360]/worst"
-    )
+    # Progressive-first — format 18 is classic 360p mp4 (audio+video one file)
     base.update(
         {
-            "format": fmt,
+            "format": (
+                "18/"
+                "22/"
+                "best[ext=mp4][height<=720]/"
+                "best[height<=480]/"
+                "bv*[height<=720]+ba/"
+                "best"
+            ),
             "outtmpl": outtmpl,
-            "max_filesize": max_bytes,
             "socket_timeout": 30,
-            "retries": 2,
-            "fragment_retries": 2,
+            "retries": 3,
+            "fragment_retries": 3,
             "noprogress": True,
             "overwrites": True,
-            # Audio merge → mp4 when possible
             "merge_output_format": "mp4",
+            "ignore_no_formats_error": True,
+            # Check size after download — max_filesize aborts mid-way on some formats
         }
     )
-
-    max_dur = config.OW_MEDIA_MAX_DURATION_SEC
-    if max_dur > 0:
-
-        def _duration_filter(info: dict, *, incomplete: bool = False):
-            if incomplete:
-                return None
-            duration = info.get("duration")
-            if duration is not None and float(duration) > max_dur:
-                return f"Video longer than {max_dur}s"
-            return None
-
-        base["match_filter"] = _duration_filter
-
     return base
 
 
-def _download_with_ytdl(url: str, dest_dir: Path, max_bytes: int) -> Path | None:
-    outtmpl = str(dest_dir / "clip.%(ext)s")
-    opts = _ytdl_download_opts(outtmpl, max_bytes)
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception as exc:
-        log.info("Video download skipped (%s): %s", url[:80], exc)
-        return None
-
+def _find_output_file(dest_dir: Path) -> Path | None:
     files = sorted(
         p
         for p in dest_dir.iterdir()
@@ -169,15 +232,104 @@ def _download_with_ytdl(url: str, dest_dir: Path, max_bytes: int) -> Path | None
     )
     if not files:
         files = [p for p in dest_dir.iterdir() if p.is_file() and p.stat().st_size > 0]
-    if not files:
-        return None
-    path = files[0]
-    size = path.stat().st_size
-    if size > max_bytes or size < 1024:
-        path.unlink(missing_ok=True)
-        log.info("Downloaded video rejected (size=%s)", size)
-        return None
-    return path
+    return files[0] if files else None
+
+
+def _download_with_ytdl(url: str, dest_dir: Path, max_bytes: int) -> Path | None:
+    """
+    Download using the same client/cookie retry ladder as music playback.
+    Prefer progressive MP4 so Discord gets a single attachable file.
+    """
+    try:
+        from music import _cookies_path, _unwrap_info
+    except Exception:
+        _cookies_path = lambda: None  # noqa: E731
+        _unwrap_info = lambda info: info  # noqa: E731
+
+    client_tries: list[list[str] | None] = [
+        ["android_vr", "tv_downgraded"],
+        ["android", "ios", "tv_downgraded"],
+        ["tv_downgraded", "web_embedded", "web_creator", "android_vr"],
+        ["web_safari", "web_embedded"],
+        None,
+    ]
+    cookie_tries = (False, True) if _cookies_path() else (False,)
+    outtmpl = str(dest_dir / "clip.%(ext)s")
+    last_exc: Exception | None = None
+
+    for use_cookies in cookie_tries:
+        for clients in client_tries:
+            label = f"cookies={use_cookies} clients={clients}"
+            # Clean previous partials between tries
+            for leftover in dest_dir.iterdir():
+                if leftover.is_file():
+                    leftover.unlink(missing_ok=True)
+            try:
+                opts = _ytdl_base_opts(
+                    use_cookies=use_cookies, outtmpl=outtmpl, max_bytes=max_bytes
+                )
+                if clients is not None:
+                    opts["extractor_args"] = {"youtube": {"player_client": clients}}
+
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = _unwrap_info(ydl.extract_info(url, download=False))
+                    if not info:
+                        raise RuntimeError("empty extract_info")
+                    if not _duration_ok(info):
+                        log.info(
+                            "Video too long (%ss > %ss): %s",
+                            info.get("duration"),
+                            config.OW_MEDIA_MAX_DURATION_SEC,
+                            url[:80],
+                        )
+                        return None
+
+                    formats = info.get("formats") or []
+                    if not formats and not info.get("url"):
+                        raise RuntimeError("No video formats found")
+
+                    fmt_id = _pick_download_format_id(info, max_bytes)
+                    if fmt_id:
+                        opts["format"] = fmt_id
+                        # Re-enter with pinned format
+                        with yt_dlp.YoutubeDL(opts) as ydl2:
+                            ydl2.download([url])
+                    else:
+                        ydl.download([url])
+
+                path = _find_output_file(dest_dir)
+                if path is None:
+                    raise RuntimeError("download produced no file")
+                size = path.stat().st_size
+                if size > max_bytes:
+                    path.unlink(missing_ok=True)
+                    log.info(
+                        "Downloaded video too large (%s > %s) via %s",
+                        size,
+                        max_bytes,
+                        label,
+                    )
+                    return None
+                if size < 1024:
+                    path.unlink(missing_ok=True)
+                    raise RuntimeError("download file too small")
+                log.info(
+                    "Video downloaded (%s bytes) via %s → %s",
+                    size,
+                    label,
+                    path.name,
+                )
+                return path
+            except Exception as exc:
+                last_exc = exc
+                log.warning("yt-dlp video try failed (%s): %s", label, exc)
+
+    log.info(
+        "Video download skipped (%s): %s",
+        url[:80],
+        last_exc or "all strategies failed",
+    )
+    return None
 
 
 async def _download_direct(

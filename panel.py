@@ -111,8 +111,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
             "`/help`\n"
             "`/ask` — free Llama chat (or @mention the bot)\n"
             "`/join` · `/disconnect` — voice AI (say **Dream**, …)\n"
-            "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"
-            "`/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave`"
+            "`/setbirthday` · `/mybirthday` · `/clearbirthday`"
         ),
         inline=False,
     )
@@ -176,7 +175,6 @@ def hub_channels_embed(guild: discord.Guild, bot) -> discord.Embed:
         value=(
             f"**Welcome** {_ch(guild, settings['welcome_channel_id'] if settings else None)}\n"
             f"**Birthday** {_ch(guild, settings['birthday_channel_id'] if settings else None)}\n"
-            f"**Music** {_ch(guild, settings['now_playing_channel_id'] if settings else None)}\n"
             f"**Dream voice log** {_ch(guild, settings['voice_log_channel_id'] if settings else None)}\n"
             f"**Auto-role** {_role(guild, settings['auto_role_id'] if settings else None)}"
         ),
@@ -294,7 +292,7 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "**News / custom** — filtered Bluesky feed + **Custom post**. "
             "Set the forum below (tag **News**). Paste a **bsky.app post** link "
             "(or direct mp4 / video.bsky.app) — attaches when under "
-            f"**{config.OW_MEDIA_MAX_MB} MB** (YouTube usually needs a proxy).\n\n"
+            f"**{config.OW_MEDIA_MAX_MB} MB**.\n\n"
             "_Pick forums below. Tags: **Patch Notes** / **META** / **News**._"
         ).format(
             patch_url=PATCH_URL,
@@ -369,8 +367,7 @@ def hub_status_embed(guild: discord.Guild, bot) -> discord.Embed:
         name="Channels",
         value=(
             f"Welcome {_ch(guild, settings['welcome_channel_id'] if settings else None)}\n"
-            f"Birthday {_ch(guild, settings['birthday_channel_id'] if settings else None)}\n"
-            f"Music {_ch(guild, settings['now_playing_channel_id'] if settings else None)}"
+            f"Birthday {_ch(guild, settings['birthday_channel_id'] if settings else None)}"
         ),
         inline=False,
     )
@@ -546,7 +543,7 @@ class AdminHubView(discord.ui.View):
                 discord.SelectOption(
                     label="Channels & role",
                     value="channels",
-                    description="Welcome, birthday, music, auto-role",
+                    description="Welcome, birthday, auto-role",
                     emoji="#️⃣",
                 ),
                 discord.SelectOption(
@@ -657,7 +654,6 @@ class AdminHubView(discord.ui.View):
         for kind, placeholder, row in (
             ("welcome", "Set welcome channel…", 1),
             ("birthday", "Set birthday channel…", 2),
-            ("music", "Set music panel channel…", 3),
         ):
             select = discord.ui.ChannelSelect(
                 placeholder=placeholder,
@@ -686,20 +682,6 @@ class AdminHubView(discord.ui.View):
                     self.bot.db.set_welcome_channel(self.guild_id, channel_id)
                 elif kind == "birthday":
                     self.bot.db.set_birthday_channel(self.guild_id, channel_id)
-                else:
-                    self.bot.db.set_now_playing_panel(self.guild_id, channel_id, None)
-                    music = self.bot.get_cog("MusicCog")
-                    if music is not None:
-                        player = music.get_player(self.guild_id)
-                        await music.refresh_now_playing_panel(
-                            self.guild_id,
-                            track=player.current,
-                            queue_len=len(player.queue),
-                            paused=bool(
-                                player._sync_voice()
-                                and player._sync_voice().is_paused()
-                            ),
-                        )
                 self._rebuild()
                 await interaction.response.edit_message(
                     embed=self.embed_for(interaction.guild),

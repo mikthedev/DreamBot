@@ -233,12 +233,12 @@ def _image_urls_from_post(post: dict) -> list[str]:
         if thumb:
             urls.append(thumb)
     elif "app.bsky.embed.external" in et:
-        # Prefer downloading the linked video; keep thumb only as image fallback
+        # Prefer downloading linked direct video; keep thumb only as image fallback
         external = emb.get("external") or {}
         uri = (external.get("uri") or "").strip()
-        from media_attach import extract_youtube_urls, extract_direct_video_urls
+        from media_attach import extract_direct_video_urls, is_youtube_url
 
-        if not (extract_youtube_urls(uri) or extract_direct_video_urls(uri)):
+        if uri and not is_youtube_url(uri) and not extract_direct_video_urls(uri):
             thumb = external.get("thumb")
             if thumb:
                 urls.append(thumb)
@@ -246,8 +246,8 @@ def _image_urls_from_post(post: dict) -> list[str]:
 
 
 def _video_urls_from_post(post: dict) -> list[str]:
-    """Bluesky native video playlists + YouTube / direct links in embeds or text."""
-    from media_attach import collect_video_candidates
+    """Bluesky native video playlists + direct video links (no YouTube)."""
+    from media_attach import collect_video_candidates, is_youtube_url
 
     urls: list[str] = []
     emb = post.get("embed") or {}
@@ -268,7 +268,7 @@ def _video_urls_from_post(post: dict) -> list[str]:
             add_video_embed(media)
     elif "app.bsky.embed.external" in et:
         uri = ((emb.get("external") or {}).get("uri") or "").strip()
-        if uri:
+        if uri and not is_youtube_url(uri):
             urls.append(uri)
 
     return collect_video_candidates(text=text, explicit_urls=urls)
@@ -276,20 +276,6 @@ def _video_urls_from_post(post: dict) -> list[str]:
 
 def extract_bsky_post_urls(text: str) -> list[str]:
     return list(dict.fromkeys(m.group(0) for m in BSKY_POST_URL_RE.finditer(text or "")))
-
-
-def _prefer_non_youtube(urls: list[str]) -> list[str]:
-    """Bluesky / direct first — YouTube is usually blocked on datacenter hosts."""
-    from media_attach import extract_youtube_urls
-
-    non_yt: list[str] = []
-    yt: list[str] = []
-    for u in urls:
-        if extract_youtube_urls(u):
-            yt.append(u)
-        else:
-            non_yt.append(u)
-    return non_yt + yt
 
 
 def bsky_post_at_uri(url: str) -> str | None:
@@ -529,7 +515,7 @@ class OverwatchNewsCog(commands.Cog):
         from media_attach import (
             collect_video_candidates,
             extract_direct_video_urls,
-            extract_youtube_urls,
+            is_youtube_url,
             strip_urls_from_text,
             temporary_video_attachments,
         )
@@ -555,7 +541,6 @@ class OverwatchNewsCog(commands.Cog):
             for u in resolved.image_urls:
                 if u not in image_urls:
                     image_urls.append(u)
-            # Fill empty body from the Bluesky post text (no source shout-out)
             if not body and resolved.text:
                 body = clean_news_text(resolved.text)
 
@@ -564,14 +549,16 @@ class OverwatchNewsCog(commands.Cog):
             explicit_urls=explicit_videos
             + ([media_url] if media_url and media_url not in bsky_links else []),
         )
-        # Prefer Bluesky / direct files; YouTube rarely works on bot-hosting
-        video_candidates = _prefer_non_youtube(video_candidates)
 
-        if media_url and media_url not in video_candidates and media_url not in bsky_links:
-            if media_url.startswith("http") and not extract_youtube_urls(media_url):
-                if not extract_direct_video_urls(media_url):
-                    if media_url not in image_urls:
-                        image_urls.append(media_url)
+        if (
+            media_url
+            and media_url not in video_candidates
+            and media_url not in bsky_links
+            and not is_youtube_url(media_url)
+        ):
+            if media_url.startswith("http") and not extract_direct_video_urls(media_url):
+                if media_url not in image_urls:
+                    image_urls.append(media_url)
 
         image_files = (
             await download_images(session, image_urls) if image_urls else []
@@ -588,8 +575,11 @@ class OverwatchNewsCog(commands.Cog):
             if video_files:
                 post_body = strip_urls_from_text(post_body, strip_list)
             elif failed_links:
-                # Keep watchable links (YouTube etc.) when attach fails
-                keep = [u for u in failed_links if not u.startswith("https://video.bsky.app/")]
+                keep = [
+                    u
+                    for u in failed_links
+                    if not u.startswith("https://video.bsky.app/")
+                ]
                 if keep:
                     extra = "\n".join(keep)
                     if extra not in (post_body or ""):

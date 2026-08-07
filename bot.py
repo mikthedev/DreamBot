@@ -15,7 +15,6 @@ from birthdays import (
     parse_birthday,
 )
 from database import Database
-from music import MusicCog
 from names import WelcomeNameView, WelcomePrivateView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
 from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
@@ -33,6 +32,7 @@ from birthday_signup import (
     SIGNUP_EMOJI,
     is_signup_message,
 )
+from rich_presence import IdlePresenceCog
 
 log = logging.getLogger("dream_team")
 
@@ -55,7 +55,7 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(AnniversaryCog(self))
-        await self.add_cog(MusicCog(self))
+        await self.add_cog(IdlePresenceCog(self))
         await self.add_cog(PanelCog(self))
         await self.add_cog(OverwatchPatchCog(self))
         await self.add_cog(OverwatchTierCog(self))
@@ -92,20 +92,10 @@ class DreamTeamBot(commands.Bot):
             self.user.id,
             synced_total,
         )
-        try:
-            from rich_presence import presence_idle, update_presence
+        idle = self.get_cog("IdlePresenceCog")
+        if idle is not None and hasattr(idle, "force_idle"):
+            await idle.force_idle()
 
-            app_id = self.application_id or (self.user.id if self.user else None)
-            await update_presence(
-                self,
-                presence_idle(application_id=int(app_id) if app_id else None),
-            )
-            music = self.get_cog("MusicCog")
-            if music is not None and hasattr(music, "_last_idle_rotate_at"):
-                music._last_idle_rotate_at = __import__("time").time()
-                music._showing_full_idle = True
-        except Exception as exc:
-            log.warning("Could not set idle presence: %s", exc)
 
 
 class WelcomeCog(commands.Cog):

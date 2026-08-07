@@ -77,10 +77,15 @@ class NewsItem:
     created_at: datetime
     text: str
     image_urls: list[str] = field(default_factory=list)
+    video_urls: list[str] = field(default_factory=list)
 
     @property
     def age(self) -> timedelta:
         return datetime.now(timezone.utc) - self.created_at
+
+    @property
+    def has_media(self) -> bool:
+        return bool(self.image_urls or self.video_urls)
 
     @property
     def title(self) -> str:
@@ -98,12 +103,12 @@ class NewsItem:
         return forum_thread_name(line.strip(" -·|,") or "Overwatch news")
 
 
-def passes_news_filter(text: str, *, has_images: bool = True) -> bool:
+def passes_news_filter(text: str, *, has_media: bool = True) -> bool:
     """Return True only for interesting OW news — deny-list first, then allow-list.
 
-    News posts without image attachments are skipped (avoids bare text dupes).
+    News posts without image/video attachments are skipped (avoids bare text dupes).
     """
-    if not has_images:
+    if not has_media:
         return False
     raw = (text or "").strip()
     if len(raw) < 8:
@@ -209,13 +214,57 @@ def _image_urls_from_post(post: dict) -> list[str]:
         add_images(emb.get("images") or [])
     elif "app.bsky.embed.recordWithMedia" in et:
         media = emb.get("media") or {}
-        if "images" in (media.get("$type") or ""):
+        mt = media.get("$type") or ""
+        if "images" in mt:
             add_images(media.get("images") or [])
-    elif "app.bsky.embed.external" in et:
-        thumb = (emb.get("external") or {}).get("thumb")
+        elif "video" in mt:
+            thumb = media.get("thumbnail")
+            if thumb:
+                urls.append(thumb)
+    elif "app.bsky.embed.video" in et:
+        thumb = emb.get("thumbnail")
         if thumb:
             urls.append(thumb)
+    elif "app.bsky.embed.external" in et:
+        # Prefer downloading the linked video; keep thumb only as image fallback
+        external = emb.get("external") or {}
+        uri = (external.get("uri") or "").strip()
+        from media_attach import extract_youtube_urls, extract_direct_video_urls
+
+        if not (extract_youtube_urls(uri) or extract_direct_video_urls(uri)):
+            thumb = external.get("thumb")
+            if thumb:
+                urls.append(thumb)
     return urls[:10]
+
+
+def _video_urls_from_post(post: dict) -> list[str]:
+    """Bluesky native video playlists + YouTube / direct links in embeds or text."""
+    from media_attach import collect_video_candidates
+
+    urls: list[str] = []
+    emb = post.get("embed") or {}
+    et = emb.get("$type") or ""
+    rec = post.get("record") or {}
+    text = (rec.get("text") or "").strip()
+
+    def add_video_embed(blob: dict) -> None:
+        playlist = (blob.get("playlist") or "").strip()
+        if playlist and playlist not in urls:
+            urls.append(playlist)
+
+    if "app.bsky.embed.video" in et:
+        add_video_embed(emb)
+    elif "app.bsky.embed.recordWithMedia" in et:
+        media = emb.get("media") or {}
+        if "video" in (media.get("$type") or ""):
+            add_video_embed(media)
+    elif "app.bsky.embed.external" in et:
+        uri = ((emb.get("external") or {}).get("uri") or "").strip()
+        if uri:
+            urls.append(uri)
+
+    return collect_video_candidates(text=text, explicit_urls=urls)
 
 
 def parse_feed_item(item: dict) -> NewsItem | None:
@@ -234,6 +283,7 @@ def parse_feed_item(item: dict) -> NewsItem | None:
         created_at=created,
         text=text,
         image_urls=_image_urls_from_post(post),
+        video_urls=_video_urls_from_post(post),
     )
 
 
@@ -329,7 +379,7 @@ class OverwatchNewsCog(commands.Cog):
 
     def filter_items(self, items: list[NewsItem]) -> list[NewsItem]:
         return [
-            i for i in items if passes_news_filter(i.text, has_images=bool(i.image_urls))
+            i for i in items if passes_news_filter(i.text, has_media=i.has_media)
         ]
 
     async def publish_item(
@@ -337,23 +387,139 @@ class OverwatchNewsCog(commands.Cog):
         channel: discord.ForumChannel | discord.TextChannel,
         item: NewsItem,
     ) -> discord.Thread | discord.Message | None:
+        from media_attach import (
+            collect_video_candidates,
+            strip_urls_from_text,
+            temporary_video_attachments,
+        )
+
         body = clean_news_text(item.text)
-        if not item.image_urls:
-            log.info("Skipping news without images: %s", item.title)
-            return None
-        if not body and not item.image_urls:
+        if not item.has_media:
+            log.info("Skipping news without media: %s", item.title)
             return None
 
         session = await self._get_session()
-        files = await download_images(session, item.image_urls)
-        if not files:
-            log.warning("Skipping news — image download failed: %s", item.title)
+        image_files = await download_images(session, item.image_urls)
+        video_candidates = collect_video_candidates(
+            text=item.text, explicit_urls=item.video_urls
+        )
+
+        if not image_files and not video_candidates:
+            log.warning("Skipping news — no downloadable media: %s", item.title)
             return None
 
+        async with temporary_video_attachments(
+            session, video_candidates, guild=channel.guild
+        ) as (video_files, failed_links):
+            files = [*image_files, *video_files]
+            post_body = body
+            if video_files:
+                post_body = strip_urls_from_text(post_body, video_candidates)
+            elif failed_links:
+                extra = "\n".join(failed_links)
+                if extra not in (post_body or ""):
+                    post_body = (
+                        f"{post_body}\n\n{extra}".strip() if post_body else extra
+                    )
+
+            if not files and not failed_links:
+                log.warning("Skipping news — media download failed: %s", item.title)
+                return None
+            if not files and not post_body:
+                return None
+
+            return await self._send_news_post(
+                channel,
+                title=item.title,
+                body=post_body,
+                files=files,
+                track_uri=item.uri,
+                auto_close=True,
+            )
+
+    async def publish_custom(
+        self,
+        channel: discord.ForumChannel | discord.TextChannel,
+        *,
+        title: str,
+        body: str,
+        media_url: str | None = None,
+        auto_close: bool = True,
+    ) -> discord.Thread | discord.Message | None:
+        """Admin custom news-style post (title + body + optional YouTube/video URL)."""
+        from uuid import uuid4
+
+        from media_attach import (
+            collect_video_candidates,
+            extract_direct_video_urls,
+            extract_youtube_urls,
+            strip_urls_from_text,
+            temporary_video_attachments,
+        )
+
+        title = forum_thread_name((title or "").strip() or "News")
+        body = (body or "").strip()
+        media_url = (media_url or "").strip() or None
+
+        session = await self._get_session()
+        image_urls: list[str] = []
+        video_candidates = collect_video_candidates(
+            text=f"{body}\n{media_url or ''}",
+            explicit_urls=[media_url] if media_url else None,
+        )
+
+        if media_url and media_url not in video_candidates:
+            if media_url.startswith("http") and not extract_youtube_urls(media_url):
+                if not extract_direct_video_urls(media_url):
+                    image_urls.append(media_url)
+
+        image_files = (
+            await download_images(session, image_urls) if image_urls else []
+        )
+
+        async with temporary_video_attachments(
+            session, video_candidates, guild=channel.guild
+        ) as (video_files, failed_links):
+            files = [*image_files, *video_files]
+            post_body = body
+            strip_list = list(video_candidates)
+            if media_url:
+                strip_list.append(media_url)
+            if video_files:
+                post_body = strip_urls_from_text(post_body, strip_list)
+            elif failed_links:
+                extra = "\n".join(failed_links)
+                if extra not in (post_body or ""):
+                    post_body = (
+                        f"{post_body}\n\n{extra}".strip() if post_body else extra
+                    )
+
+            if not files and not post_body:
+                return None
+
+            return await self._send_news_post(
+                channel,
+                title=title,
+                body=post_body,
+                files=files,
+                track_uri=f"custom:{uuid4()}",
+                auto_close=auto_close,
+            )
+
+    async def _send_news_post(
+        self,
+        channel: discord.ForumChannel | discord.TextChannel,
+        *,
+        title: str,
+        body: str,
+        files: list[discord.File],
+        track_uri: str,
+        auto_close: bool,
+    ) -> discord.Thread | discord.Message | None:
         if isinstance(channel, discord.ForumChannel):
             tags = await resolve_forum_tags(channel, OW_NEWS_TAG_NAMES)
             kwargs: dict = {
-                "name": item.title,
+                "name": title,
                 "content": body or "\u200b",
             }
             if files:
@@ -364,7 +530,7 @@ class OverwatchNewsCog(commands.Cog):
             thread = created.thread
             await lock_thread_for_reactions_only(thread)
             self.bot.db.mark_ow_news_posted(
-                channel.guild.id, item.uri, thread.id, auto_close=True
+                channel.guild.id, track_uri, thread.id, auto_close=auto_close
             )
             return thread
 
@@ -373,7 +539,7 @@ class OverwatchNewsCog(commands.Cog):
             send_kwargs["files"] = files
         msg = await channel.send(**send_kwargs)
         self.bot.db.mark_ow_news_posted(
-            channel.guild.id, item.uri, msg.id, auto_close=False
+            channel.guild.id, track_uri, msg.id, auto_close=False
         )
         return msg
 

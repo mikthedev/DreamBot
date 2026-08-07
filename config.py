@@ -77,6 +77,17 @@ OW_NEWS_FRESH_MAX_HOURS = max(1, int(os.getenv("OW_NEWS_FRESH_MAX_HOURS", "3")))
 OW_NEWS_CLOSE_HOURS = max(1, int(os.getenv("OW_NEWS_CLOSE_HOURS", "6")))
 OW_NEWS_CLOSE_CHECK_MINUTES = max(5, int(os.getenv("OW_NEWS_CLOSE_CHECK_MINUTES", "15")))
 
+# Temporary video attach for news / custom posts (deleted after Discord upload)
+OW_MEDIA_MAX_MB = max(1, min(25, int(os.getenv("OW_MEDIA_MAX_MB", "24"))))
+OW_MEDIA_MAX_BYTES = OW_MEDIA_MAX_MB * 1024 * 1024
+OW_MEDIA_MAX_VIDEOS = 1  # keep the bot light — one clip per post
+OW_MEDIA_MAX_DURATION_SEC = max(
+    0, int(os.getenv("OW_MEDIA_MAX_DURATION_SEC", "180"))
+)  # 0 = no duration cap
+OW_MEDIA_DOWNLOAD_TIMEOUT = max(
+    20, int(os.getenv("OW_MEDIA_DOWNLOAD_TIMEOUT", "90"))
+)
+
 # Free Llama via Groq (no billing) — https://console.groq.com/keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # 70B is still very fast on Groq LPUs and much smarter than 8B

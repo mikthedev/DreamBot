@@ -271,7 +271,9 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "cards per role with honourable mentions (tag **META**).\n\n"
             "**News** — filtered Bluesky feed (map/mode/lore updates only — no shop, "
             "skins, OWCS, vault, loot boxes, or patch notes). Checks hourly; posts "
-            "when new. Tag **News**.\n\n"
+            "when new. Tag **News**. Use **Custom post** for a one-off. "
+            "YouTube / video links are downloaded temporarily and attached when under "
+            f"**{config.OW_MEDIA_MAX_MB} MB** (otherwise the link is kept).\n\n"
             "_Pick a **Forum** below. Tags: **Patch Notes** / **META** / **News**._"
         ).format(
             patch_url=PATCH_URL,
@@ -383,6 +385,99 @@ class EditWelcomeModal(discord.ui.Modal, title="Edit welcome message"):
         await interaction.response.edit_message(
             embed=hub_welcome_embed(interaction.guild, self.hub.bot),
             view=self.hub,
+        )
+
+
+class CustomNewsModal(discord.ui.Modal, title="Custom news post"):
+    post_title = discord.ui.TextInput(
+        label="Title",
+        style=discord.TextStyle.short,
+        max_length=100,
+        required=True,
+        placeholder="First Look at New Map Rework",
+    )
+    body = discord.ui.TextInput(
+        label="Body (optional)",
+        style=discord.TextStyle.paragraph,
+        max_length=1800,
+        required=False,
+        placeholder="Optional detail — leave empty for image/video-only.",
+    )
+    media_url = discord.ui.TextInput(
+        label="Media URL (optional)",
+        style=discord.TextStyle.short,
+        max_length=300,
+        required=False,
+        placeholder="YouTube, video, or image link",
+    )
+
+    def __init__(self, hub: "AdminHubView") -> None:
+        super().__init__()
+        self.hub = hub
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("Guild only.", ephemeral=True)
+            return
+        cog = self.hub.bot.get_cog("OverwatchNewsCog")
+        if cog is None:
+            await interaction.response.send_message(
+                "News cog not loaded.", ephemeral=True
+            )
+            return
+
+        channel_id = (
+            self.hub.bot.db.get_ow_news_channel(self.hub.guild_id)
+            or self.hub.bot.db.get_ow_tier_channel(self.hub.guild_id)
+            or self.hub.bot.db.get_ow_patch_channel(self.hub.guild_id)
+        )
+        if not channel_id:
+            await interaction.response.send_message(
+                "Set an Overwatch forum first.", ephemeral=True
+            )
+            return
+        channel = interaction.guild.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await interaction.guild.fetch_channel(channel_id)
+            except discord.HTTPException:
+                channel = None
+        if not is_ow_destination(channel):
+            await interaction.response.send_message(
+                "News forum missing — pick a patch/tier forum again.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        title = str(self.post_title.value).strip()
+        body = str(self.body.value or "").strip()
+        media = str(self.media_url.value or "").strip() or None
+        try:
+            result = await cog.publish_custom(
+                channel,
+                title=title,
+                body=body,
+                media_url=media,
+                auto_close=True,
+            )
+        except Exception as exc:
+            await interaction.followup.send(f"Custom post failed: {exc}", ephemeral=True)
+            return
+        if result is None:
+            await interaction.followup.send(
+                "Nothing to post — add a title/body and/or a working media URL.",
+                ephemeral=True,
+            )
+            return
+        mention = (
+            result.mention
+            if isinstance(result, discord.Thread)
+            else channel.mention
+        )
+        await interaction.followup.send(
+            f"Posted **{title}** → {mention}",
+            ephemeral=True,
         )
 
 
@@ -1334,6 +1429,20 @@ class AdminHubView(discord.ui.View):
 
         post_news.callback = on_post_news
         self.add_item(post_news)
+
+        custom_news = discord.ui.Button(
+            label="Custom post",
+            style=discord.ButtonStyle.primary,
+            row=3,
+        )
+
+        async def on_custom_news(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            await interaction.response.send_modal(CustomNewsModal(self))
+
+        custom_news.callback = on_custom_news
+        self.add_item(custom_news)
 
     def _add_onboard_controls(self) -> None:
         ch_select = discord.ui.ChannelSelect(

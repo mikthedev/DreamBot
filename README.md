@@ -50,7 +50,7 @@ Voice transcript embeds (text copies of what Dream said) go to a channel you set
 
 ## Overwatch
 
-Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](https://www.counterwatch.gg/stats/overwatch/tier-list), [best one-tricks](https://www.counterwatch.gg/stats/overwatch/best-onetricks), and filtered general **News** from Bluesky (map/mode/lore — no shop, skins, OWCS, or patch dumps). Patch / tier / META keep **one locked post** edited in place. News creates a locked thread per story (tag **News**), with optional **Custom post** from `/panel`. Paste a **Bluesky post** link (or direct mp4 / `video.bsky.app`) — clips are downloaded temporarily, attached when under the size cap, then deleted. Configure under **`/panel` → Overwatch**.
+Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](https://www.counterwatch.gg/stats/overwatch/tier-list), [best one-tricks](https://www.counterwatch.gg/stats/overwatch/best-onetricks), and filtered general **News** from Bluesky (map/mode/lore — no shop, skins, OWCS, or patch dumps). Patch / tier / META keep **one locked post** edited in place. News creates a locked thread per story (tag **News**), with optional **Custom post** from `/panel`. Video posts share a Bluesky link (no download/transcode); image posts still attach files. Configure under **`/panel` → Overwatch**.
 
 ---
 

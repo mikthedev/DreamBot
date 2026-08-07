@@ -292,9 +292,8 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "**Best to main** — [one-tricks]({meta_url}), same cadence. Patch-notes style "
             "cards per role with honourable mentions (tag **META**).\n\n"
             "**News / custom** — filtered Bluesky feed + **Custom post**. "
-            "Set the forum below (tag **News**). Paste a **bsky.app post** link "
-            "(or direct mp4 / video.bsky.app) — attaches when under "
-            f"**{config.OW_MEDIA_MAX_MB} MB**.\n\n"
+            "Set the forum below (tag **News**). Paste a **bsky.app post** link — "
+            "videos are shared as links (no download); images still attach.\n\n"
             "_Pick forums below. Tags: **Patch Notes** / **META** / **News**._"
         ).format(
             patch_url=PATCH_URL,
@@ -433,7 +432,7 @@ class CustomNewsModal(discord.ui.Modal, title="Custom news post"):
         style=discord.TextStyle.short,
         max_length=300,
         required=False,
-        placeholder="Bluesky post, video.bsky.app, mp4, or image URL",
+        placeholder="Bluesky post or image URL",
     )
 
     def __init__(self, hub: "AdminHubView") -> None:

@@ -95,6 +95,14 @@ class NewsItem:
         return bool(self.image_urls or self.video_urls)
 
     @property
+    def has_video(self) -> bool:
+        return bool(self.video_urls)
+
+    @property
+    def web_url(self) -> str | None:
+        return bsky_web_url_from_at_uri(self.uri)
+
+    @property
     def title(self) -> str:
         line = self.text.strip().split("\n", 1)[0].strip()
         line = re.sub(r"\s+", " ", line)
@@ -278,6 +286,26 @@ def extract_bsky_post_urls(text: str) -> list[str]:
     return list(dict.fromkeys(m.group(0) for m in BSKY_POST_URL_RE.finditer(text or "")))
 
 
+def bsky_web_url_from_at_uri(uri: str) -> str | None:
+    """at://actor/app.bsky.feed.post/rkey → https://bsky.app/profile/.../post/..."""
+    match = re.match(
+        r"^at://([^/\s]+)/app\.bsky\.feed\.post/([A-Za-z0-9]+)$",
+        (uri or "").strip(),
+    )
+    if not match:
+        return None
+    return f"https://bsky.app/profile/{match.group(1)}/post/{match.group(2)}"
+
+
+def _append_link(body: str, link: str) -> str:
+    link = (link or "").strip()
+    if not link:
+        return body or ""
+    if link in (body or ""):
+        return body or ""
+    return f"{body}\n\n{link}".strip() if body else link
+
+
 def bsky_post_at_uri(url: str) -> str | None:
     match = BSKY_POST_URL_RE.search(url or "")
     if not match:
@@ -450,55 +478,48 @@ class OverwatchNewsCog(commands.Cog):
         channel: discord.ForumChannel | discord.TextChannel,
         item: NewsItem,
     ) -> discord.Thread | discord.Message | None:
-        from media_attach import (
-            collect_video_candidates,
-            strip_urls_from_text,
-            temporary_video_attachments,
-        )
-
         body = clean_news_text(item.text)
         if not item.has_media:
             log.info("Skipping news without media: %s", item.title)
             return None
 
         session = await self._get_session()
-        image_files = await download_images(session, item.image_urls)
-        video_candidates = collect_video_candidates(
-            text=item.text, explicit_urls=item.video_urls
-        )
+        files: list[discord.File] = []
 
-        if not image_files and not video_candidates:
-            log.warning("Skipping news — no downloadable media: %s", item.title)
+        if item.has_video:
+            # Don't download/transcode video — just share a watchable Bluesky link.
+            link = item.web_url
+            if not link and item.video_urls:
+                # Prefer non-playlist URLs if any; otherwise skip raw m3u8
+                for u in item.video_urls:
+                    if "playlist.m3u8" not in u and not u.startswith(
+                        "https://video.bsky.app/"
+                    ):
+                        link = u
+                        break
+            if link:
+                body = _append_link(body, link)
+            log.info("News video → link only: %s", link or item.uri)
+        else:
+            files = await download_images(session, item.image_urls)
+
+        if not files and not body:
+            log.warning("Skipping news — nothing to post: %s", item.title)
+            return None
+        if item.has_video and not body:
+            return None
+        if not item.has_video and not files:
+            log.warning("Skipping news — image download failed: %s", item.title)
             return None
 
-        async with temporary_video_attachments(
-            session, video_candidates, guild=channel.guild
-        ) as (video_files, failed_links):
-            files = [*image_files, *video_files]
-            post_body = body
-            if video_files:
-                post_body = strip_urls_from_text(post_body, video_candidates)
-            elif failed_links:
-                extra = "\n".join(failed_links)
-                if extra not in (post_body or ""):
-                    post_body = (
-                        f"{post_body}\n\n{extra}".strip() if post_body else extra
-                    )
-
-            if not files and not failed_links:
-                log.warning("Skipping news — media download failed: %s", item.title)
-                return None
-            if not files and not post_body:
-                return None
-
-            return await self._send_news_post(
-                channel,
-                title=item.title,
-                body=post_body,
-                files=files,
-                track_uri=item.uri,
-                auto_close=True,
-            )
+        return await self._send_news_post(
+            channel,
+            title=item.title,
+            body=body,
+            files=files,
+            track_uri=item.uri,
+            auto_close=True,
+        )
 
     async def publish_custom(
         self,
@@ -509,15 +530,12 @@ class OverwatchNewsCog(commands.Cog):
         media_url: str | None = None,
         auto_close: bool = True,
     ) -> discord.Thread | discord.Message | None:
-        """Admin custom news-style post (title + body + optional media URL)."""
+        """Admin custom news post — Bluesky/video links are shared, not downloaded."""
         from uuid import uuid4
 
         from media_attach import (
-            collect_video_candidates,
             extract_direct_video_urls,
             is_youtube_url,
-            strip_urls_from_text,
-            temporary_video_attachments,
         )
 
         title = forum_thread_name((title or "").strip() or "News")
@@ -526,7 +544,7 @@ class OverwatchNewsCog(commands.Cog):
 
         session = await self._get_session()
         image_urls: list[str] = []
-        explicit_videos: list[str] = []
+        has_video = False
         bsky_links = extract_bsky_post_urls(
             "\n".join(x for x in (media_url, body) if x)
         )
@@ -534,70 +552,45 @@ class OverwatchNewsCog(commands.Cog):
         for link in bsky_links:
             resolved = await resolve_bsky_post_url(session, link)
             if resolved is None:
+                # Still keep the public post URL even if resolve fails
+                body = _append_link(body, link)
+                has_video = True
                 continue
-            for u in resolved.video_urls:
-                if u not in explicit_videos:
-                    explicit_videos.append(u)
-            for u in resolved.image_urls:
-                if u not in image_urls:
-                    image_urls.append(u)
             if not body and resolved.text:
                 body = clean_news_text(resolved.text)
+            if resolved.has_video:
+                has_video = True
+                body = _append_link(body, link)
+            else:
+                for u in resolved.image_urls:
+                    if u not in image_urls:
+                        image_urls.append(u)
 
-        video_candidates = collect_video_candidates(
-            text=f"{body}\n{media_url or ''}",
-            explicit_urls=explicit_videos
-            + ([media_url] if media_url and media_url not in bsky_links else []),
-        )
-
-        if (
-            media_url
-            and media_url not in video_candidates
-            and media_url not in bsky_links
-            and not is_youtube_url(media_url)
-        ):
-            if media_url.startswith("http") and not extract_direct_video_urls(media_url):
+        if media_url and media_url not in bsky_links:
+            if is_youtube_url(media_url) or extract_direct_video_urls(media_url):
+                has_video = True
+                body = _append_link(body, media_url)
+            elif media_url.startswith("http"):
                 if media_url not in image_urls:
                     image_urls.append(media_url)
 
-        image_files = (
-            await download_images(session, image_urls) if image_urls else []
+        files: list[discord.File] = []
+        if has_video:
+            log.info("Custom news video → link only (no download)")
+        elif image_urls:
+            files = await download_images(session, image_urls)
+
+        if not files and not body:
+            return None
+
+        return await self._send_news_post(
+            channel,
+            title=title,
+            body=body,
+            files=files,
+            track_uri=f"custom:{uuid4()}",
+            auto_close=auto_close,
         )
-
-        async with temporary_video_attachments(
-            session, video_candidates, guild=channel.guild
-        ) as (video_files, failed_links):
-            files = [*image_files, *video_files]
-            post_body = body
-            strip_list = list(video_candidates) + list(bsky_links)
-            if media_url:
-                strip_list.append(media_url)
-            if video_files:
-                post_body = strip_urls_from_text(post_body, strip_list)
-            elif failed_links:
-                keep = [
-                    u
-                    for u in failed_links
-                    if not u.startswith("https://video.bsky.app/")
-                ]
-                if keep:
-                    extra = "\n".join(keep)
-                    if extra not in (post_body or ""):
-                        post_body = (
-                            f"{post_body}\n\n{extra}".strip() if post_body else extra
-                        )
-
-            if not files and not post_body:
-                return None
-
-            return await self._send_news_post(
-                channel,
-                title=title,
-                body=post_body,
-                files=files,
-                track_uri=f"custom:{uuid4()}",
-                auto_close=auto_close,
-            )
 
     async def _send_news_post(
         self,

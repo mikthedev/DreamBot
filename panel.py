@@ -21,7 +21,7 @@ from birthday_signup import (
     signup_embed,
 )
 from birthdays import Birthday, celebration_embed
-from names import SetNameModal, WelcomeNameView, names_list_embed
+from names import SetNameModal, WelcomePrivateView, names_list_embed
 from overwatch_patches import PATCH_URL, build_patch_embeds
 from overwatch_tierlist import TIER_URL
 from overwatch_meta import META_URL
@@ -42,10 +42,10 @@ BRAND = discord.Color.from_rgb(14, 28, 48)
 ACCENT = discord.Color.from_rgb(46, 230, 166)
 MUTED = discord.Color.from_rgb(90, 110, 140)
 
-# Short default — members tap the button; admins edit names in /panel → Names
+# Short default — public card body; joiner gets Set my name privately
 DEFAULT_WELCOME = (
     "Hey {mention} — welcome to **Dream Team**!\n"
-    "Tap **Set my name** below (example: `Миша`)."
+    "Glad you're here — make yourself at home."
 )
 
 
@@ -217,6 +217,26 @@ def hub_birthdays_embed(guild: discord.Guild, bot) -> discord.Embed:
     return embed
 
 
+def welcome_embed(
+    *,
+    description: str,
+    display_name: str,
+    avatar_url: str | None = None,
+) -> discord.Embed:
+    """Public welcome card — same layout language as birthday celebrations."""
+    embed = discord.Embed(
+        title="Welcome!",
+        description=description,
+        color=ACCENT,
+    )
+    embed.set_author(name="Dream Team")
+    embed.add_field(name="New member", value=f"**{display_name}**", inline=True)
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+    embed.set_footer(text="Dream Team · Welcome")
+    return embed
+
+
 def hub_welcome_embed(guild: discord.Guild, bot) -> discord.Embed:
     text = bot.db.get_welcome_message(guild.id) or DEFAULT_WELCOME
     preview = (
@@ -227,8 +247,9 @@ def hub_welcome_embed(guild: discord.Guild, bot) -> discord.Embed:
     embed = discord.Embed(
         title="Welcome message",
         description=(
-            "Shown when someone joins, with a **Set my name** button.\n"
-            "Use **Try welcome** to see it as a member would — privately or in this channel.\n\n"
+            "Channel gets a birthday-style **Welcome!** card (no buttons).\n"
+            "The joiner gets **Set my name** in a private DM.\n"
+            "Use **Try welcome** to preview.\n\n"
             f"**Placeholders:** `{{mention}}` `{{display}}` `{{example_nick}}`"
         ),
         color=MUTED,
@@ -255,6 +276,7 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         if last_meta_at
         else "_never_"
     )
+    news_configured = bot.db.get_ow_news_channel_configured(guild.id)
     news_ch = bot.db.get_ow_news_channel(guild.id)
     news_seeded = bot.db.is_ow_news_seeded(guild.id)
     embed = discord.Embed(
@@ -269,12 +291,10 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "rates (tag **META**).\n\n"
             "**Best to main** — [one-tricks]({meta_url}), same cadence. Patch-notes style "
             "cards per role with honourable mentions (tag **META**).\n\n"
-            "**News** — filtered Bluesky feed (map/mode/lore updates only — no shop, "
-            "skins, OWCS, vault, loot boxes, or patch notes). Checks hourly; posts "
-            "when new. Tag **News**. Use **Custom post** for a one-off. "
-            "YouTube / video links are downloaded temporarily and attached when under "
-            f"**{config.OW_MEDIA_MAX_MB} MB** (otherwise the link is kept).\n\n"
-            "_Pick a **Forum** below. Tags: **Patch Notes** / **META** / **News**._"
+            "**News / custom** — filtered Bluesky feed + **Custom post**. "
+            "Set the forum below (tag **News**). YouTube / video links attach when under "
+            f"**{config.OW_MEDIA_MAX_MB} MB**.\n\n"
+            "_Pick forums below. Tags: **Patch Notes** / **META** / **News**._"
         ).format(
             patch_url=PATCH_URL,
             tier_url=TIER_URL,
@@ -299,15 +319,19 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.add_field(
-        name="News",
-        value=(
-            f"{_ch(guild, news_ch)}\n"
+    if news_configured:
+        news_value = (
+            f"{_ch(guild, news_configured)}\n"
             f"Seeded: {'yes' if news_seeded else 'no'} · "
             f"check every {config.OW_NEWS_CHECK_HOURS}h"
-        ),
-        inline=False,
-    )
+        )
+    else:
+        news_value = (
+            f"_not set_ — custom/news fall back to {_ch(guild, news_ch)}\n"
+            f"Seeded: {'yes' if news_seeded else 'no'} · "
+            f"check every {config.OW_NEWS_CHECK_HOURS}h"
+        )
+    embed.add_field(name="News / custom channel", value=news_value, inline=False)
     embed.set_footer(
         text=(
             f"Patches every {config.OW_PATCH_CHECK_HOURS}h · "
@@ -433,7 +457,7 @@ class CustomNewsModal(discord.ui.Modal, title="Custom news post"):
         )
         if not channel_id:
             await interaction.response.send_message(
-                "Set an Overwatch forum first.", ephemeral=True
+                "Set a news / custom forum first.", ephemeral=True
             )
             return
         channel = interaction.guild.get_channel(channel_id)
@@ -444,7 +468,7 @@ class CustomNewsModal(discord.ui.Modal, title="Custom news post"):
                 channel = None
         if not is_ow_destination(channel):
             await interaction.response.send_message(
-                "News forum missing — pick a patch/tier forum again.",
+                "News / custom forum missing — set it in the Overwatch panel.",
                 ephemeral=True,
             )
             return
@@ -953,22 +977,30 @@ class AdminHubView(discord.ui.View):
                 view=self,
             )
 
-        async def _welcome_body(member: discord.Member) -> str:
+        def _welcome_card(member: discord.Member) -> discord.Embed:
+            from nicknames import display_base
+
             template = self.bot.db.get_welcome_message(self.guild_id) or DEFAULT_WELCOME
-            return render_welcome_prompt(template, member)
+            body = render_welcome_prompt(template, member)
+            return welcome_embed(
+                description=body,
+                display_name=display_base(member),
+                avatar_url=member.display_avatar.url,
+            )
 
         async def on_try_private(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
             assert isinstance(interaction.user, discord.Member)
-            body = await _welcome_body(interaction.user)
+            card = _welcome_card(interaction.user)
             await interaction.response.send_message(
                 content=(
                     "**Test welcome** — only you see this.\n"
-                    "Tap **Set my name** to try the full flow.\n\n"
-                    f"{body}"
+                    "Public channel would show the card only; "
+                    "the joiner gets **Set my name** in a DM."
                 ),
-                view=WelcomeNameView(),
+                embed=card,
+                view=WelcomePrivateView(self.guild_id),
                 ephemeral=True,
             )
 
@@ -983,14 +1015,11 @@ class AdminHubView(discord.ui.View):
                     ephemeral=True,
                 )
                 return
-            body = await _welcome_body(interaction.user)
+            card = _welcome_card(interaction.user)
             try:
                 await channel.send(
-                    content=(
-                        f"🧪 **Test welcome** (by {interaction.user.mention})\n\n"
-                        f"{body}"
-                    ),
-                    view=WelcomeNameView(),
+                    content=interaction.user.mention,
+                    embed=card,
                 )
             except discord.Forbidden:
                 await interaction.response.send_message(
@@ -1002,7 +1031,10 @@ class AdminHubView(discord.ui.View):
             embed = hub_welcome_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Test posted",
-                value=f"Check {channel.mention} — same look as a real join.",
+                value=(
+                    f"Public card in {channel.mention} (no buttons). "
+                    "A real join also DMs **Set my name** to the member."
+                ),
                 inline=False,
             )
             await interaction.response.edit_message(embed=embed, view=self)
@@ -1030,6 +1062,13 @@ class AdminHubView(discord.ui.View):
             min_values=1,
             max_values=1,
             row=2,
+        )
+        news_pick = discord.ui.ChannelSelect(
+            placeholder="Set news / custom forum…",
+            channel_types=list(OW_CHANNEL_TYPES),
+            min_values=1,
+            max_values=1,
+            row=3,
         )
 
         async def on_patch_channel(interaction: discord.Interaction) -> None:
@@ -1122,29 +1161,50 @@ class AdminHubView(discord.ui.View):
             self._rebuild()
             await interaction.response.edit_message(embed=embed, view=self)
 
+        async def on_news_channel(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            selected = news_pick.values[0]
+            channel_id = getattr(selected, "id", None)
+            if channel_id is None:
+                await interaction.response.send_message(
+                    "Could not read that channel.", ephemeral=True
+                )
+                return
+            channel = (
+                interaction.guild.get_channel(channel_id)
+                if interaction.guild
+                else None
+            )
+            mention = (
+                channel.mention
+                if isinstance(channel, discord.abc.GuildChannel)
+                else f"<#{channel_id}>"
+            )
+            self.bot.db.set_ow_news_channel(self.guild_id, int(channel_id))
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Done",
+                value=(
+                    f"News / custom forum set to {mention}.\n"
+                    "Bluesky news and **Custom post** go here (tag **News**)."
+                ),
+                inline=False,
+            )
+            self._rebuild()
+            await interaction.response.edit_message(embed=embed, view=self)
+
         patch_pick.callback = on_patch_channel
         tier_pick.callback = on_tier_channel
+        news_pick.callback = on_news_channel
         self.add_item(patch_pick)
         self.add_item(tier_pick)
+        self.add_item(news_pick)
 
-        preview_patch = discord.ui.Button(
-            label="Preview patch",
-            style=discord.ButtonStyle.primary,
-            row=3,
-        )
+        # Row 4 only has 5 slots (news select took row 3)
         post_patch = discord.ui.Button(
             label="Post patch",
             style=discord.ButtonStyle.success,
-            row=3,
-        )
-        preview_meta = discord.ui.Button(
-            label="Preview META",
-            style=discord.ButtonStyle.primary,
-            row=3,
-        )
-        preview_tier = discord.ui.Button(
-            label="Preview tier",
-            style=discord.ButtonStyle.primary,
             row=4,
         )
         post_tier = discord.ui.Button(
@@ -1157,21 +1217,16 @@ class AdminHubView(discord.ui.View):
             style=discord.ButtonStyle.success,
             row=4,
         )
-
-        async def on_preview_patch(interaction: discord.Interaction) -> None:
-            if not await self._admin_ok(interaction):
-                return
-            cog = self.bot.get_cog("OverwatchPatchCog")
-            if cog is None:
-                await interaction.response.send_message(
-                    "Overwatch patch cog not loaded.", ephemeral=True
-                )
-                return
-            await interaction.response.defer(ephemeral=True)
-            try:
-                await cog.send_preview_ephemeral(interaction)
-            except Exception as exc:
-                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
+        post_news = discord.ui.Button(
+            label="Post news",
+            style=discord.ButtonStyle.success,
+            row=4,
+        )
+        custom_news = discord.ui.Button(
+            label="Custom post",
+            style=discord.ButtonStyle.primary,
+            row=4,
+        )
 
         async def on_post_patch(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
@@ -1231,21 +1286,6 @@ class AdminHubView(discord.ui.View):
             self._rebuild()
             await interaction.edit_original_response(embed=embed, view=self)
 
-        async def on_preview_tier(interaction: discord.Interaction) -> None:
-            if not await self._admin_ok(interaction):
-                return
-            cog = self.bot.get_cog("OverwatchTierCog")
-            if cog is None:
-                await interaction.response.send_message(
-                    "Tier-list cog not loaded.", ephemeral=True
-                )
-                return
-            await interaction.response.defer(ephemeral=True)
-            try:
-                await cog.send_preview_ephemeral(interaction)
-            except Exception as exc:
-                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
-
         async def on_post_tier(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
@@ -1303,21 +1343,6 @@ class AdminHubView(discord.ui.View):
             )
             self._rebuild()
             await interaction.edit_original_response(embed=embed, view=self)
-
-        async def on_preview_meta(interaction: discord.Interaction) -> None:
-            if not await self._admin_ok(interaction):
-                return
-            cog = self.bot.get_cog("OverwatchMetaCog")
-            if cog is None:
-                await interaction.response.send_message(
-                    "META cog not loaded.", ephemeral=True
-                )
-                return
-            await interaction.response.defer(ephemeral=True)
-            try:
-                await cog.send_preview_ephemeral(interaction)
-            except Exception as exc:
-                await interaction.followup.send(f"Fetch failed: {exc}", ephemeral=True)
 
         async def on_post_meta(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
@@ -1381,25 +1406,6 @@ class AdminHubView(discord.ui.View):
             self._rebuild()
             await interaction.edit_original_response(embed=embed, view=self)
 
-        preview_patch.callback = on_preview_patch
-        post_patch.callback = on_post_patch
-        preview_tier.callback = on_preview_tier
-        post_tier.callback = on_post_tier
-        preview_meta.callback = on_preview_meta
-        post_meta.callback = on_post_meta
-        self.add_item(preview_patch)
-        self.add_item(post_patch)
-        self.add_item(preview_meta)
-        self.add_item(preview_tier)
-        self.add_item(post_tier)
-        self.add_item(post_meta)
-
-        post_news = discord.ui.Button(
-            label="Post news (~24h)",
-            style=discord.ButtonStyle.success,
-            row=3,
-        )
-
         async def on_post_news(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
@@ -1414,11 +1420,15 @@ class AdminHubView(discord.ui.View):
                     "Guild only.", ephemeral=True
                 )
                 return
+            if not self.bot.db.get_ow_news_channel(self.guild_id):
+                await interaction.response.send_message(
+                    "Set a news / custom forum first.", ephemeral=True
+                )
+                return
             await interaction.response.defer()
-            # Force a seed pass for ~24h filtered items
             self.bot.db.set_ow_news_seeded(self.guild_id, False)
             try:
-                n, detail = await cog.seed_day_old(interaction.guild)
+                _n, detail = await cog.seed_day_old(interaction.guild)
             except Exception as exc:
                 await interaction.followup.send(f"News failed: {exc}", ephemeral=True)
                 return
@@ -1427,21 +1437,25 @@ class AdminHubView(discord.ui.View):
             self._rebuild()
             await interaction.edit_original_response(embed=embed, view=self)
 
-        post_news.callback = on_post_news
-        self.add_item(post_news)
-
-        custom_news = discord.ui.Button(
-            label="Custom post",
-            style=discord.ButtonStyle.primary,
-            row=3,
-        )
-
         async def on_custom_news(interaction: discord.Interaction) -> None:
             if not await self._admin_ok(interaction):
                 return
+            if not self.bot.db.get_ow_news_channel(self.guild_id):
+                await interaction.response.send_message(
+                    "Set a news / custom forum first.", ephemeral=True
+                )
+                return
             await interaction.response.send_modal(CustomNewsModal(self))
 
+        post_patch.callback = on_post_patch
+        post_tier.callback = on_post_tier
+        post_meta.callback = on_post_meta
+        post_news.callback = on_post_news
         custom_news.callback = on_custom_news
+        self.add_item(post_patch)
+        self.add_item(post_tier)
+        self.add_item(post_meta)
+        self.add_item(post_news)
         self.add_item(custom_news)
 
     def _add_onboard_controls(self) -> None:

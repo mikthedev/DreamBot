@@ -778,14 +778,21 @@ class Database:
             )
 
     def get_ow_news_channel(self, guild_id: int) -> int | None:
+        """Resolved destination for news / custom posts (dedicated → patch)."""
         settings = self.get_settings(guild_id)
         if not settings:
             return None
-        # Prefer dedicated news channel; fall back to shared OW forum
         channel_id = settings["ow_news_channel_id"] or settings["ow_patch_channel_id"]
         if not channel_id:
             return None
         return int(channel_id)
+
+    def get_ow_news_channel_configured(self, guild_id: int) -> int | None:
+        """Only the dedicated news/custom forum — no fallback."""
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["ow_news_channel_id"]:
+            return None
+        return int(settings["ow_news_channel_id"])
 
     def set_ow_news_channel(self, guild_id: int, channel_id: int | None) -> None:
         with self.connect() as conn:

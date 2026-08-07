@@ -102,8 +102,25 @@ class SetNameModal(discord.ui.Modal, title="Set real name"):
                 pass
 
 
+async def _open_set_name_modal(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    *,
+    announce_channel: discord.abc.Messageable | None = None,
+) -> None:
+    if interaction.user.bot:
+        return
+    await interaction.response.send_modal(
+        SetNameModal(
+            interaction.client,
+            member,
+            announce_channel=announce_channel,
+        )
+    )
+
+
 class WelcomeNameView(discord.ui.View):
-    """Persistent join button — no chat reply needed."""
+    """Persistent in-server button (legacy public welcomes + ephemeral tests)."""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -122,18 +139,56 @@ class WelcomeNameView(discord.ui.View):
                 "Use this in the server.", ephemeral=True
             )
             return
-        if interaction.user.bot:
+        channel = (
+            interaction.channel
+            if isinstance(interaction.channel, discord.TextChannel)
+            else None
+        )
+        await _open_set_name_modal(
+            interaction, interaction.user, announce_channel=channel
+        )
+
+
+class WelcomePrivateView(discord.ui.View):
+    """Join setup buttons — DM / ephemeral only so the channel stays clean."""
+
+    def __init__(self, guild_id: int) -> None:
+        super().__init__(timeout=7 * 24 * 3600)
+        self.guild_id = guild_id
+
+    @discord.ui.button(
+        label="Set my name",
+        style=discord.ButtonStyle.primary,
+        emoji="✏️",
+    )
+    async def set_my_name(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        bot = interaction.client
+        guild = bot.get_guild(self.guild_id)
+        if guild is None:
+            await interaction.response.send_message(
+                "I can't find that server anymore — ask an admin in `/panel` → Names.",
+                ephemeral=True,
+            )
             return
 
-        bot = interaction.client
-        channel = interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None
-        await interaction.response.send_modal(
-            SetNameModal(
-                bot,
-                interaction.user,
-                announce_channel=channel,
+        member = guild.get_member(interaction.user.id)
+        if member is None:
+            await interaction.response.send_message(
+                "You're no longer in that server.",
+                ephemeral=True,
             )
-        )
+            return
+
+        settings = bot.db.get_settings(guild.id)
+        announce: discord.abc.Messageable | None = None
+        if settings and settings["welcome_channel_id"]:
+            ch = guild.get_channel(settings["welcome_channel_id"])
+            if isinstance(ch, discord.TextChannel):
+                announce = ch
+
+        await _open_set_name_modal(interaction, member, announce_channel=announce)
 
 
 def names_list_embed(guild: discord.Guild, bot) -> discord.Embed:

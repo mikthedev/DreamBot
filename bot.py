@@ -16,7 +16,7 @@ from birthdays import (
 )
 from database import Database
 from music import MusicCog
-from names import WelcomeNameView, apply_real_name
+from names import WelcomeNameView, WelcomePrivateView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
 from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
 from overwatch_tierlist import OverwatchTierCog
@@ -169,32 +169,45 @@ class WelcomeCog(commands.Cog):
         return None
 
     async def _prompt_for_real_name(self, member: discord.Member) -> None:
-        from panel import DEFAULT_WELCOME, render_welcome_prompt
+        from panel import DEFAULT_WELCOME, render_welcome_prompt, welcome_embed
 
         template = self.bot.db.get_welcome_message(member.guild.id) or DEFAULT_WELCOME
-        prompt = render_welcome_prompt(template, member)
+        body = render_welcome_prompt(template, member)
+        card = welcome_embed(
+            description=body,
+            display_name=display_base(member),
+            avatar_url=member.display_avatar.url,
+        )
+        actions = WelcomePrivateView(member.guild.id)
 
         channel = await self._resolve_welcome_channel(member.guild)
-        destination: discord.abc.Messageable | None = channel
-
-        if destination is None:
+        if channel is not None:
             try:
-                destination = await member.create_dm()
-            except discord.HTTPException:
-                log.warning("No welcome channel and cannot DM %s", member)
+                await channel.send(content=member.mention, embed=card)
+            except discord.Forbidden:
+                log.warning(
+                    "Cannot send welcome card in guild %s", member.guild.id
+                )
+            except discord.HTTPException as exc:
+                log.warning("Welcome card failed: %s", exc)
+            else:
+                await self._send_welcome_actions_dm(member, actions)
                 return
 
-        # Channel welcome gets a button; DMs fall back to a short reply
-        view = WelcomeNameView() if isinstance(destination, discord.TextChannel) else None
+        # No welcome channel — card + buttons in DM
         try:
-            await destination.send(prompt, view=view)
+            dm = await member.create_dm()
+        except discord.HTTPException:
+            log.warning("No welcome channel and cannot DM %s", member)
+            return
+
+        try:
+            await dm.send(embed=card, view=actions)
         except discord.Forbidden:
-            log.warning("Cannot send welcome prompt in guild %s", member.guild.id)
+            log.warning("Cannot DM welcome to %s", member)
             return
 
-        if view is not None:
-            return
-
+        # DM fallback: also accept a typed name reply
         def check(message: discord.Message) -> bool:
             return (
                 message.author.id == member.id
@@ -205,13 +218,35 @@ class WelcomeCog(commands.Cog):
         try:
             reply = await self.bot.wait_for("message", check=check, timeout=timeout)
         except asyncio.TimeoutError:
-            await destination.send(
-                "No name yet — an admin can set it in `/panel` → Names."
-            )
+            try:
+                await dm.send(
+                    "No name yet — an admin can set it in `/panel` → Names."
+                )
+            except discord.HTTPException:
+                pass
             return
-        await self._apply_real_name(
-            member, reply.content.strip(), announce_in=destination
-        )
+        await self._apply_real_name(member, reply.content.strip(), announce_in=dm)
+
+    async def _send_welcome_actions_dm(
+        self, member: discord.Member, view: WelcomePrivateView
+    ) -> None:
+        """Buttons only the joiner sees — Discord can't hide channel components."""
+        try:
+            dm = await member.create_dm()
+            await dm.send(
+                f"Welcome to **{member.guild.name}**!\n"
+                "Only you see this — tap below to set your name "
+                "(example: `Миша`).",
+                view=view,
+            )
+        except discord.Forbidden:
+            log.warning(
+                "Cannot DM welcome actions to %s — "
+                "they may need to allow server DMs",
+                member,
+            )
+        except discord.HTTPException as exc:
+            log.warning("Welcome actions DM failed: %s", exc)
 
     async def _apply_real_name(
         self,

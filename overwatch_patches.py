@@ -943,6 +943,37 @@ class OverwatchPatchCog(commands.Cog):
         html = await fetch_patch_html(session)
         return parse_latest_patch(html)
 
+    async def enrich_hero_icons(self, summary: PatchSummary) -> None:
+        """Prefer latest official Blizzard portraits when the roster has them."""
+        try:
+            from overwatch_tierlist import (
+                fetch_blizzard_hero_icons,
+                _blizzard_icon_indexes,
+                _normalize_hero_token,
+            )
+
+            session = await self._get_session()
+            icons = await fetch_blizzard_hero_icons(session)
+            by_id, by_name = _blizzard_icon_indexes(icons)
+
+            for hero in summary.heroes:
+                token = _normalize_hero_token(hero.name)
+                blizz = by_id.get(token) or by_name.get(token)
+                if blizz:
+                    hero.icon_url = blizz
+        except Exception as exc:
+            log.warning("Patch Blizzard icon enrich failed: %s", exc)
+
+    async def refresh_app_hero_emojis(self) -> None:
+        """Pull new/changed hero portraits into Discord app emojis."""
+        tier_cog = self.bot.get_cog("OverwatchTierCog")
+        if tier_cog is None:
+            return
+        try:
+            await tier_cog.sync_blizzard_hero_emojis()
+        except Exception as exc:
+            log.warning("Post-patch hero emoji sync failed: %s", exc)
+
     async def post_to_channel(
         self,
         channel: discord.TextChannel | discord.ForumChannel,
@@ -952,6 +983,7 @@ class OverwatchPatchCog(commands.Cog):
         with_history: bool = False,
         existing_thread_id: int | None = None,
     ) -> tuple[list[discord.Message], int | None]:
+        await self.enrich_hero_icons(summary)
         layouts = build_patch_layouts(summary, preview=preview)
         return await post_ow_announcement(
             channel,
@@ -1015,6 +1047,7 @@ class OverwatchPatchCog(commands.Cog):
                 "Could not parse the patch notes page.", ephemeral=True
             )
             return
+        await self.enrich_hero_icons(summary)
         try:
             layouts = build_patch_layouts(summary, preview=True)
             await interaction.followup.send(view=layouts[0], ephemeral=True)
@@ -1052,13 +1085,17 @@ class OverwatchPatchCog(commands.Cog):
 
     @tasks.loop(hours=config.OW_PATCH_CHECK_HOURS)
     async def check_patches(self) -> None:
+        any_posted = False
         for guild in self.bot.guilds:
             try:
                 posted, detail = await self.announce_if_new(guild)
                 if posted:
+                    any_posted = True
                     log.info("OW patch posted in %s: %s", guild.name, detail)
             except Exception as exc:
                 log.warning("OW patch check failed for %s: %s", guild.name, exc)
+        if any_posted:
+            await self.refresh_app_hero_emojis()
 
     @check_patches.before_loop
     async def before_check(self) -> None:

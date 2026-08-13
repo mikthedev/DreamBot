@@ -482,6 +482,41 @@ class OverwatchMetaCog(commands.Cog):
     async def ensure_mention_emojis(
         self, summary: MetaSummary
     ) -> dict[str, discord.Emoji]:
+        # Prefer official Blizzard portraits on featured picks + mentions
+        try:
+            session = await self._get_session()
+            from overwatch_tierlist import (
+                fetch_blizzard_hero_icons,
+                _blizzard_icon_indexes,
+                _normalize_hero_token,
+            )
+
+            icons = await fetch_blizzard_hero_icons(session)
+            by_id, by_name = _blizzard_icon_indexes(icons)
+
+            def _blizz(name: str, slug: str = "") -> str | None:
+                for token in (
+                    (slug or "").lower(),
+                    _normalize_hero_token(slug),
+                    _normalize_hero_token(name),
+                ):
+                    if token and token in by_id:
+                        return by_id[token]
+                    if token and token in by_name:
+                        return by_name[token]
+                return None
+
+            for pick in summary.roles.values():
+                blizz = _blizz(pick.name, pick.slug)
+                if blizz:
+                    pick.icon_url = blizz
+                for m in pick.mentions:
+                    blizz_m = _blizz(m.name, m.slug)
+                    if blizz_m:
+                        m.icon_url = blizz_m
+        except Exception as exc:
+            log.warning("META Blizzard icon enrich failed: %s", exc)
+
         heroes = self._mention_heroes(summary)
         if not heroes:
             return {

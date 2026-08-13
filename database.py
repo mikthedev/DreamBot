@@ -108,6 +108,16 @@ class Database:
             self._ensure_column(conn, "guild_settings", "voice_log_channel_id", "INTEGER")
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS ow_hero_emoji_icons (
+                    emoji_name TEXT PRIMARY KEY,
+                    icon_url TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS anniversary_announcements (
                     guild_id INTEGER NOT NULL,
                     year INTEGER NOT NULL,
@@ -1069,3 +1079,26 @@ class Database:
             "real_names": int(names),
             "announcements": int(announced),
         }
+
+    def get_hero_emoji_icon(self, emoji_name: str) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT emoji_name, icon_url, sha256 FROM ow_hero_emoji_icons WHERE emoji_name = ?",
+                (emoji_name,),
+            ).fetchone()
+
+    def set_hero_emoji_icon(
+        self, emoji_name: str, icon_url: str, sha256: str
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ow_hero_emoji_icons (emoji_name, icon_url, sha256, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(emoji_name) DO UPDATE SET
+                    icon_url = excluded.icon_url,
+                    sha256 = excluded.sha256,
+                    updated_at = excluded.updated_at
+                """,
+                (emoji_name, icon_url, sha256),
+            )

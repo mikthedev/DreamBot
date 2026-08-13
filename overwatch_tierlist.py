@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import logging
 import re
@@ -28,6 +29,7 @@ from ow_forum import (
 log = logging.getLogger("dream_team.ow_tier")
 
 TIER_URL = config.OW_TIER_URL
+BLIZZARD_HEROES_URL = "https://overwatch.blizzard.com/en-us/heroes/"
 USER_AGENT = "DreamTeamBot/1.0 (+discord; tier-list monitor)"
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
@@ -180,13 +182,102 @@ def _hero_stats(hero: TierHero) -> str:
 
 
 def _hero_emoji_key(hero: TierHero) -> str:
-    raw = (hero.slug or hero.name).lower()
+    # Prefer slug; strip punctuation so "D.Mon" / "dmon" / "D.Va" stay stable
+    raw = (hero.slug or hero.name).lower().replace(".", "").replace("'", "")
     return re.sub(r"[^a-z0-9]+", "_", raw).strip("_") or "hero"
 
 
 def emoji_name_for_hero(hero: TierHero) -> str:
     """Discord emoji names: 2–32 chars, [a-z0-9_]. Square thumbs (no circle mask)."""
     return f"ows_{_hero_emoji_key(hero)}"[:32]
+
+
+def _normalize_hero_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+@dataclass
+class BlizzardHeroIcon:
+    hero_id: str
+    name: str
+    icon_url: str
+
+
+def parse_blizzard_hero_icons(html: str) -> list[BlizzardHeroIcon]:
+    """Official roster portraits from overwatch.blizzard.com/heroes/."""
+    cards = re.findall(
+        r'<a class="hero-card"[^>]*\bid="([^"]+)"[^>]*>'
+        r'.*?alt="([^"]*)"[^>]*src="(https://d15f34w2p8l1cc\.cloudfront\.net/overwatch/[^"]+)"'
+        r"[^>]*>.*?<h2[^>]*>([^<]+)</h2>",
+        html,
+        re.S | re.I,
+    )
+    out: list[BlizzardHeroIcon] = []
+    seen: set[str] = set()
+    for hero_id, _alt, icon_url, name in cards:
+        hero_id = hero_id.strip().lower()
+        if not hero_id or hero_id in seen:
+            continue
+        seen.add(hero_id)
+        out.append(
+            BlizzardHeroIcon(
+                hero_id=hero_id,
+                name=unescape(name).strip(),
+                icon_url=icon_url.strip(),
+            )
+        )
+    return out
+
+
+async def fetch_blizzard_hero_icons(
+    session: aiohttp.ClientSession,
+) -> list[BlizzardHeroIcon]:
+    async with session.get(
+        BLIZZARD_HEROES_URL,
+        ssl=_SSL_CTX,
+        timeout=aiohttp.ClientTimeout(total=45),
+        headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
+    ) as resp:
+        resp.raise_for_status()
+        html = await resp.text()
+    icons = parse_blizzard_hero_icons(html)
+    log.info("Blizzard hero roster: %s icons", len(icons))
+    return icons
+
+
+def _blizzard_icon_indexes(
+    icons: list[BlizzardHeroIcon],
+) -> tuple[dict[str, str], dict[str, str]]:
+    by_id: dict[str, str] = {}
+    by_name: dict[str, str] = {}
+    for icon in icons:
+        by_id[icon.hero_id] = icon.icon_url
+        by_id[_normalize_hero_token(icon.hero_id)] = icon.icon_url
+        by_name[_normalize_hero_token(icon.name)] = icon.icon_url
+    return by_id, by_name
+
+
+def resolve_hero_icon_url(
+    hero: TierHero,
+    *,
+    blizzard_by_id: dict[str, str] | None = None,
+    blizzard_by_name: dict[str, str] | None = None,
+) -> str | None:
+    """Prefer official Blizzard CDN portraits; fall back to Counterwatch."""
+    blizzard_by_id = blizzard_by_id or {}
+    blizzard_by_name = blizzard_by_name or {}
+
+    for token in (
+        (hero.slug or "").lower(),
+        _normalize_hero_token(hero.slug or ""),
+        _normalize_hero_token(hero.name),
+    ):
+        if token and token in blizzard_by_id:
+            return blizzard_by_id[token]
+        if token and token in blizzard_by_name:
+            return blizzard_by_name[token]
+
+    return _icon_url(hero)
 
 
 def _icon_url(hero: TierHero) -> str | None:
@@ -384,9 +475,11 @@ class OverwatchTierCog(commands.Cog):
         self._session: aiohttp.ClientSession | None = None
         self._emoji_cache: dict[str, discord.Emoji] | None = None
         self.check_tier_list.start()
+        self.sync_hero_icons.start()
 
     def cog_unload(self) -> None:
         self.check_tier_list.cancel()
+        self.sync_hero_icons.cancel()
         if self._session and not self._session.closed:
             self.bot.loop.create_task(self._session.close())
 
@@ -405,27 +498,58 @@ class OverwatchTierCog(commands.Cog):
         self, summary: TierListSummary
     ) -> dict[str, discord.Emoji]:
         """
-        Upload missing hero icons as *application* emojis (not server slots).
-        First run may take a minute; later posts reuse them.
+        Create/update *application* emojis from official Blizzard portraits
+        (fallback: Counterwatch). New heroes and changed CDN icons refresh automatically.
         """
-        if self._emoji_cache is not None:
-            needed = {emoji_name_for_hero(h) for h in summary.all_heroes()}
-            if needed <= set(self._emoji_cache):
-                return self._emoji_cache
+        session = await self._get_session()
+        blizzard_by_id: dict[str, str] = {}
+        blizzard_by_name: dict[str, str] = {}
+        blizzard_icons: list[BlizzardHeroIcon] = []
+        try:
+            blizzard_icons = await fetch_blizzard_hero_icons(session)
+            blizzard_by_id, blizzard_by_name = _blizzard_icon_indexes(blizzard_icons)
+        except Exception as exc:
+            log.warning("Blizzard hero icon fetch failed: %s", exc)
+
+        # Sync every roster hero + anyone currently on the tier/META board
+        work: dict[str, TierHero] = {}
+        for icon in blizzard_icons:
+            stub = TierHero(
+                name=icon.name,
+                role="",
+                win_rate="",
+                pick_rate="",
+                slug=icon.hero_id,
+                icon_url=icon.icon_url,
+            )
+            work[emoji_name_for_hero(stub)] = stub
+        for hero in summary.all_heroes():
+            work[emoji_name_for_hero(hero)] = hero
 
         existing = {
             e.name: e for e in await self.bot.fetch_application_emojis()
         }
-        session = await self._get_session()
         created = 0
+        updated = 0
 
-        for hero in summary.all_heroes():
-            name = emoji_name_for_hero(hero)
-            if name in existing:
-                continue
-            url = _icon_url(hero)
+        for name, hero in work.items():
+            url = resolve_hero_icon_url(
+                hero,
+                blizzard_by_id=blizzard_by_id,
+                blizzard_by_name=blizzard_by_name,
+            )
             if not url:
                 continue
+
+            stored = self.bot.db.get_hero_emoji_icon(name)
+            if (
+                name in existing
+                and stored is not None
+                and stored["icon_url"] == url
+            ):
+                # Same CDN URL as last sync — skip download
+                continue
+
             try:
                 async with session.get(
                     url, ssl=_SSL_CTX, timeout=aiohttp.ClientTimeout(total=20)
@@ -434,23 +558,60 @@ class OverwatchTierCog(commands.Cog):
                         log.warning("Emoji icon fetch %s → %s", name, resp.status)
                         continue
                     raw = await resp.read()
-                    png = _to_emoji_png(raw)
-                    emoji = await self.bot.create_application_emoji(name=name, image=png)
-                existing[name] = emoji
-                created += 1
-                log.info("Created app emoji %s", name)
-                # Gentle pacing for Discord rate limits
+                png = _to_emoji_png(raw)
+                sha = hashlib.sha256(png).hexdigest()
+
+                if (
+                    name in existing
+                    and stored is not None
+                    and stored["sha256"] == sha
+                ):
+                    # Content unchanged even if URL string differed
+                    self.bot.db.set_hero_emoji_icon(name, url, sha)
+                    continue
+
+                if name in existing:
+                    emoji = existing[name]
+                    try:
+                        owned = emoji.is_application_owned()
+                    except Exception:
+                        owned = True
+                    if not owned:
+                        continue
+                    await emoji.edit(image=png)
+                    updated += 1
+                    log.info("Updated app emoji %s (new icon)", name)
+                else:
+                    emoji = await self.bot.create_application_emoji(
+                        name=name, image=png
+                    )
+                    existing[name] = emoji
+                    created += 1
+                    log.info("Created app emoji %s", name)
+
+                self.bot.db.set_hero_emoji_icon(name, url, sha)
                 await asyncio.sleep(0.7)
             except discord.HTTPException as exc:
-                log.warning("Could not create emoji %s: %s", name, exc)
+                log.warning("Could not sync emoji %s: %s", name, exc)
             except Exception as exc:
                 log.warning("Emoji sync failed for %s: %s", name, exc)
 
-        if created:
-            log.info("Synced %s new Overwatch hero emojis", created)
+        if created or updated:
+            log.info(
+                "Hero emoji sync: created=%s updated=%s total=%s",
+                created,
+                updated,
+                len(existing),
+            )
 
         self._emoji_cache = existing
         return existing
+
+    async def sync_blizzard_hero_emojis(self) -> dict[str, discord.Emoji]:
+        """Force a full roster emoji sync (new heroes / refreshed icons)."""
+        self._emoji_cache = None
+        empty = TierListSummary(season="", updated="")
+        return await self.ensure_hero_emojis(empty)
 
     async def post_to_channel(
         self,
@@ -593,3 +754,18 @@ class OverwatchTierCog(commands.Cog):
     @check_tier_list.before_loop
     async def before_check(self) -> None:
         await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=24)
+    async def sync_hero_icons(self) -> None:
+        """Daily: pick up new heroes and refreshed Blizzard CDN portraits."""
+        try:
+            result = await self.sync_blizzard_hero_emojis()
+            log.info("Daily hero icon sync done (%s emojis)", len(result))
+        except Exception as exc:
+            log.warning("Daily hero icon sync failed: %s", exc)
+
+    @sync_hero_icons.before_loop
+    async def before_sync_hero_icons(self) -> None:
+        await self.bot.wait_until_ready()
+        # Small delay so startup isn't hammering Discord + Blizzard at once
+        await asyncio.sleep(45)

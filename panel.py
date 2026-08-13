@@ -36,6 +36,7 @@ from onboarding import (
     publish_onboard,
 )
 from play_together import (
+    activity_embed,
     add_play_hub_controls,
     games_embed,
     hub_play_embed,
@@ -541,7 +542,13 @@ class AdminHubView(discord.ui.View):
             self._add_welcome_controls()
         elif self.page == "overwatch":
             self._add_overwatch_controls()
-        elif self.page in ("play", "play_games", "play_review", "play_manage"):
+        elif self.page in (
+            "play",
+            "play_games",
+            "play_activity",
+            "play_review",
+            "play_manage",
+        ):
             add_play_hub_controls(self)
         elif self.page == "onboard":
             self._add_onboard_controls()
@@ -652,6 +659,8 @@ class AdminHubView(discord.ui.View):
             return games_embed(
                 guild, self.bot, selected=getattr(self, "play_game_key", None)
             )
+        if self.page == "play_activity":
+            return activity_embed(guild, self.bot)
         if self.page == "play_review":
             return review_embed(guild, self.bot)
         if self.page == "play_manage":

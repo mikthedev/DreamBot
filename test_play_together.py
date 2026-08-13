@@ -139,6 +139,11 @@ def test_activity_session_and_detection():
         )
         assert groups["warframe"].blocked
         assert not groups["warframe"].allowed
+        n, people = db.count_play_activity(gid, t0)
+        assert n >= 8
+        assert people == 4
+        recent = db.list_play_activity_recent(gid, t0, limit=20)
+        assert any(r["game_name"] == "Minecraft" for r in recent)
 
 
 if __name__ == "__main__":

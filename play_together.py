@@ -476,6 +476,65 @@ async def _handle_rsvp(
         await interaction.response.send_message(msg, ephemeral=True)
 
 
+def live_playing(guild: discord.Guild) -> list[tuple[discord.Member, str]]:
+    out: list[tuple[discord.Member, str]] = []
+    for member in guild.members:
+        if member.bot:
+            continue
+        for name, _app in iter_playing_names(member):
+            out.append((member, name))
+    return out
+
+
+def _lookback_since(guild_id: int, bot) -> tuple[int, str]:
+    settings = bot.db.get_play_settings(guild_id)
+    days = max(1, _settings_int(settings, "play_detect_days", 14))
+    since = (_now_utc() - timedelta(days=days)).isoformat()
+    return days, since
+
+
+def snapshot_guild_games(bot, guild: discord.Guild) -> int:
+    cog = bot.get_cog("PlayTogetherCog")
+    if cog is None or not bot.intents.presences:
+        return 0
+    seen = 0
+    for member in guild.members:
+        games = iter_playing_names(member)
+        if not games:
+            continue
+        cog.record_member_games(member)
+        seen += 1
+    return seen
+
+
+def tracking_field(guild: discord.Guild, bot) -> tuple[str, str]:
+    days, since = _lookback_since(guild.id, bot)
+    records, people = bot.db.count_play_activity(guild.id, since)
+    live = live_playing(guild)
+    if not bot.intents.presences:
+        return (
+            "Watching games",
+            "**No.** Presence Intent is off, so Discord does not tell the bot "
+            "who is playing. Enable it in the Developer Portal, set "
+            "`PLAY_PRESENCE_INTENT=1`, restart.\n"
+            f"History ({days}d): **{people}** people · **{records}** records · "
+            f"visible right now: **{len(live)}**",
+        )
+    if live:
+        live_line = ", ".join(
+            f"{person_label(bot, guild, m.id)} · {game}" for m, game in live[:8]
+        )
+        extra = f" · +{len(live) - 8} more" if len(live) > 8 else ""
+        now_line = live_line + extra
+    else:
+        now_line = "_nobody in Playing … right now_"
+    return (
+        "Watching games",
+        f"**Yes.** Right now: {now_line}\n"
+        f"History ({days}d): **{people}** people · **{records}** records",
+    )
+
+
 def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
     settings = bot.db.get_play_settings(guild.id)
     groups = detect_groups(bot.db, guild.id)
@@ -501,6 +560,8 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
         ),
         color=ACCENT,
     )
+    watch_name, watch_value = tracking_field(guild, bot)
+    embed.add_field(name=watch_name, value=watch_value, inline=False)
     embed.add_field(
         name="Setup",
         value=(
@@ -549,9 +610,10 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
             n = len(bot.db.list_play_rsvps(int(row["id"]), status="in"))
             lines.append(f"**{row['game_name']}** · {stamp} · {n} in · `{row['status']}`")
         embed.add_field(name="Open sessions", value="\n".join(lines), inline=False)
-    embed.set_footer(
-        text="Set PLAY_PRESENCE_INTENT=1 after enabling Presence Intent in the Developer Portal"
-    )
+    if not bot.intents.presences:
+        embed.set_footer(text="Not watching games — Presence Intent is off")
+    else:
+        embed.set_footer(text="Open Activity to see everyone the bot has noticed")
     return embed
 
 
@@ -851,6 +913,74 @@ class EditGameModal(discord.ui.Modal, title="Edit game"):
         )
 
 
+def activity_embed(guild: discord.Guild, bot) -> discord.Embed:
+    days, since = _lookback_since(guild.id, bot)
+    live = live_playing(guild)
+    rows = bot.db.list_play_activity_recent(guild.id, since, limit=25)
+    embed = discord.Embed(
+        title="Play together · activity",
+        description=(
+            "What Discord is sending the bot **right now**, and what it has "
+            "stored recently. Review only lists games **two or more** people share."
+        ),
+        color=ACCENT if bot.intents.presences else MUTED,
+    )
+    watch_name, watch_value = tracking_field(guild, bot)
+    embed.add_field(name=watch_name, value=watch_value, inline=False)
+
+    if live:
+        live_lines = [
+            f"{person_label(bot, guild, member.id)} — **{game}**"
+            for member, game in live[:15]
+        ]
+        if len(live) > 15:
+            live_lines.append(f"_+{len(live) - 15} more_")
+        embed.add_field(
+            name=f"Playing right now ({len(live)})",
+            value="\n".join(live_lines)[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Playing right now",
+            value=(
+                "_nothing visible — if people are in a game, Presence Intent "
+                "is still off or Discord has not sent an update yet._"
+                if not bot.intents.presences
+                else "_nobody with a Playing status right now_"
+            ),
+            inline=False,
+        )
+
+    if rows:
+        hist = []
+        for row in rows[:18]:
+            last = parse_iso(row["last_seen"])
+            ago = (
+                format_days_ago(
+                    (_now_utc() - last).total_seconds() / 86400
+                )
+                if last
+                else "?"
+            )
+            hist.append(
+                f"{person_label(bot, guild, int(row['user_id']))} — "
+                f"**{row['game_name']}** · {ago}"
+            )
+        embed.add_field(
+            name=f"Stored ({days}d)",
+            value="\n".join(hist)[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name=f"Stored ({days}d)",
+            value="_empty — the bot has not recorded any Playing activity yet_",
+            inline=False,
+        )
+    return embed
+
+
 def games_embed(
     guild: discord.Guild, bot, *, selected: str | None = None
 ) -> discord.Embed:
@@ -930,7 +1060,13 @@ def review_embed(guild: discord.Guild, bot) -> discord.Embed:
             )
         embed.add_field(name="Overlap", value="\n".join(lines)[:1024], inline=False)
     else:
-        embed.add_field(name="Overlap", value="_none in the look-back window_", inline=False)
+        hint = (
+            "_none yet — overlap means 2+ people with the same game. "
+            "One person playing still shows up under Activity._"
+        )
+        if not bot.intents.presences:
+            hint = "_none — the bot is not watching games (Presence Intent off)_"
+        embed.add_field(name="Overlap", value=hint, inline=False)
     if active:
         lines = []
         for row in active:
@@ -981,6 +1117,9 @@ def add_play_hub_controls(hub) -> None:
     page = getattr(hub, "page", "play")
     if page == "play_games":
         _add_games_controls(hub)
+        return
+    if page == "play_activity":
+        _add_activity_controls(hub)
         return
     if page == "play_review":
         _add_review_controls(hub)
@@ -1091,6 +1230,9 @@ def _add_main_controls(hub) -> None:
     games_btn = discord.ui.Button(label="Games", style=discord.ButtonStyle.primary, row=4)
     create_btn = discord.ui.Button(label="Create", style=discord.ButtonStyle.primary, row=4)
     review_btn = discord.ui.Button(label="Review", style=discord.ButtonStyle.primary, row=4)
+    activity_btn = discord.ui.Button(
+        label="Activity", style=discord.ButtonStyle.primary, row=4
+    )
 
     async def on_games(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i):
@@ -1116,12 +1258,24 @@ def _add_main_controls(hub) -> None:
             embed=review_embed(i.guild, hub.bot), view=hub
         )
 
+    async def on_activity(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or i.guild is None:
+            return
+        snapshot_guild_games(hub.bot, i.guild)
+        hub.page = "play_activity"
+        hub._rebuild()
+        await i.response.edit_message(
+            embed=activity_embed(i.guild, hub.bot), view=hub
+        )
+
     games_btn.callback = on_games
     create_btn.callback = on_create
     review_btn.callback = on_review
+    activity_btn.callback = on_activity
     hub.add_item(games_btn)
     hub.add_item(create_btn)
     hub.add_item(review_btn)
+    hub.add_item(activity_btn)
 
 
 def _back_to_play(hub) -> discord.ui.Button:
@@ -1138,6 +1292,38 @@ def _back_to_play(hub) -> discord.ui.Button:
 
     btn.callback = go
     return btn
+
+
+def _add_activity_controls(hub) -> None:
+    scan = discord.ui.Button(
+        label="Scan now", style=discord.ButtonStyle.primary, row=1
+    )
+
+    async def on_scan(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or i.guild is None:
+            return
+        if not hub.bot.intents.presences:
+            await i.response.send_message(
+                "The bot is not watching games. Enable **Presence Intent** in "
+                "the Developer Portal, set `PLAY_PRESENCE_INTENT=1` on the host, "
+                "then restart.",
+                ephemeral=True,
+            )
+            return
+        seen = snapshot_guild_games(hub.bot, i.guild)
+        hub.page = "play_activity"
+        hub._rebuild()
+        await i.response.edit_message(
+            embed=activity_embed(i.guild, hub.bot), view=hub
+        )
+        await i.followup.send(
+            f"Recorded Playing status for **{seen}** member(s).",
+            ephemeral=True,
+        )
+
+    scan.callback = on_scan
+    hub.add_item(scan)
+    hub.add_item(_back_to_play(hub))
 
 
 def _add_games_controls(hub) -> None:

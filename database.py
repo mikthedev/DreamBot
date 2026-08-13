@@ -1615,6 +1615,33 @@ class Database:
                 (guild_id, since_iso, min_people),
             ).fetchall()
 
+    def list_play_activity_recent(
+        self, guild_id: int, since_iso: str, *, limit: int = 40
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT user_id, game_key, game_name, last_seen, play_count
+                FROM play_activity
+                WHERE guild_id = ? AND last_seen >= ?
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                (guild_id, since_iso, limit),
+            ).fetchall()
+
+    def count_play_activity(self, guild_id: int, since_iso: str) -> tuple[int, int]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n, COUNT(DISTINCT user_id) AS people
+                FROM play_activity
+                WHERE guild_id = ? AND last_seen >= ?
+                """,
+                (guild_id, since_iso),
+            ).fetchone()
+        return int(row["n"] or 0), int(row["people"] or 0)
+
     def list_known_play_games(self, guild_id: int, *, limit: int = 40) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return conn.execute(

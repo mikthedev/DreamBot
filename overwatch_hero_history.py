@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import discord
@@ -37,6 +38,8 @@ HISTORY_PER_PAGE = 3
 HISTORY_NAV_TIMEOUT = 180.0
 HISTORY_MAX_HITS = 25
 HISTORY_MAX_MONTHS = 24
+# LayoutView allows 4000 display chars; leave room for the header.
+HISTORY_PAGE_CHAR_BUDGET = 3600
 
 
 def _v2_edit_kwargs(view: discord.ui.LayoutView) -> dict:
@@ -119,12 +122,13 @@ def display_hero_name(query: str) -> str:
 
 
 def _hit_kind_mark(hit: HeroPatchHit) -> str:
+    """Glyph only — the card legend already spells out buff / nerf."""
     if hit.buffish and not hit.nerfish:
-        return "▲ buff"
+        return "▲"
     if hit.nerfish and not hit.buffish:
-        return "▼ nerf"
+        return "▼"
     if hit.buffish and hit.nerfish:
-        return "▲▼ mixed"
+        return "▲▼"
     return "·"
 
 
@@ -147,6 +151,84 @@ def _history_hit_block(hit: HeroPatchHit) -> str:
     url = hit.patch_url or PATCH_URL
     mark = _hit_kind_mark(hit)
     return f"**[{date_label}]({url})** · {mark}\n{_history_hit_body(hit)}"
+
+
+def _hit_line_count(hit: HeroPatchHit) -> int:
+    if hit.hero is not None and hit.hero.changes:
+        return len(hit.hero.changes)
+    return max(1, len(hit.lines))
+
+
+def _slice_hit(hit: HeroPatchHit, start: int, end: int) -> HeroPatchHit:
+    if hit.hero is not None and hit.hero.changes:
+        return replace(
+            hit, hero=replace(hit.hero, changes=hit.hero.changes[start:end])
+        )
+    return replace(hit, lines=hit.lines[start:end])
+
+
+def _split_hit_to_fit(hit: HeroPatchHit, budget: int) -> list[HeroPatchHit]:
+    """Keep a patch on one page when it fits; otherwise split its lines."""
+    n = _hit_line_count(hit)
+    if n <= 1 or len(_history_hit_block(hit)) <= budget:
+        return [hit]
+    parts: list[HeroPatchHit] = []
+    start = 0
+    while start < n:
+        lo, hi = start + 1, n
+        best = start + 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            piece = _slice_hit(hit, start, mid)
+            if len(_history_hit_block(piece)) <= budget:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        parts.append(_slice_hit(hit, start, best))
+        start = best
+    return parts
+
+
+def _history_pages(hits: list[HeroPatchHit]) -> list[list[HeroPatchHit]]:
+    """Pack full patch text onto pages; overflow continues on the next page."""
+    if not hits:
+        return [[]]
+    pieces: list[HeroPatchHit] = []
+    for hit in hits:
+        pieces.extend(_split_hit_to_fit(hit, HISTORY_PAGE_CHAR_BUDGET))
+    pages: list[list[HeroPatchHit]] = []
+    current: list[HeroPatchHit] = []
+    used = 0
+    for piece in pieces:
+        size = len(_history_hit_block(piece)) + 8
+        overflow = current and (
+            len(current) >= HISTORY_PER_PAGE or used + size > HISTORY_PAGE_CHAR_BUDGET
+        )
+        if overflow:
+            pages.append(current)
+            current = []
+            used = 0
+        current.append(piece)
+        used += size
+    if current:
+        pages.append(current)
+    return pages
+
+
+def _page_index_for_hit(
+    pages: list[list[HeroPatchHit]], hits: list[HeroPatchHit], hit_idx: int
+) -> int:
+    if not hits or not pages:
+        return 0
+    idx = max(0, min(hit_idx, len(hits) - 1))
+    target = hits[idx]
+    key = (target.patch_id or "", target.patch_date or "")
+    for page_i, chunk in enumerate(pages):
+        for piece in chunk:
+            if (piece.patch_id or "", piece.patch_date or "") == key:
+                return page_i
+    return 0
 
 
 def _history_nav_widgets(
@@ -197,8 +279,12 @@ def _history_nav_widgets(
             idx = int(jump.values[0])
         except ValueError:
             idx = 0
+        pages = _history_pages(hits)
         await _replace_hero_history(
-            interaction, hits, hero_label, idx // HISTORY_PER_PAGE
+            interaction,
+            hits,
+            hero_label,
+            _page_index_for_hit(pages, hits, idx),
         )
 
     prev_btn.callback = on_prev
@@ -236,10 +322,11 @@ def build_hero_history_layouts(
     per_page: int = HISTORY_PER_PAGE,
 ) -> tuple[list[discord.ui.LayoutView], int]:
     """
-    Compact timeline — few patches per page, one line per tweak.
+    Compact timeline — few patches per page, full text (overflow → next page).
     Returns (layouts_for_this_page, total_pages).
     """
-    total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
+    pages = _history_pages(hits)
+    total = max(1, len(pages))
     page = max(0, min(page, total - 1))
     timeout = HISTORY_NAV_TIMEOUT if total > 1 else None
 
@@ -255,7 +342,7 @@ def build_hero_history_layouts(
         )
         return [view], 1
 
-    chunk = hits[page * per_page : (page + 1) * per_page]
+    chunk = pages[page]
     pages_note = f" · {page + 1}/{total}" if total > 1 else ""
     colour = _hit_role_colour(chunk[0])
     icon_url = next(
@@ -312,7 +399,8 @@ def build_hero_history_embeds(
     page: int = 0,
     per_page: int = HISTORY_PER_PAGE,
 ) -> tuple[list[discord.Embed], int]:
-    total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
+    pages = _history_pages(hits)
+    total = max(1, len(pages))
     page = max(0, min(page, total - 1))
     colour = _hit_role_colour(hits[0]) if hits else OW_ORANGE
     head = discord.Embed(
@@ -324,7 +412,7 @@ def build_hero_history_embeds(
         head.description = "No retail balance changes in recent patch notes."
         return [head], 1
 
-    chunk = hits[page * per_page : (page + 1) * per_page]
+    chunk = pages[page]
     head.description = (
         f"**{len(hits)}** touch{'es' if len(hits) != 1 else ''}"
         + (f" · page {page + 1}/{total}" if total > 1 else "")
@@ -458,17 +546,22 @@ class HeroHistoryNavView(discord.ui.View):
 def _jump_options(
     hits: list[HeroPatchHit], current_page: int
 ) -> list[discord.SelectOption]:
+    pages = _history_pages(hits)
+    first_key = None
+    if pages and 0 <= current_page < len(pages) and pages[current_page]:
+        first = pages[current_page][0]
+        first_key = (first.patch_id or "", first.patch_date or "")
     opts: list[discord.SelectOption] = []
-    per_page = HISTORY_PER_PAGE
     for i, hit in enumerate(hits[:25]):
         label = hit.patch_date or hit.patch_id or f"Patch {i + 1}"
         mark = _hit_kind_mark(hit)
+        key = (hit.patch_id or "", hit.patch_date or "")
         opts.append(
             discord.SelectOption(
                 label=f"{label} · {mark}"[:100],
                 value=str(i),
                 description=(hit.lines[0][:80] if hit.lines else None),
-                default=(i // per_page) == current_page and i % per_page == 0,
+                default=key == first_key,
             )
         )
     return opts or [

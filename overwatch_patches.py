@@ -402,8 +402,6 @@ def _compact_value(raw: str) -> tuple[str, str, str | None]:
         label = re.split(r"\s+increased\s+to\s+", text, maxsplit=1, flags=re.I)[0].strip()
         return label or "Value", f"{_sec(m.group('a'))} → {_sec(m.group('b'))}", mode
 
-    if len(text) > 90:
-        text = text[:89].rstrip() + "…"
     return "", text, mode
 
 
@@ -487,14 +485,19 @@ def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
 def _hero_changes_compact(
     hero: HeroChange, *, max_lines: int | None = None
 ) -> str:
-    """One line per tweak — used by hero history timelines."""
+    """One line per tweak — glyph only; buff/nerf words live in the card legend."""
     changes = hero.changes if max_lines is None else hero.changes[:max_lines]
     rows: list[str] = []
     for ch in changes:
+        tone = _resolved_tone(ch.ability, ch)
+        if tone == "▲":
+            mark = "▲ "
+        elif tone == "▼":
+            mark = "▼ "
+        else:
+            mark = ""
         mode = f" · {ch.mode}" if ch.mode else ""
-        rows.append(
-            f"{_tone_label(_resolved_tone(ch.ability, ch))} · {ch.ability}{mode} · {ch.text}"
-        )
+        rows.append(f"{mark}{ch.ability}{mode} · {ch.text}")
     if max_lines is not None:
         extra = len(hero.changes) - max_lines
         if extra > 0:

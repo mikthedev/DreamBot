@@ -71,7 +71,7 @@ def meta_thread_title(*, season: str | None) -> str:
 
 
 def hero_history_thread_title() -> str:
-    return forum_thread_name("Hero Balance History")
+    return forum_thread_name("Search Hero Changes")
 
 
 async def resolve_forum_tags(

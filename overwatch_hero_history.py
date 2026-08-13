@@ -19,7 +19,8 @@ from overwatch_patches import (
     PATCH_URL,
     ROLE_COLOR,
     ROLE_HEADER,
-    _hero_changes_text,
+    _hero_changes_compact,
+    _tone_label,
 )
 from ow_forum import (
     OW_PATCH_TAG_NAMES,
@@ -104,11 +105,11 @@ def display_hero_name(query: str) -> str:
 
 def _hit_kind_mark(hit: HeroPatchHit) -> str:
     if hit.buffish and not hit.nerfish:
-        return "▲"
+        return "▲ buff"
     if hit.nerfish and not hit.buffish:
-        return "▼"
+        return "▼ nerf"
     if hit.buffish and hit.nerfish:
-        return "▲▼"
+        return "▲▼ mixed"
     return "·"
 
 
@@ -119,10 +120,13 @@ def _hit_role_colour(hit: HeroPatchHit) -> discord.Color:
 
 
 def _history_hit_body(hit: HeroPatchHit) -> str:
-    """Changes only — hero name lives in the page header."""
+    """Ultra-compact change lines for the timeline."""
     if hit.hero is not None:
-        return _hero_changes_text(hit.hero) or "_No detail lines_"
-    return "\n".join(f"· {ln}" for ln in hit.lines[:8]) or "_No detail lines_"
+        return _hero_changes_compact(hit.hero, max_lines=4)
+    rows = [f"· {ln}" for ln in hit.lines[:4]]
+    if len(hit.lines) > 4:
+        rows.append(f"_+{len(hit.lines) - 4} more…_")
+    return "\n".join(rows) or "_No detail lines_"
 
 
 def _history_hit_block(hit: HeroPatchHit) -> str:
@@ -137,10 +141,10 @@ def build_hero_history_layouts(
     *,
     hero_label: str,
     page: int = 0,
-    per_page: int = 6,
+    per_page: int = 3,
 ) -> tuple[list[discord.ui.LayoutView], int]:
     """
-    One accented timeline card per page — dated blocks separated by hairlines.
+    Compact timeline — few patches per page, one line per tweak.
     Returns (layouts_for_this_page, total_pages).
     """
     total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
@@ -175,9 +179,8 @@ def build_hero_history_layouts(
     if role_label:
         header += f" · {role_label}"
     header += (
-        f"\n{len(hits)} patch touch"
-        f"{'es' if len(hits) != 1 else ''}"
-        f"{pages_note}"
+        f"\n{len(hits)} touch{'es' if len(hits) != 1 else ''}"
+        f"{pages_note} · {_tone_label('▲')} · {_tone_label('▼')}"
     )
 
     view = discord.ui.LayoutView(timeout=None)
@@ -194,7 +197,7 @@ def build_hero_history_layouts(
     else:
         container.add_item(discord.ui.TextDisplay(header))
 
-    for i, hit in enumerate(chunk):
+    for hit in chunk:
         container.add_item(
             discord.ui.Separator(
                 visible=True,
@@ -211,7 +214,7 @@ def build_hero_history_embeds(
     *,
     hero_label: str,
     page: int = 0,
-    per_page: int = 6,
+    per_page: int = 3,
 ) -> tuple[list[discord.Embed], int]:
     total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
     page = max(0, min(page, total - 1))
@@ -227,9 +230,9 @@ def build_hero_history_embeds(
 
     chunk = hits[page * per_page : (page + 1) * per_page]
     head.description = (
-        f"**{len(hits)}** patch touch"
-        f"{'es' if len(hits) != 1 else ''}"
+        f"**{len(hits)}** touch{'es' if len(hits) != 1 else ''}"
         + (f" · page {page + 1}/{total}" if total > 1 else "")
+        + f" · {_tone_label('▲')} · {_tone_label('▼')}"
     )
     icon = next(
         (h.hero.icon_url for h in chunk if h.hero and h.hero.icon_url),
@@ -249,13 +252,22 @@ async def send_hero_history(
     *,
     hero_label: str,
     page: int = 0,
+    edit_searching: bool = False,
 ) -> None:
-    """Ephemeral history page; nav only when there are multiple pages."""
+    """Ephemeral history page; optionally replace a prior “Searching…” message."""
     try:
         layouts, total = build_hero_history_layouts(
             hits, hero_label=hero_label, page=page
         )
-        await interaction.followup.send(view=layouts[0], ephemeral=True)
+        if edit_searching and page == 0:
+            try:
+                await interaction.edit_original_response(
+                    content=None, embeds=[], view=layouts[0]
+                )
+            except Exception:
+                await interaction.followup.send(view=layouts[0], ephemeral=True)
+        else:
+            await interaction.followup.send(view=layouts[0], ephemeral=True)
         for layout in layouts[1:]:
             await interaction.followup.send(view=layout, ephemeral=True)
     except Exception as exc:
@@ -263,7 +275,15 @@ async def send_hero_history(
         embeds, total = build_hero_history_embeds(
             hits, hero_label=hero_label, page=page
         )
-        await interaction.followup.send(embeds=embeds, ephemeral=True)
+        if edit_searching and page == 0:
+            try:
+                await interaction.edit_original_response(
+                    content=None, embeds=embeds, view=None
+                )
+            except Exception:
+                await interaction.followup.send(embeds=embeds, ephemeral=True)
+        else:
+            await interaction.followup.send(embeds=embeds, ephemeral=True)
 
     if total > 1:
         await interaction.followup.send(
@@ -335,7 +355,7 @@ class HeroHistoryNavView(discord.ui.View):
                 idx = int(jump.values[0])
             except ValueError:
                 idx = 0
-            per_page = 6
+            per_page = 3
             await send_hero_history(
                 interaction,
                 self.hits,
@@ -356,7 +376,7 @@ def _jump_options(
     hits: list[HeroPatchHit], current_page: int
 ) -> list[discord.SelectOption]:
     opts: list[discord.SelectOption] = []
-    per_page = 6
+    per_page = 3
     for i, hit in enumerate(hits[:25]):
         label = hit.patch_date or hit.patch_id or f"Patch {i + 1}"
         mark = _hit_kind_mark(hit)
@@ -416,7 +436,6 @@ class HeroPickSelect(discord.ui.Select):
                 "No heroes in that list.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True)
         await _deliver_history(interaction, name)
 
 
@@ -472,12 +491,11 @@ class OwHubHeroSelect(discord.ui.Select):
                 "No heroes in that list.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True)
         await _deliver_history(interaction, name)
 
 
 class OwHeroHistoryHubView(discord.ui.View):
-    """Public hub under the Hero Balance History forum post (survives restarts)."""
+    """Public hub for Search Hero Changes (survives restarts)."""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -492,8 +510,8 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     view.add_item(container)
     container.add_item(
         discord.ui.TextDisplay(
-            "**Hero Balance History**\n"
-            "One hero · every recent retail change · newest first."
+            "**Search Hero Changes**\n"
+            "Pick a hero · see recent buffs & nerfs · newest first."
         )
     )
     container.add_item(
@@ -503,8 +521,8 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     )
     container.add_item(
         discord.ui.TextDisplay(
-            "🛡️ **Tank**   ⚔️ **Damage**   💚 **Support**\n"
-            "Pick a hero in the menus below — results stay private to you."
+            f"{_tone_label('▲')}   {_tone_label('▼')}\n"
+            "🛡️ Tank · ⚔️ Damage · 💚 Support — results are private."
         )
     )
     container.add_item(
@@ -514,8 +532,7 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     )
     container.add_item(
         discord.ui.TextDisplay(
-            f"_Live [patch notes]({PATCH_URL}) + this server’s archive · "
-            "also `/hero` anywhere._"
+            f"_Also `/hero` · [patch notes]({PATCH_URL})_"
         )
     )
     return [view]
@@ -523,12 +540,12 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
 
 def build_hero_history_hub_embeds() -> list[discord.Embed]:
     emb = discord.Embed(
-        title="Hero Balance History",
+        title="Search Hero Changes",
         description=(
-            "One hero · every recent retail change · newest first.\n\n"
-            "🛡️ **Tank** · ⚔️ **Damage** · 💚 **Support**\n"
-            "Use the menus below — results are private to you.\n\n"
-            f"_Also `/hero` anywhere · [patch notes]({PATCH_URL})_"
+            "Pick a hero · see recent buffs & nerfs · newest first.\n\n"
+            f"{_tone_label('▲')} · {_tone_label('▼')}\n"
+            "🛡️ Tank · ⚔️ Damage · 💚 Support — private results.\n\n"
+            f"_Also `/hero` · [patch notes]({PATCH_URL})_"
         ),
         color=OW_ORANGE,
         url=PATCH_URL,
@@ -540,23 +557,49 @@ def build_hero_history_hub_embeds() -> list[discord.Embed]:
 async def _deliver_history(interaction: discord.Interaction, hero: str) -> None:
     guild = interaction.guild
     if guild is None:
-        await interaction.followup.send(
-            "This only works in a server.", ephemeral=True
-        )
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "This only works in a server.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "This only works in a server.", ephemeral=True
+            )
         return
     label = display_hero_name(hero)
+    # Immediate feedback while Blizzard notes are fetched
+    if interaction.response.is_done():
+        await interaction.followup.send(
+            f"🔍 Searching **{label}**…", ephemeral=True
+        )
+        edit_searching = False
+    else:
+        await interaction.response.send_message(
+            f"🔍 Searching **{label}**…", ephemeral=True
+        )
+        edit_searching = True
     try:
         hits, _latest = await lookup_hero_patch_history(
             interaction.client, guild.id, hero, max_hits=25, max_months=12
         )
     except Exception as exc:
         log.warning("Hero history lookup failed for %s: %s", hero, exc)
-        await interaction.followup.send(
-            f"Could not load history for **{label}** right now.",
-            ephemeral=True,
-        )
+        msg = f"Could not load history for **{label}** right now."
+        if edit_searching:
+            try:
+                await interaction.edit_original_response(content=msg)
+                return
+            except Exception:
+                pass
+        await interaction.followup.send(msg, ephemeral=True)
         return
-    await send_hero_history(interaction, hits, hero_label=label, page=0)
+    await send_hero_history(
+        interaction,
+        hits,
+        hero_label=label,
+        page=0,
+        edit_searching=edit_searching,
+    )
 
 
 async def hero_autocomplete(
@@ -611,7 +654,6 @@ class OverwatchHeroHistoryCog(commands.Cog):
                 "This only works in a server.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True)
         await _deliver_history(interaction, hero)
 
     async def publish_hub(

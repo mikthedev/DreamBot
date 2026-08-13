@@ -1342,7 +1342,7 @@ class AdminHubView(discord.ui.View):
             embed.add_field(
                 name="Posted",
                 value=(
-                    f"**Hero Balance History** → {channel.mention}\n"
+                    f"**Search Hero Changes** → {channel.mention}\n"
                     f"_(Live {kind}; tag **Patch Notes**; pick heroes in-thread.)_"
                 ),
                 inline=False,

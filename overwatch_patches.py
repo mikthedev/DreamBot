@@ -261,6 +261,15 @@ def _make_change(
 
 
 
+def _tone_label(tone: str) -> str:
+    """▲ / ▼ with an explicit buff|nerf word so the mark is never ambiguous."""
+    if tone == "▲":
+        return "▲ buff"
+    if tone == "▼":
+        return "▼ nerf"
+    return "·"
+
+
 def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
     """Ability name, then each buff/nerf on its own indented line."""
     shared = [c for c in lines if not c.mode]
@@ -269,20 +278,34 @@ def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
 
     rows: list[str] = [ability]
     for c in shared:
-        rows.append(f"{c.tone}  {c.text}")
+        rows.append(f"{_tone_label(c.tone)}  {c.text}")
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                rows.append(f"{a.tone}  5v5  {a.text}")
-                rows.append(f"{b.tone}  6v6  {b.text}")
+                rows.append(f"{_tone_label(a.tone)}  5v5  {a.text}")
+                rows.append(f"{_tone_label(b.tone)}  6v6  {b.text}")
         else:
             for c in v5:
-                rows.append(f"{c.tone}  5v5  {c.text}")
+                rows.append(f"{_tone_label(c.tone)}  5v5  {c.text}")
             for c in v6:
-                rows.append(f"{c.tone}  6v6  {c.text}")
+                rows.append(f"{_tone_label(c.tone)}  6v6  {c.text}")
 
     return "\n".join(rows)
+
+
+def _hero_changes_compact(
+    hero: HeroChange, *, max_lines: int = 5
+) -> str:
+    """One line per tweak — used by hero history timelines."""
+    rows: list[str] = []
+    for ch in hero.changes[:max_lines]:
+        mode = f" · {ch.mode}" if ch.mode else ""
+        rows.append(f"{_tone_label(ch.tone)} · {ch.ability}{mode} · {ch.text}")
+    extra = len(hero.changes) - max_lines
+    if extra > 0:
+        rows.append(f"_+{extra} more…_")
+    return "\n".join(rows) if rows else "_No detail lines_"
 
 
 def _hero_changes_text(hero: HeroChange) -> str:

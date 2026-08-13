@@ -111,7 +111,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
             "`/help`\n"
             "`/ask` — free Llama chat (or @mention the bot)\n"
             "`/join` · `/disconnect` — voice AI (say **Dream**, …)\n"
-            "`/herohistory` — one hero’s balance changes across patches\n"
+            "`/hero` — one hero’s balance changes across patches\n"
             "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"
             "`/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave`"
         ),

@@ -475,18 +475,18 @@ async def hero_autocomplete(
 
 
 class OverwatchHeroHistoryCog(commands.Cog):
-    """Slash `/herohistory` — full balance timeline for one hero."""
+    """Slash `/hero` — full balance timeline for one hero."""
 
     def __init__(self, bot: DreamTeamBot) -> None:
         self.bot = bot
 
     @app_commands.command(
-        name="herohistory",
+        name="hero",
         description="Show every recent balance change for one Overwatch hero",
     )
     @app_commands.describe(hero="Hero to look up (e.g. Moira, D.Mon)")
     @app_commands.autocomplete(hero=hero_autocomplete)
-    async def herohistory(
+    async def hero(
         self, interaction: discord.Interaction, hero: str
     ) -> None:
         if interaction.guild is None:

@@ -2,6 +2,8 @@ from game_search import (
     GameHit,
     is_video_game_page,
     merge_game_hits,
+    prefer_official_url,
+    steam_title_matches,
     store_link_label,
     store_link_markdown,
 )
@@ -71,9 +73,54 @@ def test_drop_steam_addons_keeps_sequels():
 def test_store_link_label():
     assert store_link_label("https://store.steampowered.com/app/730") == "Steam"
     assert store_link_label("https://en.wikipedia.org/wiki/Minecraft") == "About"
+    assert store_link_label("https://www.minecraft.net/") == "Website"
+    assert store_link_label("https://minecraft.net") == "Website"
+    assert store_link_label("https://genshin.hoyoverse.com/") == "Website"
     assert store_link_markdown(None) == ""
     assert store_link_markdown("") == ""
     assert "Steam" in store_link_markdown("https://store.steampowered.com/app/730")
+
+
+def test_known_official_fallback():
+    from game_search import _KNOWN_OFFICIAL, _bare_key
+
+    assert _KNOWN_OFFICIAL[_bare_key("Minecraft")].startswith("https://")
+    assert "hoyoverse" in _KNOWN_OFFICIAL[_bare_key("Genshin Impact")]
+
+
+def test_fill_play_template():
+    from play_together import _fill_play_template
+
+    out = _fill_play_template(
+        "Hello {game}\n{link}\n{note}\nBye",
+        {"game": "PEAK", "link": "", "note": ""},
+    )
+    assert out.startswith("Hello PEAK")
+    assert out.endswith("Bye")
+    assert "{link}" not in out
+    assert "{note}" not in out
+
+
+def test_steam_title_matches():
+    assert steam_title_matches("Overwatch", "Overwatch 2")
+    assert steam_title_matches("PEAK", "PEAK")
+    assert steam_title_matches("Big Walk", "The Big Walk")
+    assert not steam_title_matches("Minecraft", "Minecraft Dungeons")
+    assert not steam_title_matches("Minecraft", "Minecraft Legends")
+    assert not steam_title_matches("Genshin Impact", "Genshin Impact Soundtrack")
+
+
+def test_prefer_official_url():
+    assert (
+        prefer_official_url(
+            [
+                "https://en.wikipedia.org/wiki/Minecraft",
+                "https://www.minecraft.net/en-us",
+                "https://www.minecraft.net/",
+            ]
+        )
+        == "https://www.minecraft.net/"
+    )
 
 
 if __name__ == "__main__":
@@ -82,4 +129,8 @@ if __name__ == "__main__":
     test_merge_steam_wins_same_title()
     test_drop_steam_addons_keeps_sequels()
     test_store_link_label()
+    test_known_official_fallback()
+    test_steam_title_matches()
+    test_prefer_official_url()
+    test_fill_play_template()
     print("ok")

@@ -215,6 +215,9 @@ class Database:
             ("play_default_min_players", "INTEGER NOT NULL DEFAULT 3"),
             ("play_default_max_players", "INTEGER NOT NULL DEFAULT 6"),
             ("play_cooldown_days", "INTEGER NOT NULL DEFAULT 7"),
+            ("play_suggest_title", "TEXT"),
+            ("play_suggest_body", "TEXT"),
+            ("play_suggest_footer", "TEXT"),
         ):
             self._ensure_column(conn, "guild_settings", column, col_type)
         conn.executescript(
@@ -1382,6 +1385,47 @@ class Database:
             "real_names": int(names),
             "announcements": int(announced),
         }
+
+    def get_play_suggest_copy(self, guild_id: int) -> dict[str, str | None]:
+        settings = self.get_settings(guild_id)
+        if not settings:
+            return {"title": None, "body": None, "footer": None}
+
+        def _get(key: str) -> str | None:
+            try:
+                value = settings[key]
+            except (IndexError, KeyError):
+                return None
+            return value if value else None
+
+        return {
+            "title": _get("play_suggest_title"),
+            "body": _get("play_suggest_body"),
+            "footer": _get("play_suggest_footer"),
+        }
+
+    def set_play_suggest_copy(
+        self,
+        guild_id: int,
+        *,
+        title: str | None,
+        body: str | None,
+        footer: str | None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id, play_suggest_title, play_suggest_body, play_suggest_footer
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    play_suggest_title = excluded.play_suggest_title,
+                    play_suggest_body = excluded.play_suggest_body,
+                    play_suggest_footer = excluded.play_suggest_footer
+                """,
+                (guild_id, title, body, footer),
+            )
 
     def get_hero_emoji_icon(self, emoji_name: str) -> sqlite3.Row | None:
         with self.connect() as conn:

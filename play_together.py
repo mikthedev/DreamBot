@@ -17,7 +17,9 @@ from nicknames import display_base
 from game_search import (
     GameHit,
     hit_from_dict,
+    resolve_game_link,
     search_catalog_games,
+    store_link_label,
     store_link_markdown,
 )
 
@@ -30,6 +32,21 @@ RSVP_IN_ID = "play_together:in"
 RSVP_NOPE_ID = "play_together:nope"
 ACTIVE_STATUSES = ("published", "event")
 SATURDAY = 5
+
+DEFAULT_PLAY_TITLE = "{game}"
+DEFAULT_PLAY_BODY = (
+    "A few people on the server already played **{game}**. "
+    "Let's get together and play again.\n\n"
+    "**{when}**\n"
+    "{count}\n"
+    "In: {in}\n\n"
+    "{link}\n"
+    "{note}\n"
+    "Everyone's welcome."
+)
+DEFAULT_PLAY_FOOTER = (
+    "I'm in = you want this session. Playing the game before is not a yes."
+)
 
 _WHEN_FULL = (
     "%d.%m.%Y %H:%M",
@@ -269,12 +286,78 @@ def detect_groups(db, guild_id: int, now: datetime | None = None) -> list[Detect
     return groups
 
 
+def load_play_suggest_copy(bot, guild_id: int) -> dict[str, str]:
+    raw = bot.db.get_play_suggest_copy(guild_id)
+    return {
+        "title": (raw.get("title") or DEFAULT_PLAY_TITLE).strip() or DEFAULT_PLAY_TITLE,
+        "body": (raw.get("body") or DEFAULT_PLAY_BODY).strip() or DEFAULT_PLAY_BODY,
+        "footer": (raw.get("footer") or DEFAULT_PLAY_FOOTER).strip()
+        or DEFAULT_PLAY_FOOTER,
+    }
+
+
+def _fill_play_template(template: str, values: dict[str, str]) -> str:
+    out = template
+    for key, value in values.items():
+        out = out.replace("{" + key + "}", value)
+    lines = [line.rstrip() for line in out.splitlines()]
+    # Drop lines that became empty because {link}/{note} had no value.
+    compact: list[str] = []
+    blank_pending = False
+    for line in lines:
+        if line.strip() == "":
+            blank_pending = True
+            continue
+        if blank_pending and compact:
+            compact.append("")
+        blank_pending = False
+        compact.append(line)
+    return "\n".join(compact).strip()
+
+
+def suggestion_values(
+    bot,
+    guild: discord.Guild | None,
+    *,
+    game_name: str,
+    when_line: str,
+    min_players: int,
+    max_players: int,
+    confirmed_ids: list[int],
+    store_url: str | None,
+    store_note: str | None,
+    status: str = "published",
+) -> dict[str, str]:
+    n = len(confirmed_ids)
+    count_line = f"**{n}** people are in · aiming for **{min_players}–{max_players}**"
+    if max_players > 0:
+        count_line = (
+            f"**{n}/{max_players}** are in · need **{min_players}** to lock it in"
+        )
+    names = [person_label(bot, guild, uid) for uid in confirmed_ids[:12]]
+    in_line = join_names(names) if names else "_nobody yet — tap I'm in_"
+    link = store_link_markdown(store_url)
+    note = (store_note or "").strip()
+    return {
+        "game": str(game_name),
+        "when": when_line,
+        "count": count_line,
+        "in": in_line,
+        "link": link,
+        "note": note,
+        "min": str(min_players),
+        "max": str(max_players),
+        "status": status,
+    }
+
+
 def suggestion_embed(
     bot,
     guild: discord.Guild | None,
     row,
     *,
     confirmed_ids: list[int] | None = None,
+    preview: bool = False,
 ) -> discord.Embed:
     confirmed_ids = confirmed_ids if confirmed_ids is not None else [
         int(r["user_id"]) for r in bot.db.list_play_rsvps(int(row["id"]), status="in")
@@ -282,49 +365,83 @@ def suggestion_embed(
     when = parse_iso(row["proposed_at"])
     when_local = when.astimezone(_tz()) if when else None
     when_line = format_play_when(when_local) if when_local else "time TBA"
-    min_p = int(row["min_players"])
-    max_p = int(row["max_players"])
-    n = len(confirmed_ids)
-    count_line = f"**{n}** people are in · aiming for **{min_p}–{max_p}**"
-    if max_p > 0:
-        count_line = f"**{n}/{max_p}** are in · need **{min_p}** to lock it in"
-
-    steam = (row["steam_url"] or "").strip()
-    note = (row["store_note"] or "").strip()
-    names = [person_label(bot, guild, uid) for uid in confirmed_ids[:12]]
-    in_line = join_names(names) if names else "_nobody yet — tap I'm in_"
-
     status = str(row["status"])
-    footer = "I'm in = you want this session. Playing the game before is not a yes."
+    values = suggestion_values(
+        bot,
+        guild,
+        game_name=str(row["game_name"]),
+        when_line=when_line,
+        min_players=int(row["min_players"]),
+        max_players=int(row["max_players"]),
+        confirmed_ids=confirmed_ids,
+        store_url=(row["steam_url"] or "").strip() or None,
+        store_note=(row["store_note"] or "").strip() or None,
+        status=status,
+    )
+    guild_id = int(row["guild_id"]) if row["guild_id"] else (guild.id if guild else 0)
+    copy = load_play_suggest_copy(bot, guild_id)
+    title = _fill_play_template(copy["title"], values)[:256] or str(row["game_name"])
+    body = _fill_play_template(copy["body"], values)
+    footer = _fill_play_template(copy["footer"], values)
     if status == "event":
         footer = "Discord event is up · same voice channel as always"
     elif status == "cancelled":
         footer = "Cancelled"
     elif status == "completed":
         footer = "This one already happened"
+    if preview:
+        footer = (footer + " · Preview").strip(" ·")
 
-    description = (
-        f"A few people on the server already played **{row['game_name']}**. "
-        f"Let's get together and play again.\n\n"
-        f"**{when_line}**\n"
-        f"{count_line}\n"
-        f"In: {in_line}"
-    )
-    link = store_link_markdown(steam)
-    if link:
-        description += f"\n\n{link}"
-    if note:
-        description += f"\n{note}" if link else f"\n\n{note}"
-    description += "\nEveryone's welcome."
-
-    color = ACCENT if status in ACTIVE_STATUSES else MUTED
-    embed = discord.Embed(
-        title=str(row["game_name"]),
-        description=description,
-        color=color,
-    )
+    color = ACCENT if status in ACTIVE_STATUSES or preview else MUTED
+    embed = discord.Embed(title=title, description=body[:4096], color=color)
     embed.set_author(name="Play together")
-    embed.set_footer(text=footer)
+    if footer:
+        embed.set_footer(text=footer[:2048])
+    return embed
+
+
+def preview_suggestion_embed(bot, guild: discord.Guild) -> discord.Embed:
+    settings = bot.db.get_play_settings(guild.id)
+    hour = int(settings["play_default_hour"] or 19)
+    when = next_saturday_evening(_now_local(), hour=hour)
+    games = bot.db.list_known_play_games(guild.id, limit=500)
+    allowed = [g for g in games if g["enabled"] and not g["blocked"]]
+    sample = allowed[0] if allowed else (games[0] if games else None)
+    game_name = str(sample["game_name"]) if sample else "The Big Walk"
+    store_url = (sample["steam_url"] if sample else None) or None
+    store_note = (sample["store_note"] if sample else None) or "Optional note / price"
+    min_p = int(
+        (sample["min_players"] if sample and sample["min_players"] else None)
+        or settings["play_default_min_players"]
+        or 3
+    )
+    max_p = int(
+        (sample["max_players"] if sample and sample["max_players"] else None)
+        or settings["play_default_max_players"]
+        or 6
+    )
+    values = suggestion_values(
+        bot,
+        guild,
+        game_name=game_name,
+        when_line=format_play_when(when),
+        min_players=min_p,
+        max_players=max_p,
+        confirmed_ids=[],
+        store_url=store_url,
+        store_note=store_note,
+        status="published",
+    )
+    copy = load_play_suggest_copy(bot, guild.id)
+    embed = discord.Embed(
+        title=_fill_play_template(copy["title"], values)[:256],
+        description=_fill_play_template(copy["body"], values)[:4096],
+        color=ACCENT,
+    )
+    embed.set_author(name="Play together · preview")
+    embed.set_footer(
+        text=_fill_play_template(copy["footer"], values)[:2000] + " · Preview"
+    )
     return embed
 
 
@@ -594,7 +711,8 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Play together",
         description=(
             "Activity is a hint — **I'm in** is the real yes.\n"
-            "Use the menu below: **Games**, **Activity**, **Review**, or **Setup**."
+            "Create a session from a game in **Games**, or open **Setup** to "
+            "preview / edit the suggestion message."
         ),
         color=ACCENT,
     )
@@ -653,10 +771,23 @@ def hub_play_setup_embed(guild: discord.Guild, bot) -> discord.Embed:
         channel = guild.get_channel(int(cid))
         return channel.mention if channel else "_missing_"
 
+    copy = load_play_suggest_copy(bot, guild.id)
     embed = discord.Embed(
         title="Play together · setup",
-        description="Channels, automation toggles, and weights. Overview stays clean.",
+        description=(
+            "Channels, automation, weights, and the public suggestion message."
+        ),
         color=ACCENT,
+    )
+    embed.add_field(
+        name="Suggestion message",
+        value=(
+            f"**Title** `{copy['title'][:80]}`\n"
+            "Placeholders: `{game}` `{when}` `{count}` `{in}` `{link}` `{note}` "
+            "`{min}` `{max}`\n"
+            "Use **Preview message** / **Edit message** below."
+        ),
+        inline=False,
     )
     embed.add_field(
         name="Channels",
@@ -765,15 +896,9 @@ class PlaySettingsModal(discord.ui.Modal, title="Play together settings"):
         )
 
 
-class CreatePlayModal(discord.ui.Modal, title="Create a play suggestion"):
-    game = discord.ui.TextInput(
-        label="Game",
-        max_length=80,
-        required=True,
-        placeholder="The Big Walk",
-    )
+class CreateCatalogSessionModal(discord.ui.Modal, title="Create a play session"):
     when = discord.ui.TextInput(
-        label="When (empty = next Saturday 19:00)",
+        label="When (empty = next Saturday evening)",
         max_length=22,
         required=False,
         placeholder="15.08.2026 19:00",
@@ -784,12 +909,6 @@ class CreatePlayModal(discord.ui.Modal, title="Create a play suggestion"):
         required=False,
         placeholder="3-6",
     )
-    steam = discord.ui.TextInput(
-        label="Store / page URL (optional)",
-        max_length=200,
-        required=False,
-        placeholder="Leave empty unless you already have a real page",
-    )
     note = discord.ui.TextInput(
         label="Note / price (optional)",
         max_length=120,
@@ -797,25 +916,36 @@ class CreatePlayModal(discord.ui.Modal, title="Create a play suggestion"):
         placeholder="Currently 300 UAH",
     )
 
-    def __init__(self, hub, *, game_name: str = "") -> None:
+    def __init__(self, hub, game) -> None:
         super().__init__()
         self.hub = hub
-        if game_name:
-            self.game.default = game_name[:80]
+        self.game_key = str(game["game_key"])
+        self.game_name = str(game["game_name"])
         s = hub.bot.db.get_play_settings(hub.guild_id)
-        self.party.default = (
-            f"{s['play_default_min_players']}-{s['play_default_max_players']}"
-        )
+        lo = int(game["min_players"] or s["play_default_min_players"] or 3)
+        hi = int(game["max_players"] or s["play_default_max_players"] or 6)
+        self.party.default = f"{lo}-{hi}"
+        if game["store_note"]:
+            self.note.default = str(game["store_note"])[:120]
         hour = int(s["play_default_hour"] or 19)
         guessed = next_saturday_evening(_now_local(), hour=hour)
         self.when.placeholder = guessed.strftime("%d.%m.%Y %H:%M")
+        self.title = f"Create · {self.game_name}"[:45]
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         cog = self.hub.bot.get_cog("PlayTogetherCog")
         if cog is None or interaction.guild is None:
-            await interaction.response.send_message("Play together isn't loaded.", ephemeral=True)
+            await interaction.response.send_message(
+                "Play together isn't loaded.", ephemeral=True
+            )
             return
         await interaction.response.defer()
+        game = self.hub.bot.db.get_play_game(self.hub.guild_id, self.game_key)
+        if game is None:
+            await interaction.followup.send(
+                "That game is no longer in the catalog.", ephemeral=True
+            )
+            return
         s = self.hub.bot.db.get_play_settings(self.hub.guild_id)
         hour = int(s["play_default_hour"] or 19)
         when_dt = parse_play_when(
@@ -827,52 +957,29 @@ class CreatePlayModal(discord.ui.Modal, title="Create a play suggestion"):
             when_dt = when_dt.replace(tzinfo=_tz())
         lo, hi = parse_party_size(
             str(self.party.value or ""),
-            int(s["play_default_min_players"] or 3),
-            int(s["play_default_max_players"] or 6),
+            int(game["min_players"] or s["play_default_min_players"] or 3),
+            int(game["max_players"] or s["play_default_max_players"] or 6),
         )
-        name = str(self.game.value).strip()
-        key = game_key(name)
-        game = self.hub.bot.db.get_play_game(self.hub.guild_id, key)
-        if game is None:
-            hits = await search_catalog_games(name)
-            exact = [h for h in hits if game_key(h.name) == key]
-            if not exact:
-                await interaction.followup.send(
-                    f"**{name}** is not in the catalog, and search did not find "
-                    f"that exact title. Use **Games → Add game**, pick the real "
-                    f"result, then create the session.",
-                    ephemeral=True,
+        steam = (game["steam_url"] or "").strip() or None
+        if not steam:
+            resolved = await resolve_game_link(str(game["game_name"]))
+            if resolved and resolved.url:
+                steam = resolved.url
+                self.hub.bot.db.upsert_play_game(
+                    self.hub.guild_id,
+                    self.game_key,
+                    str(game["game_name"]),
+                    steam_url=steam,
+                    set_steam=True,
                 )
-                return
-            hit = exact[0]
-            name = hit.name
-            key = game_key(name)
-            self.hub.bot.db.upsert_play_game(
-                self.hub.guild_id,
-                key,
-                name,
-                steam_url=hit.url,
-                set_steam=True,
-            )
-            game = self.hub.bot.db.get_play_game(self.hub.guild_id, key)
-        steam = str(self.steam.value or "").strip() or (
-            game["steam_url"] if game else None
-        )
         note = str(self.note.value or "").strip() or (
-            game["store_note"] if game else None
+            game["store_note"] if game["store_note"] else None
         )
-        if game:
-            if game["min_players"] and not str(self.party.value or "").strip():
-                lo = int(game["min_players"])
-            if game["max_players"] and not str(self.party.value or "").strip():
-                hi = int(game["max_players"])
-            name = str(game["game_name"] or name)
-        self.hub.bot.db.upsert_play_game(self.hub.guild_id, key, name)
         try:
             row = await cog.create_and_publish(
                 interaction.guild,
-                game_key=key,
-                game_name=name,
+                game_key=self.game_key,
+                game_name=str(game["game_name"]),
                 proposed_at=when_dt,
                 min_players=lo,
                 max_players=hi,
@@ -891,6 +998,53 @@ class CreatePlayModal(discord.ui.Modal, title="Create a play suggestion"):
         )
         await interaction.followup.send(
             f"Posted **{row['game_name']}**.", ephemeral=True
+        )
+
+
+class EditSuggestMessageModal(discord.ui.Modal, title="Edit play together message"):
+    def __init__(self, hub) -> None:
+        super().__init__()
+        self.hub = hub
+        copy = load_play_suggest_copy(hub.bot, hub.guild_id)
+        self.msg_title = discord.ui.TextInput(
+            label="Title",
+            max_length=100,
+            required=True,
+            default=copy["title"][:100],
+        )
+        self.body = discord.ui.TextInput(
+            label="Body",
+            style=discord.TextStyle.paragraph,
+            max_length=1800,
+            required=True,
+            default=copy["body"][:1800],
+        )
+        self.footer = discord.ui.TextInput(
+            label="Footer",
+            max_length=200,
+            required=False,
+            default=copy["footer"][:200],
+        )
+        self.add_item(self.msg_title)
+        self.add_item(self.body)
+        self.add_item(self.footer)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        self.hub.bot.db.set_play_suggest_copy(
+            self.hub.guild_id,
+            title=str(self.msg_title.value).strip() or DEFAULT_PLAY_TITLE,
+            body=str(self.body.value).strip() or DEFAULT_PLAY_BODY,
+            footer=str(self.footer.value).strip() or DEFAULT_PLAY_FOOTER,
+        )
+        self.hub.page = "play_setup"
+        self.hub._rebuild()
+        await interaction.response.edit_message(
+            embed=hub_play_setup_embed(interaction.guild, self.hub.bot),
+            view=self.hub,
+        )
+        await interaction.followup.send(
+            "Message template saved. Use **Preview message** to check it.",
+            ephemeral=True,
         )
 
 
@@ -1157,14 +1311,15 @@ def games_embed(
         description=(
             "Only **allowed** games can become automatic suggestions. "
             "**Blocked** games are recorded but never proposed.\n"
-            "**Add game** searches Steam and Wikipedia — you pick a real title."
+            "**Add game** looks up Steam first, then an official website "
+            "(Minecraft, Genshin, …). Sessions are created from this list."
         ),
         color=ACCENT,
     )
     if not games:
         embed.add_field(
             name="None yet",
-            value="Search with **Add game** and pick a real Steam / Wikipedia result.",
+            value="Search with **Add game** and pick a real Steam / website result.",
             inline=False,
         )
         return embed
@@ -1202,7 +1357,9 @@ def games_embed(
                 f"({format_days_ago((_now_utc() - (parse_iso(p['last_seen']) or _now_utc())).total_seconds() / 86400)})"
                 for p in people
             ) or "_nobody recently_"
-            link = store_link_markdown(game["steam_url"]) or "_no store page yet — Add game to search_"
+            link = store_link_markdown(game["steam_url"]) or (
+                "_no link yet — use **Fix link** (Steam first, then website)_"
+            )
             embed.add_field(
                 name=str(game["game_name"]),
                 value=(
@@ -1386,19 +1543,51 @@ def _play_nav_select(hub) -> discord.ui.Select:
 
 
 def _add_main_controls(hub) -> None:
-    create_btn = discord.ui.Button(
-        label="Create session",
-        style=discord.ButtonStyle.success,
+    games = hub.bot.db.list_known_play_games(hub.guild_id, limit=500)
+    usable = [g for g in games if not g["blocked"]]
+    if not usable:
+        hint = discord.ui.Button(
+            label="Add games first",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+            disabled=True,
+        )
+        hub.add_item(hint)
+        return
+
+    options = [
+        discord.SelectOption(
+            label=str(g["game_name"])[:100],
+            value=str(g["game_key"])[:100],
+            description=(
+                "allowed" if g["enabled"] else "off · still ok to host"
+            )[:100],
+        )
+        for g in usable[:25]
+    ]
+    select = discord.ui.Select(
+        placeholder="Create session from a catalog game…",
+        options=options,
+        min_values=1,
+        max_values=1,
         row=1,
     )
 
     async def on_create(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i):
             return
-        await i.response.send_modal(CreatePlayModal(hub))
+        key = select.values[0]
+        game = hub.bot.db.get_play_game(hub.guild_id, key)
+        if game is None:
+            await i.response.send_message(
+                "That game is no longer in the catalog. Open **Games**.",
+                ephemeral=True,
+            )
+            return
+        await i.response.send_modal(CreateCatalogSessionModal(hub, game))
 
-    create_btn.callback = on_create
-    hub.add_item(create_btn)
+    select.callback = on_create
+    hub.add_item(select)
 
 
 def _add_setup_controls(hub) -> None:
@@ -1503,6 +1692,31 @@ def _add_setup_controls(hub) -> None:
     hub.add_item(event_btn)
     hub.add_item(expand_btn)
     hub.add_item(settings_btn)
+
+    preview_btn = discord.ui.Button(
+        label="Preview message", style=discord.ButtonStyle.secondary, row=4
+    )
+    edit_msg_btn = discord.ui.Button(
+        label="Edit message", style=discord.ButtonStyle.primary, row=4
+    )
+
+    async def on_preview(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or i.guild is None:
+            return
+        await i.response.send_message(
+            embed=preview_suggestion_embed(hub.bot, i.guild),
+            ephemeral=True,
+        )
+
+    async def on_edit_msg(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i):
+            return
+        await i.response.send_modal(EditSuggestMessageModal(hub))
+
+    preview_btn.callback = on_preview
+    edit_msg_btn.callback = on_edit_msg
+    hub.add_item(preview_btn)
+    hub.add_item(edit_msg_btn)
 
 
 def _add_activity_controls(hub) -> None:
@@ -1609,6 +1823,7 @@ def _add_games_controls(hub) -> None:
     block = discord.ui.Button(label="Block", style=discord.ButtonStyle.danger, row=2)
     edit = discord.ui.Button(label="Edit details", style=discord.ButtonStyle.primary, row=3)
     add = discord.ui.Button(label="Add game", style=discord.ButtonStyle.primary, row=3)
+    fix = discord.ui.Button(label="Fix link", style=discord.ButtonStyle.secondary, row=3)
 
     async def on_allow(i: discord.Interaction) -> None:
         await set_state(i, enabled=1, blocked=0)
@@ -1643,16 +1858,120 @@ def _add_games_controls(hub) -> None:
             default = str(getattr(hub, "play_search_query", "") or "")
         await i.response.send_modal(SearchGameModal(hub, default=default))
 
+    async def on_fix(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i):
+            return
+        if not key:
+            await i.response.send_message("Pick a game first.", ephemeral=True)
+            return
+        game = hub.bot.db.get_play_game(hub.guild_id, key)
+        if game is None:
+            await i.response.send_message("Unknown game.", ephemeral=True)
+            return
+        await i.response.defer()
+        resolved = await resolve_game_link(str(game["game_name"]))
+        if resolved is None or not resolved.url:
+            await i.followup.send(
+                f"Could not find Steam or an official site for **{game['game_name']}**.",
+                ephemeral=True,
+            )
+            return
+        hub.bot.db.upsert_play_game(
+            hub.guild_id,
+            key,
+            str(game["game_name"]),
+            steam_url=resolved.url,
+            set_steam=True,
+        )
+        hub.page = "play_games"
+        hub.play_game_key = key
+        hub._rebuild()
+        await i.edit_original_response(
+            embed=games_embed(
+                i.guild,
+                hub.bot,
+                selected=key,
+                page=_hub_games_page(hub),
+            ),
+            view=hub,
+        )
+        label = store_link_label(resolved.url)
+        await i.followup.send(
+            f"Linked **{game['game_name']}** → {label}: {resolved.url}",
+            ephemeral=True,
+        )
+
     allow.callback = on_allow
     off.callback = on_off
     block.callback = on_block
     edit.callback = on_edit
     add.callback = on_add
+    fix.callback = on_fix
     hub.add_item(allow)
     hub.add_item(off)
     hub.add_item(block)
     hub.add_item(edit)
     hub.add_item(add)
+    hub.add_item(fix)
+
+    fill = discord.ui.Button(
+        label="Fill empty links",
+        style=discord.ButtonStyle.secondary,
+        row=4,
+    )
+
+    async def on_fill(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i):
+            return
+        await i.response.defer()
+        missing = [
+            g
+            for g in hub.bot.db.list_known_play_games(hub.guild_id, limit=500)
+            if not (g["steam_url"] or "").strip()
+        ]
+        if not missing:
+            await i.followup.send(
+                "Every catalog game already has a link.", ephemeral=True
+            )
+            return
+        fixed = 0
+        failed: list[str] = []
+        for g in missing[:40]:
+            resolved = await resolve_game_link(str(g["game_name"]))
+            if resolved and resolved.url:
+                hub.bot.db.upsert_play_game(
+                    hub.guild_id,
+                    str(g["game_key"]),
+                    str(g["game_name"]),
+                    steam_url=resolved.url,
+                    set_steam=True,
+                )
+                fixed += 1
+            else:
+                failed.append(str(g["game_name"]))
+        hub.page = "play_games"
+        hub._rebuild()
+        await i.edit_original_response(
+            embed=games_embed(
+                i.guild,
+                hub.bot,
+                selected=getattr(hub, "play_game_key", None),
+                page=_hub_games_page(hub),
+            ),
+            view=hub,
+        )
+        extra = ""
+        if failed:
+            extra = " Couldn't resolve: " + ", ".join(failed[:8])
+            if len(failed) > 8:
+                extra += f" (+{len(failed) - 8})"
+        await i.followup.send(
+            f"Filled **{fixed}** link(s).{extra}",
+            ephemeral=True,
+        )
+
+    fill.callback = on_fill
+    hub.add_item(fill)
     if len(games) > GAMES_SELECT_PAGE:
         prev_btn = discord.ui.Button(
             label="Previous",
@@ -1711,7 +2030,11 @@ def _add_search_controls(hub) -> None:
     if hits:
         options = []
         for i, hit in enumerate(hits[:25]):
-            src = "Steam" if hit.source == "steam" else "Wikipedia"
+            src = {
+                "steam": "Steam",
+                "website": "Website",
+                "wikipedia": "Wikipedia",
+            }.get(hit.source, hit.source.title())
             options.append(
                 discord.SelectOption(
                     label=hit.name[:100],
@@ -1734,8 +2057,18 @@ def _add_search_controls(hub) -> None:
                 idx = int(select.values[0])
                 hit = hits[idx]
             except (ValueError, IndexError):
-                await i.response.send_message("That result expired. Search again.", ephemeral=True)
+                await i.response.send_message(
+                    "That result expired. Search again.", ephemeral=True
+                )
                 return
+            await i.response.defer()
+            # Prefer Steam exact match, else official site, else the search hit URL.
+            url = hit.url
+            source = hit.source
+            resolved = await resolve_game_link(hit.name)
+            if resolved and resolved.url:
+                url = resolved.url
+                source = resolved.source
             key = game_key(hit.name)
             existing = hub.bot.db.get_play_game(hub.guild_id, key)
             hub.bot.db.upsert_play_game(
@@ -1743,19 +2076,26 @@ def _add_search_controls(hub) -> None:
                 key,
                 hit.name,
                 enabled=None if existing else 1,
-                steam_url=hit.url,
+                steam_url=url,
                 set_steam=True,
             )
             hub.play_game_key = key
             hub.page = "play_games"
             hub._rebuild()
-            await i.response.edit_message(
-                embed=games_embed(i.guild, hub.bot, selected=key, page=_hub_games_page(hub)),
+            await i.edit_original_response(
+                embed=games_embed(
+                    i.guild, hub.bot, selected=key, page=_hub_games_page(hub)
+                ),
                 view=hub,
             )
+            label = store_link_label(url) if url else source
             await i.followup.send(
-                f"Added **{hit.name}** from {hit.source}. "
-                + ("Allow it for auto-suggestions if you want." if existing else "It's allowed for suggestions."),
+                f"Added **{hit.name}** with {label} link. "
+                + (
+                    "Allow it for auto-suggestions if you want."
+                    if existing
+                    else "It's allowed for suggestions."
+                ),
                 ephemeral=True,
             )
 
@@ -1853,8 +2193,17 @@ def _add_review_controls(hub) -> None:
             return
         key = pick[2:]
         game = hub.bot.db.get_play_game(hub.guild_id, key)
-        name = str(game["game_name"]) if game else key
-        await i.response.send_modal(CreatePlayModal(hub, game_name=name))
+        if game is None:
+            group = next((g for g in groups if g.game_key == key), None)
+            name = group.game_name if group else key
+            hub.bot.db.upsert_play_game(hub.guild_id, key, name, enabled=0)
+            game = hub.bot.db.get_play_game(hub.guild_id, key)
+            if game is None:
+                await i.response.send_message(
+                    "Could not add that game to the catalog.", ephemeral=True
+                )
+                return
+        await i.response.send_modal(CreateCatalogSessionModal(hub, game))
 
     async def on_manage(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i):

@@ -35,10 +35,15 @@ _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 OW_HISTORY_BUTTON_ID = "ow_patch:history"
 
 ROLE_ORDER = ("Tank", "Damage", "Support")
+# Blizzard sometimes uses a single "Hero Updates" block instead of role sections.
+_EXTRA_ROLE_ORDER = ("Hero Updates", "Hero", "Hotfix Update")
 ROLE_COLOR = {
     "Tank": discord.Color.from_rgb(242, 166, 50),
     "Damage": discord.Color.from_rgb(232, 84, 84),
     "Support": discord.Color.from_rgb(45, 190, 140),
+    "Hero Updates": OW_ORANGE,
+    "Hero": OW_ORANGE,
+    "Hotfix Update": OW_ORANGE,
 }
 ROLE_LABEL = {
     "Tank": "TANK",
@@ -49,7 +54,34 @@ ROLE_HEADER = {
     "Tank": "🛡️  TANK",
     "Damage": "⚔️  DAMAGE",
     "Support": "💚  SUPPORT",
+    "Hero Updates": "✨  HERO UPDATES",
+    "Hero": "✨  HERO UPDATES",
+    "Hotfix Update": "🔧  HOTFIX",
 }
+
+
+def _roles_for_display(heroes: list[HeroChange]) -> list[str]:
+    """Classic Tank/Damage/Support first, then Blizzard's newer section titles."""
+    present = {h.role for h in heroes if h.role}
+    ordered = [r for r in ROLE_ORDER if r in present]
+    for role in _EXTRA_ROLE_ORDER:
+        if role in present and role not in ordered:
+            ordered.append(role)
+    for role in sorted(present):
+        if role not in ordered:
+            ordered.append(role)
+    return ordered
+
+
+def _balance_fingerprint(summary: PatchSummary) -> str:
+    """Compare hero balance content without icon URLs (those may be enriched)."""
+    parts: list[str] = [summary.fingerprint]
+    for hero in summary.heroes:
+        parts.append(hero.role)
+        parts.append(hero.name)
+        for ch in hero.changes:
+            parts.append(f"{ch.ability}|{ch.mode or ''}|{ch.text}")
+    return "\n".join(parts)
 
 
 @dataclass
@@ -302,6 +334,9 @@ def _parse_patch_block(block: str) -> PatchSummary | None:
         )
         if sec_title in ROLE_ORDER:
             current_role = sec_title
+        elif is_hero_section:
+            # e.g. "Hero Updates" — Blizzard no longer always splits by role
+            current_role = sec_title or "Hero Updates"
 
         if not (is_hero_section or sec_title in ROLE_ORDER):
             continue
@@ -357,7 +392,7 @@ def _parse_patch_block(block: str) -> PatchSummary | None:
                 summary.heroes.append(
                     HeroChange(
                         name=name,
-                        role=current_role or "Hero",
+                        role=current_role or "Hero Updates",
                         icon_url=icon_url or None,
                         changes=changes,
                     )
@@ -802,9 +837,9 @@ def build_patch_layouts(
     One colour-accented container per role; each hero is a compact portrait card.
     Discord's 40-component cap may split a large patch into multiple messages.
     """
-    by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
+    by_role: dict[str, list[HeroChange]] = {}
     for h in summary.heroes:
-        by_role.setdefault(h.role, []).append(h)
+        by_role.setdefault(h.role or "Hero Updates", []).append(h)
 
     date_label = summary.date or "Patch"
     if preview:
@@ -840,13 +875,13 @@ def build_patch_layouts(
             cont = f"**[{date_label}]({summary.url})** · cont."
         view.add_item(discord.ui.TextDisplay(cont))
 
-    for role in ROLE_ORDER:
+    for role in _roles_for_display(summary.heroes):
         heroes = by_role.get(role, [])
         if not heroes:
             continue
 
         colour = ROLE_COLOR.get(role, OW_ORANGE)
-        label = ROLE_HEADER.get(role, role)
+        label = ROLE_HEADER.get(role, f"✨  {role.upper()}")
 
         def open_role_container(*, continued: bool = False) -> discord.ui.Container:
             # Container(1) + title TextDisplay(1) + at least one hero(3)
@@ -904,12 +939,12 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
     if not summary.heroes:
         return [head]
 
-    by_role: dict[str, list[HeroChange]] = {r: [] for r in ROLE_ORDER}
+    by_role: dict[str, list[HeroChange]] = {}
     for h in summary.heroes:
-        by_role.setdefault(h.role, []).append(h)
+        by_role.setdefault(h.role or "Hero Updates", []).append(h)
 
     embeds: list[discord.Embed] = [head]
-    for role in ROLE_ORDER:
+    for role in _roles_for_display(summary.heroes):
         heroes = by_role.get(role, [])
         if not heroes:
             continue
@@ -1078,7 +1113,16 @@ class OverwatchPatchCog(commands.Cog):
             return False, "Could not parse patch notes page."
 
         if self.bot.db.was_ow_patch_announced(guild.id, summary.fingerprint):
-            return False, f"Already posted `{summary.fingerprint}`."
+            # Re-edit the live post when Blizzard (or our parser) adds hero cards
+            # that the first publish missed — e.g. "Hero Updates" without Tank/Damage/Support.
+            old_raw = self.bot.db.get_ow_patch_payload(guild.id, summary.fingerprint)
+            old = summary_from_payload(old_raw) if old_raw else None
+            if old is not None and _balance_fingerprint(old) == _balance_fingerprint(
+                summary
+            ):
+                return False, f"Already posted `{summary.fingerprint}`."
+            await self.publish_live(channel, summary)
+            return True, f"Refreshed {summary.title}"
 
         await self.publish_live(channel, summary)
         return True, summary.title

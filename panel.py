@@ -40,6 +40,7 @@ from play_together import (
     add_play_hub_controls,
     games_embed,
     hub_play_embed,
+    hub_play_setup_embed,
     manage_embed,
     review_embed,
     hub_search_embed,
@@ -530,6 +531,19 @@ class AdminHubView(discord.ui.View):
 
     def _rebuild(self) -> None:
         self.clear_items()
+        play_pages = {
+            "play",
+            "play_setup",
+            "play_games",
+            "play_game_search",
+            "play_activity",
+            "play_review",
+            "play_manage",
+        }
+        if self.page in play_pages:
+            # Play together uses its own menu instead of the global section picker.
+            add_play_hub_controls(self)
+            return
         self.add_item(self._nav_select())
         if self.page == "channels":
             self._add_channel_controls()
@@ -543,15 +557,6 @@ class AdminHubView(discord.ui.View):
             self._add_welcome_controls()
         elif self.page == "overwatch":
             self._add_overwatch_controls()
-        elif self.page in (
-            "play",
-            "play_games",
-            "play_game_search",
-            "play_activity",
-            "play_review",
-            "play_manage",
-        ):
-            add_play_hub_controls(self)
         elif self.page == "onboard":
             self._add_onboard_controls()
         elif self.page == "anniversary":
@@ -657,6 +662,8 @@ class AdminHubView(discord.ui.View):
             return hub_overwatch_embed(guild, self.bot)
         if self.page == "play":
             return hub_play_embed(guild, self.bot)
+        if self.page == "play_setup":
+            return hub_play_setup_embed(guild, self.bot)
         if self.page == "play_games":
             return games_embed(
                 guild,

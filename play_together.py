@@ -560,16 +560,14 @@ def tracking_field(guild: discord.Guild, bot) -> tuple[str, str]:
     if not bot.intents.presences:
         return (
             "Watching games",
-            "**No.** Presence Intent is off, so Discord does not tell the bot "
-            "who is playing. Enable it in the Developer Portal, set "
-            "`PLAY_PRESENCE_INTENT=1`, restart.\n"
-            f"History ({days}d): **{people}** people · **{records}** records · "
-            f"visible right now: **{len(live)}**",
+            "**No.** Presence Intent is off — enable it in the Developer Portal, "
+            "set `PLAY_PRESENCE_INTENT=1`, restart.\n"
+            f"History ({days}d): **{people}** people · **{records}** records",
         )
     return (
         "Watching games",
-        f"**Yes.** **{len(live)}** playing now · "
-        f"history ({days}d): **{people}** people · **{records}** records",
+        f"**Yes.** History ({days}d): **{people}** people · **{records}** records"
+        + (f" · **{len(live)}** playing now" if live else ""),
     )
 
 
@@ -595,30 +593,82 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
     embed = discord.Embed(
         title="Play together",
         description=(
-            "The bot watches **who recently played what**, finds overlapping "
-            "interest, and can suggest a session. Activity is a hint — "
-            "**I'm in** is the real yes. You stay in control of which games "
-            "are allowed."
+            "Activity is a hint — **I'm in** is the real yes.\n"
+            "Use the menu below: **Games**, **Activity**, **Review**, or **Setup**."
         ),
         color=ACCENT,
     )
     watch_name, watch_value = tracking_field(guild, bot)
     embed.add_field(name=watch_name, value=watch_value, inline=False)
-    live = live_playing(guild)
-    _add_chunked_fields(
-        embed,
-        f"Playing now ({len(live)})",
-        [
-            f"{person_label(bot, guild, member.id)} · **{game}**"
-            for member, game in live
-        ],
-        empty="_nobody in Playing … right now_",
-    )
     embed.add_field(
         name="Setup",
         value=(
-            f"**Suggest channel** {ch(settings['play_suggest_channel_id'])}\n"
-            f"**Event voice** {ch(settings['play_voice_channel_id'])}\n"
+            f"Suggest {ch(settings['play_suggest_channel_id'])} · "
+            f"Voice {ch(settings['play_voice_channel_id'])}\n"
+            f"Auto **{auto}** · Events **{events}** · Invites **{expand}**"
+        ),
+        inline=False,
+    )
+    allowed_names = [f"**{r['game_name']}**" for r in allowed]
+    embed.add_field(
+        name=f"Allowed ({len(allowed)})",
+        value=", ".join(allowed_names)[:1024] if allowed_names else "_none yet — open Games_",
+        inline=False,
+    )
+
+    detect_lines: list[str] = []
+    for group in groups[:8]:
+        flag = "allowed" if group.allowed else ("blocked" if group.blocked else "off")
+        detect_lines.append(
+            f"**{group.game_name}** — {group.count} ({flag})"
+        )
+    if len(groups) > 8:
+        detect_lines.append(f"_+{len(groups) - 8} more in Review_")
+    embed.add_field(
+        name="Recent overlap",
+        value="\n".join(detect_lines) if detect_lines else "_none in the look-back window_",
+        inline=False,
+    )
+    if active:
+        lines = []
+        for row in active:
+            when = parse_iso(row["proposed_at"])
+            stamp = format_play_when(when.astimezone(_tz())) if when else "?"
+            n = len(bot.db.list_play_rsvps(int(row["id"]), status="in"))
+            lines.append(f"**{row['game_name']}** · {stamp} · {n} in")
+        embed.add_field(name="Open sessions", value="\n".join(lines), inline=False)
+    embed.set_footer(text="Who is playing right now lives under Activity")
+    return embed
+
+
+def hub_play_setup_embed(guild: discord.Guild, bot) -> discord.Embed:
+    settings = bot.db.get_play_settings(guild.id)
+    auto = "on" if settings["play_auto_enabled"] else "off"
+    events = "on" if settings["play_auto_event"] else "off"
+    expand = "on" if settings["play_auto_expand"] else "off"
+
+    def ch(cid) -> str:
+        if not cid:
+            return "_not set_"
+        channel = guild.get_channel(int(cid))
+        return channel.mention if channel else "_missing_"
+
+    embed = discord.Embed(
+        title="Play together · setup",
+        description="Channels, automation toggles, and weights. Overview stays clean.",
+        color=ACCENT,
+    )
+    embed.add_field(
+        name="Channels",
+        value=(
+            f"**Suggest** {ch(settings['play_suggest_channel_id'])}\n"
+            f"**Event voice** {ch(settings['play_voice_channel_id'])}"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Automation",
+        value=(
             f"Auto suggestions **{auto}** · Discord events **{events}** · "
             f"Personal invites **{expand}**"
         ),
@@ -636,38 +686,6 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
         ),
         inline=False,
     )
-    allowed_names = [f"**{r['game_name']}**" for r in allowed]
-    embed.add_field(
-        name=f"Allowed games ({len(allowed)})",
-        value=", ".join(allowed_names)[:1024] if allowed_names else "_none allowed yet_",
-        inline=False,
-    )
-
-    detect_lines: list[str] = []
-    for group in groups:
-        flag = "allowed" if group.allowed else ("blocked" if group.blocked else "not allowed")
-        detect_lines.append(
-            f"**{group.game_name}** — {group.count} people ({flag})"
-        )
-    _add_chunked_fields(
-        embed,
-        "Recent overlap",
-        detect_lines,
-        empty="_no shared games in the look-back window_",
-        max_fields=4,
-    )
-    if active:
-        lines = []
-        for row in active:
-            when = parse_iso(row["proposed_at"])
-            stamp = format_play_when(when.astimezone(_tz())) if when else "?"
-            n = len(bot.db.list_play_rsvps(int(row["id"]), status="in"))
-            lines.append(f"**{row['game_name']}** · {stamp} · {n} in · `{row['status']}`")
-        embed.add_field(name="Open sessions", value="\n".join(lines), inline=False)
-    if not bot.intents.presences:
-        embed.set_footer(text="Not watching games — Presence Intent is off")
-    else:
-        embed.set_footer(text="Activity has the stored history for each person")
     return embed
 
 
@@ -739,10 +757,10 @@ class PlaySettingsModal(discord.ui.Modal, title="Play together settings"):
         )
         db.set_play_setting(gid, "play_default_min_players", lo)
         db.set_play_setting(gid, "play_default_max_players", hi)
-        self.hub.page = "play"
+        self.hub.page = "play_setup"
         self.hub._rebuild()
         await interaction.response.edit_message(
-            embed=hub_play_embed(interaction.guild, self.hub.bot),
+            embed=hub_play_setup_embed(interaction.guild, self.hub.bot),
             view=self.hub,
         )
 
@@ -1266,6 +1284,10 @@ def manage_embed(guild: discord.Guild, bot, suggestion_id: int) -> discord.Embed
 
 def add_play_hub_controls(hub) -> None:
     page = getattr(hub, "page", "play")
+    hub.add_item(_play_nav_select(hub))
+    if page == "play_setup":
+        _add_setup_controls(hub)
+        return
     if page == "play_games":
         _add_games_controls(hub)
         return
@@ -1284,7 +1306,96 @@ def add_play_hub_controls(hub) -> None:
     _add_main_controls(hub)
 
 
+def _play_nav_select(hub) -> discord.ui.Select:
+    current = getattr(hub, "page", "play")
+    options = [
+        discord.SelectOption(
+            label="Overview",
+            value="play",
+            description="Status, allowed games, overlap",
+            default=current == "play",
+        ),
+        discord.SelectOption(
+            label="Games",
+            value="play_games",
+            description="Allow / block / add from search",
+            default=current in ("play_games", "play_game_search"),
+        ),
+        discord.SelectOption(
+            label="Activity",
+            value="play_activity",
+            description="Who is playing and stored history",
+            default=current == "play_activity",
+        ),
+        discord.SelectOption(
+            label="Review",
+            value="play_review",
+            description="Overlaps and open sessions",
+            default=current in ("play_review", "play_manage"),
+        ),
+        discord.SelectOption(
+            label="Setup",
+            value="play_setup",
+            description="Channels, toggles, weights",
+            default=current == "play_setup",
+        ),
+        discord.SelectOption(
+            label="← Leave Play together",
+            value="home",
+            description="Back to the main control panel",
+        ),
+    ]
+    select = discord.ui.Select(
+        placeholder="Play together…",
+        options=options,
+        row=0,
+    )
+
+    async def on_nav(interaction: discord.Interaction) -> None:
+        if not await hub._admin_ok(interaction):
+            return
+        choice = select.values[0]
+        if choice == "home":
+            hub.page = "home"
+            hub._rebuild()
+            await interaction.response.edit_message(
+                embed=hub.embed_for(interaction.guild),
+                view=hub,
+            )
+            return
+        if choice == "play_activity" and interaction.guild is not None:
+            snapshot_guild_games(hub.bot, interaction.guild)
+        if choice == "play_games":
+            hub.play_game_key = None
+            hub.play_games_page = 0
+        hub.page = choice
+        hub._rebuild()
+        await interaction.response.edit_message(
+            embed=hub.embed_for(interaction.guild),
+            view=hub,
+        )
+
+    select.callback = on_nav
+    return select
+
+
 def _add_main_controls(hub) -> None:
+    create_btn = discord.ui.Button(
+        label="Create session",
+        style=discord.ButtonStyle.success,
+        row=1,
+    )
+
+    async def on_create(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i):
+            return
+        await i.response.send_modal(CreatePlayModal(hub))
+
+    create_btn.callback = on_create
+    hub.add_item(create_btn)
+
+
+def _add_setup_controls(hub) -> None:
     suggest = discord.ui.ChannelSelect(
         placeholder="Set suggestion channel…",
         channel_types=[discord.ChannelType.text],
@@ -1307,7 +1418,7 @@ def _add_main_controls(hub) -> None:
         hub.bot.db.set_play_setting(hub.guild_id, "play_suggest_channel_id", channel_id)
         hub._rebuild()
         await interaction.response.edit_message(
-            embed=hub_play_embed(interaction.guild, hub.bot), view=hub
+            embed=hub_play_setup_embed(interaction.guild, hub.bot), view=hub
         )
 
     async def on_voice(interaction: discord.Interaction) -> None:
@@ -1317,7 +1428,7 @@ def _add_main_controls(hub) -> None:
         hub.bot.db.set_play_setting(hub.guild_id, "play_voice_channel_id", channel_id)
         hub._rebuild()
         await interaction.response.edit_message(
-            embed=hub_play_embed(interaction.guild, hub.bot), view=hub
+            embed=hub_play_setup_embed(interaction.guild, hub.bot), view=hub
         )
 
     suggest.callback = on_suggest
@@ -1336,26 +1447,32 @@ def _add_main_controls(hub) -> None:
         )
         hub._rebuild()
         await interaction.response.edit_message(
-            embed=hub_play_embed(interaction.guild, hub.bot), view=hub
+            embed=hub_play_setup_embed(interaction.guild, hub.bot), view=hub
         )
 
     auto_btn = discord.ui.Button(
         label="Auto on" if s["play_auto_enabled"] else "Auto off",
-        style=discord.ButtonStyle.success if s["play_auto_enabled"] else discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.success
+        if s["play_auto_enabled"]
+        else discord.ButtonStyle.secondary,
         row=3,
     )
     event_btn = discord.ui.Button(
         label="Events on" if s["play_auto_event"] else "Events off",
-        style=discord.ButtonStyle.success if s["play_auto_event"] else discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.success
+        if s["play_auto_event"]
+        else discord.ButtonStyle.secondary,
         row=3,
     )
     expand_btn = discord.ui.Button(
         label="Invites on" if s["play_auto_expand"] else "Invites off",
-        style=discord.ButtonStyle.success if s["play_auto_expand"] else discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.success
+        if s["play_auto_expand"]
+        else discord.ButtonStyle.secondary,
         row=3,
     )
     settings_btn = discord.ui.Button(
-        label="Settings", style=discord.ButtonStyle.primary, row=3
+        label="Weights", style=discord.ButtonStyle.primary, row=3
     )
 
     async def on_auto(i: discord.Interaction) -> None:
@@ -1380,73 +1497,6 @@ def _add_main_controls(hub) -> None:
     hub.add_item(event_btn)
     hub.add_item(expand_btn)
     hub.add_item(settings_btn)
-
-    games_btn = discord.ui.Button(label="Games", style=discord.ButtonStyle.primary, row=4)
-    create_btn = discord.ui.Button(label="Create", style=discord.ButtonStyle.primary, row=4)
-    review_btn = discord.ui.Button(label="Review", style=discord.ButtonStyle.primary, row=4)
-    activity_btn = discord.ui.Button(
-        label="Activity", style=discord.ButtonStyle.primary, row=4
-    )
-
-    async def on_games(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i):
-            return
-        hub.page = "play_games"
-        hub.play_game_key = None
-        hub.play_games_page = 0
-        hub._rebuild()
-        await i.response.edit_message(
-            embed=games_embed(i.guild, hub.bot, page=0), view=hub
-        )
-
-    async def on_create(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i):
-            return
-        await i.response.send_modal(CreatePlayModal(hub))
-
-    async def on_review(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i):
-            return
-        hub.page = "play_review"
-        hub._rebuild()
-        await i.response.edit_message(
-            embed=review_embed(i.guild, hub.bot), view=hub
-        )
-
-    async def on_activity(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i) or i.guild is None:
-            return
-        snapshot_guild_games(hub.bot, i.guild)
-        hub.page = "play_activity"
-        hub._rebuild()
-        await i.response.edit_message(
-            embed=activity_embed(i.guild, hub.bot), view=hub
-        )
-
-    games_btn.callback = on_games
-    create_btn.callback = on_create
-    review_btn.callback = on_review
-    activity_btn.callback = on_activity
-    hub.add_item(games_btn)
-    hub.add_item(create_btn)
-    hub.add_item(review_btn)
-    hub.add_item(activity_btn)
-
-
-def _back_to_play(hub) -> discord.ui.Button:
-    btn = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, row=4)
-
-    async def go(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i):
-            return
-        hub.page = "play"
-        hub._rebuild()
-        await i.response.edit_message(
-            embed=hub_play_embed(i.guild, hub.bot), view=hub
-        )
-
-    btn.callback = go
-    return btn
 
 
 def _add_activity_controls(hub) -> None:
@@ -1478,7 +1528,6 @@ def _add_activity_controls(hub) -> None:
 
     scan.callback = on_scan
     hub.add_item(scan)
-    hub.add_item(_back_to_play(hub))
 
 
 def _add_games_controls(hub) -> None:
@@ -1646,7 +1695,6 @@ def _add_games_controls(hub) -> None:
         next_btn.callback = on_next
         hub.add_item(prev_btn)
         hub.add_item(next_btn)
-    hub.add_item(_back_to_play(hub))
 
 
 def _add_search_controls(hub) -> None:
@@ -1729,7 +1777,7 @@ def _add_search_controls(hub) -> None:
             view=hub,
         )
 
-    back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, row=2)
+    back = discord.ui.Button(label="Games list", style=discord.ButtonStyle.secondary, row=2)
     again.callback = on_again
     back.callback = go_games
     hub.add_item(again)
@@ -1819,7 +1867,6 @@ def _add_review_controls(hub) -> None:
     manage_btn.callback = on_manage
     hub.add_item(create_btn)
     hub.add_item(manage_btn)
-    hub.add_item(_back_to_play(hub))
 
 
 def _add_manage_controls(hub) -> None:
@@ -1958,7 +2005,6 @@ def _add_manage_controls(hub) -> None:
     hub.add_item(cancel)
     hub.add_item(invite)
     hub.add_item(skip_event)
-    hub.add_item(_back_to_play(hub))
 
 
 class PlayPublishError(RuntimeError):

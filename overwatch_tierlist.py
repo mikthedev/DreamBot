@@ -578,9 +578,15 @@ class OverwatchTierCog(commands.Cog):
                         owned = True
                     if not owned:
                         continue
-                    await emoji.edit(image=png)
+                    # Discord application emojis can only change name via edit —
+                    # image updates require delete + recreate.
+                    await emoji.delete()
+                    emoji = await self.bot.create_application_emoji(
+                        name=name, image=png
+                    )
+                    existing[name] = emoji
                     updated += 1
-                    log.info("Updated app emoji %s (new icon)", name)
+                    log.info("Updated app emoji %s (recreated icon)", name)
                 else:
                     emoji = await self.bot.create_application_emoji(
                         name=name, image=png

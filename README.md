@@ -54,7 +54,7 @@ Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](ht
 
 Patch cards include **Hero Updates** as well as classic Tank / Damage / Support sections (Blizzard’s layout varies by drop). Live patch posts refresh if the notes gain balance lines after the first publish.
 
-**Hero history** — `/hero` (autocomplete), the **Hero history** button under live patch posts, or **Publish → Post hero history** in `/panel` (creates a locked **Patch Notes** hub with Tank / Damage / Support menus). Browse every recent balance touch for one character. Data comes from live Blizzard notes plus the guild’s saved patch archive.
+**Hero history** — `/hero` (autocomplete), the **Hero history** button under live patch posts, or **Hero history** in `/panel` → Overwatch (creates a locked **Patch Notes** hub with Tank / Damage / Support menus). Browse every recent balance touch for one character. Data comes from live Blizzard notes plus the guild’s saved patch archive.
 
 **Hero icons** come from the official [Blizzard roster](https://overwatch.blizzard.com/en-us/heroes/) (Counterwatch as fallback). Application emojis are created and updated when a new hero ships or a CDN portrait changes — daily sync, plus an extra refresh after a new patch posts — so tier, META, and patch posts stay current.
 

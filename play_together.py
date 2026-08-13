@@ -815,7 +815,7 @@ class CreatePlayModal(discord.ui.Modal, title="Create a play suggestion"):
         if cog is None or interaction.guild is None:
             await interaction.response.send_message("Play together isn't loaded.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         s = self.hub.bot.db.get_play_settings(self.hub.guild_id)
         hour = int(s["play_default_hour"] or 19)
         when_dt = parse_play_when(
@@ -885,11 +885,10 @@ class CreatePlayModal(discord.ui.Modal, title="Create a play suggestion"):
             return
         self.hub.page = "play"
         self.hub._rebuild()
-        if interaction.message is not None:
-            await interaction.message.edit(
-                embed=hub_play_embed(interaction.guild, self.hub.bot),
-                view=self.hub,
-            )
+        await interaction.edit_original_response(
+            embed=hub_play_embed(interaction.guild, self.hub.bot),
+            view=self.hub,
+        )
         await interaction.followup.send(
             f"Posted **{row['game_name']}**.", ephemeral=True
         )
@@ -1016,44 +1015,51 @@ class EditGameModal(discord.ui.Modal, title="Edit game"):
 
 
 class SearchGameModal(discord.ui.Modal, title="Search a real game"):
-    query = discord.ui.TextInput(
-        label="Game name",
-        max_length=80,
-        required=True,
-        placeholder="Minecraft",
-    )
-
     def __init__(self, hub, *, default: str = "") -> None:
         super().__init__()
         self.hub = hub
-        if default:
-            self.query.default = default[:80]
+        prefill = (default or "").strip()[:80]
+        self.query = discord.ui.TextInput(
+            label="Game name",
+            max_length=80,
+            required=True,
+            placeholder="Minecraft",
+            default=prefill or None,
+        )
+        self.add_item(self.query)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not await self.hub._admin_ok(interaction):
             return
         q = str(self.query.value).strip()
-        await interaction.response.defer(ephemeral=True)
+        self.hub.play_search_query = q
+        # Deferred update keeps the ephemeral panel editable after the search.
+        await interaction.response.defer()
         hits = await search_catalog_games(q)
         if not hits:
+            self.hub.page = "play_games"
+            self.hub._rebuild()
+            await interaction.edit_original_response(
+                embed=games_embed(
+                    interaction.guild,
+                    self.hub.bot,
+                    selected=getattr(self.hub, "play_game_key", None),
+                    page=_hub_games_page(self.hub),
+                ),
+                view=self.hub,
+            )
             await interaction.followup.send(
                 f"No real games matched **{q}**. Try the full title "
                 f"(Steam or Wikipedia).",
                 ephemeral=True,
             )
             return
-        self.hub.play_search_query = q
         self.hub.play_search_hits = [h.as_dict() for h in hits]
         self.hub.page = "play_game_search"
         self.hub._rebuild()
-        if interaction.message is not None:
-            await interaction.message.edit(
-                embed=search_results_embed(q, hits),
-                view=self.hub,
-            )
-        await interaction.followup.send(
-            f"**{len(hits)}** match(es). Pick the right one — nothing is added until you do.",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            embed=search_results_embed(q, hits),
+            view=self.hub,
         )
 
 
@@ -1633,6 +1639,8 @@ def _add_games_controls(hub) -> None:
             game = hub.bot.db.get_play_game(hub.guild_id, key)
             if game:
                 default = str(game["game_name"])
+        if not default:
+            default = str(getattr(hub, "play_search_query", "") or "")
         await i.response.send_modal(SearchGameModal(hub, default=default))
 
     allow.callback = on_allow

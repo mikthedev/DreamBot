@@ -42,6 +42,7 @@ from play_together import (
     hub_play_embed,
     manage_embed,
     review_embed,
+    hub_search_embed,
 )
 
 log = logging.getLogger("dream_team.panel")
@@ -545,6 +546,7 @@ class AdminHubView(discord.ui.View):
         elif self.page in (
             "play",
             "play_games",
+            "play_game_search",
             "play_activity",
             "play_review",
             "play_manage",
@@ -659,6 +661,8 @@ class AdminHubView(discord.ui.View):
             return games_embed(
                 guild, self.bot, selected=getattr(self, "play_game_key", None)
             )
+        if self.page == "play_game_search":
+            return hub_search_embed(self)
         if self.page == "play_activity":
             return activity_embed(guild, self.bot)
         if self.page == "play_review":

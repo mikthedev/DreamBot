@@ -74,7 +74,7 @@ The bot notices when several people on the server have recently played the same 
 
 1. **Activity history** — Discord rich presence (Playing …) is stored per person, with recency decay. Playing Minecraft two days ago is a much stronger signal than six months ago. Windows and weights are set in `/panel` → Play together → Settings.
 2. **Detection** — finds overlapping interest (you do **not** have to be in voice at the same time). One person is ignored; two is a maybe; four or so is a real signal. Regular launches count extra.
-3. **Allow-list** — nothing is proposed unless an admin **allows** that game. Blocked games are still recorded, never auto-suggested (Warframe can be popular and still stay off-limits). Admins can always create a session for any game by hand.
+3. **Allow-list** — nothing is proposed unless an admin **allows** that game. Blocked games are still recorded, never auto-suggested (Warframe can be popular and still stay off-limits). **Add game** searches Steam and Wikipedia so you pick a real title (Minecraft has no Steam page — Wikipedia is the match). Sessions are not created from made-up names.
 4. **Suggestion** — a message in the configured channel: game, next Saturday evening (default 19:00, Kyiv time), I'm in / Nope. Playing the game does **not** put you on the list.
 5. **RSVP** — the card shows `3/6` (or similar). Admins can add or remove people in `/panel` when plans happened in chat.
 6. **Social invites** — once the minimum shows up, the bot may DM people who often sit in voice or play with that group: “Ilya, Sasha and Edik are getting together… Wanna join them?”

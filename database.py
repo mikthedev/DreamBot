@@ -294,6 +294,13 @@ class Database:
                 ON play_suggestions (guild_id, status, game_key);
             """
         )
+        for table, column, col_type in (
+            ("play_games", "icon_url", "TEXT"),
+            ("play_games", "image_url", "TEXT"),
+            ("play_suggestions", "icon_url", "TEXT"),
+            ("play_suggestions", "image_url", "TEXT"),
+        ):
+            self._ensure_column(conn, table, column, col_type)
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -1698,7 +1705,9 @@ class Database:
                     g.min_players,
                     g.max_players,
                     g.steam_url,
-                    g.store_note
+                    g.store_note,
+                    g.icon_url,
+                    g.image_url
                 FROM play_games g
                 WHERE g.guild_id = ?
                 ORDER BY g.blocked ASC, g.enabled DESC, g.game_name COLLATE NOCASE
@@ -1712,7 +1721,8 @@ class Database:
             return conn.execute(
                 """
                 SELECT game_key, game_name, enabled, blocked,
-                       min_players, max_players, steam_url, store_note
+                       min_players, max_players, steam_url, store_note,
+                       icon_url, image_url
                 FROM play_games
                 WHERE guild_id = ? AND game_key = ?
                 """,
@@ -1731,10 +1741,14 @@ class Database:
         max_players: int | None = None,
         steam_url: str | None = None,
         store_note: str | None = None,
+        icon_url: str | None = None,
+        image_url: str | None = None,
         set_min: bool = False,
         set_max: bool = False,
         set_steam: bool = False,
         set_note: bool = False,
+        set_icon: bool = False,
+        set_image: bool = False,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
@@ -1767,6 +1781,12 @@ class Database:
             if set_note:
                 sets.append("store_note = ?")
                 params.append(store_note)
+            if set_icon:
+                sets.append("icon_url = ?")
+                params.append(icon_url)
+            if set_image:
+                sets.append("image_url = ?")
+                params.append(image_url)
             if sets:
                 params.extend([guild_id, game_key])
                 conn.execute(
@@ -1791,6 +1811,8 @@ class Database:
         store_note: str | None,
         created_by: int | None,
         auto_event: int = 1,
+        icon_url: str | None = None,
+        image_url: str | None = None,
     ) -> int:
         stamped = datetime.now(timezone.utc).isoformat()
         with self.connect() as conn:
@@ -1799,9 +1821,9 @@ class Database:
                 INSERT INTO play_suggestions (
                     guild_id, game_key, game_name, status, proposed_at,
                     min_players, max_players, steam_url, store_note,
-                    created_by, created_at, auto_event
+                    created_by, created_at, auto_event, icon_url, image_url
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     guild_id,
@@ -1816,6 +1838,8 @@ class Database:
                     created_by,
                     stamped,
                     auto_event,
+                    icon_url,
+                    image_url,
                 ),
             )
             return int(cur.lastrowid)
@@ -1850,6 +1874,8 @@ class Database:
             "discord_event_id",
             "steam_url",
             "store_note",
+            "icon_url",
+            "image_url",
             "reminder_sent",
             "expansion_sent",
             "auto_event",

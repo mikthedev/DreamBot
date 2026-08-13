@@ -81,6 +81,15 @@ def test_store_link_label():
     assert "Steam" in store_link_markdown("https://store.steampowered.com/app/730")
 
 
+def test_steam_cdn_art():
+    from game_search import steam_app_id_from_url, steam_cdn_art
+
+    assert steam_app_id_from_url("https://store.steampowered.com/app/3527290/PEAK/") == 3527290
+    art = steam_cdn_art(3527290)
+    assert "3527290" in (art.icon_url or "")
+    assert art.image_url and art.image_url.endswith("header.jpg")
+
+
 def test_known_official_fallback():
     from game_search import _KNOWN_OFFICIAL, _bare_key
 
@@ -129,6 +138,7 @@ if __name__ == "__main__":
     test_merge_steam_wins_same_title()
     test_drop_steam_addons_keeps_sequels()
     test_store_link_label()
+    test_steam_cdn_art()
     test_known_official_fallback()
     test_steam_title_matches()
     test_prefer_official_url()

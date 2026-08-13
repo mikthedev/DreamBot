@@ -74,6 +74,8 @@ class GameHit:
     source: str
     snippet: str = ""
     app_id: int | None = None
+    icon_url: str | None = None
+    image_url: str | None = None
 
     def as_dict(self) -> dict[str, str | int | None]:
         return {
@@ -82,7 +84,15 @@ class GameHit:
             "source": self.source,
             "snippet": self.snippet,
             "app_id": self.app_id,
+            "icon_url": self.icon_url,
+            "image_url": self.image_url,
         }
+
+
+@dataclass(frozen=True)
+class GameArt:
+    icon_url: str | None = None
+    image_url: str | None = None
 
 
 def hit_from_dict(raw: dict) -> GameHit:
@@ -93,7 +103,31 @@ def hit_from_dict(raw: dict) -> GameHit:
         source=str(raw.get("source") or ""),
         snippet=str(raw.get("snippet") or ""),
         app_id=int(app_id) if app_id else None,
+        icon_url=(str(raw["icon_url"]) if raw.get("icon_url") else None),
+        image_url=(str(raw["image_url"]) if raw.get("image_url") else None),
     )
+
+
+_STEAM_APP_RE = re.compile(r"steampowered\.com/app/(\d+)", re.I)
+
+
+def steam_app_id_from_url(url: str | None) -> int | None:
+    if not url:
+        return None
+    match = _STEAM_APP_RE.search(url)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def steam_cdn_art(app_id: int) -> GameArt:
+    """CDN paths that usually exist for every Steam app."""
+    base = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{int(app_id)}"
+    return GameArt(
+        icon_url=f"{base}/library_600x900.jpg",
+        image_url=f"{base}/header.jpg",
+    )
+
 
 
 def _key(name: str) -> str:
@@ -382,6 +416,8 @@ async def _search_steam(
             continue
         if _STEAM_SKIP.search(name):
             continue
+        tiny = str(item.get("tiny_image") or "").strip() or None
+        art = steam_cdn_art(int(app_id))
         hits.append(
             GameHit(
                 name=name,
@@ -389,6 +425,8 @@ async def _search_steam(
                 source="steam",
                 snippet="Steam",
                 app_id=int(app_id),
+                icon_url=tiny or art.icon_url,
+                image_url=art.image_url,
             )
         )
         if len(hits) >= 10:
@@ -485,12 +523,58 @@ async def _wiki_summary_if_game(
     if not url:
         url = f"https://en.wikipedia.org/wiki/{path}"
     snippet = description or extract[:80]
+    thumb = None
+    image = None
+    thumbnail = page.get("thumbnail")
+    if isinstance(thumbnail, dict):
+        thumb = str(thumbnail.get("source") or "").strip() or None
+    original = page.get("originalimage")
+    if isinstance(original, dict):
+        image = str(original.get("source") or "").strip() or None
     return GameHit(
         name=name,
         url=url,
         source="wikipedia",
         snippet=snippet,
+        icon_url=thumb,
+        image_url=image or thumb,
     )
+
+
+async def resolve_game_art(
+    game_name: str, *, store_url: str | None = None
+) -> GameArt:
+    """Best available cover art for embeds: Steam CDN, then Wikipedia."""
+    app_id = steam_app_id_from_url(store_url)
+    if app_id:
+        return steam_cdn_art(app_id)
+
+    q = " ".join((game_name or "").split())
+    if len(q) < 2:
+        return GameArt()
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
+        steam_hit = await _best_steam_match(session, q)
+        if steam_hit is not None:
+            if steam_hit.app_id:
+                cdn = steam_cdn_art(steam_hit.app_id)
+                return GameArt(
+                    icon_url=steam_hit.icon_url or cdn.icon_url,
+                    image_url=steam_hit.image_url or cdn.image_url,
+                )
+            return GameArt(icon_url=steam_hit.icon_url, image_url=steam_hit.image_url)
+
+        wiki = await _safe_wiki(session, q)
+        for hit in wiki:
+            if _bare_key(hit.name) == _bare_key(q) or steam_title_matches(q, hit.name):
+                if hit.icon_url or hit.image_url:
+                    return GameArt(icon_url=hit.icon_url, image_url=hit.image_url)
+        for hit in wiki:
+            if hit.icon_url or hit.image_url:
+                return GameArt(icon_url=hit.icon_url, image_url=hit.image_url)
+    return GameArt()
+
 
 
 async def _wikidata_official_site(

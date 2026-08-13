@@ -17,6 +17,7 @@ from nicknames import display_base
 from game_search import (
     GameHit,
     hit_from_dict,
+    resolve_game_art,
     resolve_game_link,
     search_catalog_games,
     store_link_label,
@@ -27,26 +28,52 @@ log = logging.getLogger("dream_team.play")
 
 ACCENT = discord.Color.from_rgb(46, 230, 166)
 MUTED = discord.Color.from_rgb(90, 110, 140)
+SUGGEST_COLOR = discord.Color.from_rgb(20, 184, 166)
 
 RSVP_IN_ID = "play_together:in"
 RSVP_NOPE_ID = "play_together:nope"
 ACTIVE_STATUSES = ("published", "event")
 SATURDAY = 5
 
-DEFAULT_PLAY_TITLE = "{game}"
+DEFAULT_PLAY_TITLE = "Let's play · {game}"
 DEFAULT_PLAY_BODY = (
-    "A few people on the server already played **{game}**. "
-    "Let's get together and play again.\n\n"
-    "**{when}**\n"
-    "{count}\n"
-    "In: {in}\n\n"
+    "A few people here have been in **{game}** lately — "
+    "want to make it a real night?\n"
+    "\n"
+    "╭ **When**\n"
+    "│  {when}\n"
+    "│\n"
+    "├ **Party**\n"
+    "│  {count}\n"
+    "│\n"
+    "╰ **In so far**\n"
+    "     {in}\n"
+    "\n"
     "{link}\n"
-    "{note}\n"
-    "Everyone's welcome."
+    "{note}"
 )
 DEFAULT_PLAY_FOOTER = (
-    "I'm in = you want this session. Playing the game before is not a yes."
+    "I'm in = you're free for this · Playing it before is not a yes"
 )
+
+# Older shipped copy — treat as unset so guilds pick up the new layout.
+_LEGACY_PLAY_TITLES = {"{game}"}
+_LEGACY_PLAY_BODIES = {
+    (
+        "A few people on the server already played **{game}**. "
+        "Let's get together and play again.\n\n"
+        "**{when}**\n"
+        "{count}\n"
+        "In: {in}\n\n"
+        "{link}\n"
+        "{note}\n"
+        "Everyone's welcome."
+    ),
+}
+_LEGACY_PLAY_FOOTERS = {
+    "I'm in = you want this session. Playing the game before is not a yes.",
+}
+
 
 _WHEN_FULL = (
     "%d.%m.%Y %H:%M",
@@ -288,12 +315,16 @@ def detect_groups(db, guild_id: int, now: datetime | None = None) -> list[Detect
 
 def load_play_suggest_copy(bot, guild_id: int) -> dict[str, str]:
     raw = bot.db.get_play_suggest_copy(guild_id)
-    return {
-        "title": (raw.get("title") or DEFAULT_PLAY_TITLE).strip() or DEFAULT_PLAY_TITLE,
-        "body": (raw.get("body") or DEFAULT_PLAY_BODY).strip() or DEFAULT_PLAY_BODY,
-        "footer": (raw.get("footer") or DEFAULT_PLAY_FOOTER).strip()
-        or DEFAULT_PLAY_FOOTER,
-    }
+    title = (raw.get("title") or "").strip()
+    body = (raw.get("body") or "").strip()
+    footer = (raw.get("footer") or "").strip()
+    if not title or title in _LEGACY_PLAY_TITLES:
+        title = DEFAULT_PLAY_TITLE
+    if not body or body in _LEGACY_PLAY_BODIES:
+        body = DEFAULT_PLAY_BODY
+    if not footer or footer in _LEGACY_PLAY_FOOTERS:
+        footer = DEFAULT_PLAY_FOOTER
+    return {"title": title, "body": body, "footer": footer}
 
 
 def _fill_play_template(template: str, values: dict[str, str]) -> str:
@@ -337,7 +368,11 @@ def suggestion_values(
     names = [person_label(bot, guild, uid) for uid in confirmed_ids[:12]]
     in_line = join_names(names) if names else "_nobody yet — tap I'm in_"
     link = store_link_markdown(store_url)
+    if link:
+        link = f"↗ {link}"
     note = (store_note or "").strip()
+    if note:
+        note = f"_{note}_"
     return {
         "game": str(game_name),
         "when": when_line,
@@ -349,6 +384,63 @@ def suggestion_values(
         "max": str(max_players),
         "status": status,
     }
+
+
+def _row_get(row, key: str) -> str | None:
+    try:
+        value = row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+    text = (value or "").strip() if isinstance(value, str) else (str(value).strip() if value else "")
+    return text or None
+
+
+def _apply_suggestion_art(
+    embed: discord.Embed,
+    *,
+    icon_url: str | None,
+    image_url: str | None,
+    footer_text: str | None,
+    author_name: str,
+    author_icon: str | None = None,
+) -> None:
+    embed.set_author(name=author_name, icon_url=author_icon)
+    if icon_url:
+        embed.set_thumbnail(url=icon_url)
+    if image_url:
+        embed.set_image(url=image_url)
+    if footer_text:
+        embed.set_footer(text=footer_text[:2048], icon_url=icon_url)
+
+
+async def ensure_game_art(
+    bot,
+    guild_id: int,
+    *,
+    game_key: str,
+    game_name: str,
+    store_url: str | None = None,
+) -> tuple[str | None, str | None]:
+    game = bot.db.get_play_game(guild_id, game_key)
+    icon = _row_get(game, "icon_url") if game else None
+    image = _row_get(game, "image_url") if game else None
+    if icon and image:
+        return icon, image
+    store = store_url or (_row_get(game, "steam_url") if game else None)
+    art = await resolve_game_art(game_name, store_url=store)
+    icon = art.icon_url or icon
+    image = art.image_url or image
+    if icon or image:
+        bot.db.upsert_play_game(
+            guild_id,
+            game_key,
+            game_name,
+            icon_url=icon,
+            image_url=image,
+            set_icon=True,
+            set_image=True,
+        )
+    return icon, image
 
 
 def suggestion_embed(
@@ -392,11 +484,28 @@ def suggestion_embed(
     if preview:
         footer = (footer + " · Preview").strip(" ·")
 
-    color = ACCENT if status in ACTIVE_STATUSES or preview else MUTED
+    color = SUGGEST_COLOR if status in ACTIVE_STATUSES or preview else MUTED
     embed = discord.Embed(title=title, description=body[:4096], color=color)
-    embed.set_author(name="Play together")
-    if footer:
-        embed.set_footer(text=footer[:2048])
+
+    icon_url = _row_get(row, "icon_url")
+    image_url = _row_get(row, "image_url")
+    if guild_id and (not icon_url or not image_url):
+        game = bot.db.get_play_game(guild_id, str(row["game_key"]))
+        if game:
+            icon_url = icon_url or _row_get(game, "icon_url")
+            image_url = image_url or _row_get(game, "image_url")
+
+    author_icon = None
+    if getattr(bot, "user", None) is not None:
+        author_icon = bot.user.display_avatar.url
+    _apply_suggestion_art(
+        embed,
+        icon_url=icon_url,
+        image_url=image_url,
+        footer_text=footer,
+        author_name="Play together" if not preview else "Play together · preview",
+        author_icon=author_icon,
+    )
     return embed
 
 
@@ -410,6 +519,8 @@ def preview_suggestion_embed(bot, guild: discord.Guild) -> discord.Embed:
     game_name = str(sample["game_name"]) if sample else "The Big Walk"
     store_url = (sample["steam_url"] if sample else None) or None
     store_note = (sample["store_note"] if sample else None) or "Optional note / price"
+    icon_url = _row_get(sample, "icon_url") if sample else None
+    image_url = _row_get(sample, "image_url") if sample else None
     min_p = int(
         (sample["min_players"] if sample and sample["min_players"] else None)
         or settings["play_default_min_players"]
@@ -436,14 +547,18 @@ def preview_suggestion_embed(bot, guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title=_fill_play_template(copy["title"], values)[:256],
         description=_fill_play_template(copy["body"], values)[:4096],
-        color=ACCENT,
+        color=SUGGEST_COLOR,
     )
-    embed.set_author(name="Play together · preview")
-    embed.set_footer(
-        text=_fill_play_template(copy["footer"], values)[:2000] + " · Preview"
+    author_icon = bot.user.display_avatar.url if bot.user else None
+    _apply_suggestion_art(
+        embed,
+        icon_url=icon_url,
+        image_url=image_url,
+        footer_text=_fill_play_template(copy["footer"], values)[:2000] + " · Preview",
+        author_name="Play together · preview",
+        author_icon=author_icon,
     )
     return embed
-
 
 class PlayRsvpView(discord.ui.View):
     """Public I'm in / Nope — survives restarts."""
@@ -1703,7 +1818,21 @@ def _add_setup_controls(hub) -> None:
     async def on_preview(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i) or i.guild is None:
             return
-        await i.response.send_message(
+        await i.response.defer(ephemeral=True)
+        games = hub.bot.db.list_known_play_games(hub.guild_id, limit=500)
+        sample = next(
+            (g for g in games if g["enabled"] and not g["blocked"]),
+            games[0] if games else None,
+        )
+        if sample is not None:
+            await ensure_game_art(
+                hub.bot,
+                hub.guild_id,
+                game_key=str(sample["game_key"]),
+                game_name=str(sample["game_name"]),
+                store_url=(sample["steam_url"] or None),
+            )
+        await i.followup.send(
             embed=preview_suggestion_embed(hub.bot, i.guild),
             ephemeral=True,
         )
@@ -1882,6 +2011,13 @@ def _add_games_controls(hub) -> None:
             str(game["game_name"]),
             steam_url=resolved.url,
             set_steam=True,
+        )
+        await ensure_game_art(
+            hub.bot,
+            hub.guild_id,
+            game_key=key,
+            game_name=str(game["game_name"]),
+            store_url=resolved.url,
         )
         hub.page = "play_games"
         hub.play_game_key = key
@@ -2078,6 +2214,13 @@ def _add_search_controls(hub) -> None:
                 enabled=None if existing else 1,
                 steam_url=url,
                 set_steam=True,
+            )
+            await ensure_game_art(
+                hub.bot,
+                hub.guild_id,
+                game_key=key,
+                game_name=hit.name,
+                store_url=url,
             )
             hub.play_game_key = key
             hub.page = "play_games"
@@ -2570,6 +2713,13 @@ class PlayTogetherCog(commands.Cog):
             )
         if proposed_at.tzinfo is None:
             proposed_at = proposed_at.replace(tzinfo=_tz())
+        icon_url, image_url = await ensure_game_art(
+            self.bot,
+            guild.id,
+            game_key=game_key,
+            game_name=game_name,
+            store_url=steam_url,
+        )
         sid = self.bot.db.create_play_suggestion(
             guild.id,
             game_key=game_key,
@@ -2582,6 +2732,8 @@ class PlayTogetherCog(commands.Cog):
             store_note=store_note,
             created_by=created_by,
             auto_event=1 if settings["play_auto_event"] else 0,
+            icon_url=icon_url,
+            image_url=image_url,
         )
         row = self.bot.db.get_play_suggestion(sid)
         assert row is not None
@@ -2605,6 +2757,23 @@ class PlayTogetherCog(commands.Cog):
         guild = self.bot.get_guild(int(row["guild_id"]))
         if guild is None:
             return
+        if not _row_get(row, "icon_url") or not _row_get(row, "image_url"):
+            icon_url, image_url = await ensure_game_art(
+                self.bot,
+                int(row["guild_id"]),
+                game_key=str(row["game_key"]),
+                game_name=str(row["game_name"]),
+                store_url=_row_get(row, "steam_url"),
+            )
+            if icon_url or image_url:
+                self.bot.db.update_play_suggestion(
+                    suggestion_id,
+                    icon_url=icon_url or _row_get(row, "icon_url"),
+                    image_url=image_url or _row_get(row, "image_url"),
+                )
+                row = self.bot.db.get_play_suggestion(suggestion_id)
+                if row is None:
+                    return
         channel = guild.get_channel(int(row["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             return

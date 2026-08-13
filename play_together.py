@@ -365,8 +365,8 @@ def suggestion_values(
         count_line = (
             f"**{n}/{max_players}** are in · need **{min_players}** to lock it in"
         )
-    names = [person_label(bot, guild, uid) for uid in confirmed_ids[:12]]
-    in_line = join_names(names) if names else "_nobody yet — tap I'm in_"
+    mentions = [f"<@{uid}>" for uid in confirmed_ids[:12]]
+    in_line = join_names(mentions) if mentions else "_nobody yet — tap I'm in_"
     link = store_link_markdown(store_url)
     if link:
         link = f"↗ {link}"
@@ -2741,6 +2741,7 @@ class PlayTogetherCog(commands.Cog):
             message = await channel.send(
                 embed=suggestion_embed(self.bot, guild, row),
                 view=PlayRsvpView(),
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException as exc:
             self.bot.db.update_play_suggestion(sid, status="cancelled")
@@ -2784,7 +2785,9 @@ class PlayTogetherCog(commands.Cog):
         view = PlayRsvpView() if str(row["status"]) in ACTIVE_STATUSES else None
         try:
             await message.edit(
-                embed=suggestion_embed(self.bot, guild, row), view=view
+                embed=suggestion_embed(self.bot, guild, row),
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException as exc:
             log.warning("Could not refresh suggestion %s: %s", suggestion_id, exc)
@@ -2957,7 +2960,7 @@ class PlayTogetherCog(commands.Cog):
         if start <= _now_utc():
             raise PlayPublishError("That time is already in the past.")
         confirmed = [
-            person_label(self.bot, guild, int(r["user_id"]))
+            f"<@{int(r['user_id'])}>"
             for r in self.bot.db.list_play_rsvps(suggestion_id, status="in")
         ]
         steam = (row["steam_url"] or "").strip()

@@ -5,6 +5,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def _payload_has_hero_balance(raw: str | None) -> bool:
+    """True when a stored patch JSON includes at least one hero change line."""
+    if not raw:
+        return False
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    for hero in data.get("heroes") or []:
+        if hero.get("changes"):
+            return True
+    return False
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -151,6 +165,7 @@ class Database:
                 )
                 """
             )
+        self.purge_empty_ow_patches()
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -557,9 +572,9 @@ class Database:
         return [int(x) for x in raw if str(x).isdigit() or isinstance(x, int)]
 
     def list_ow_patch_history(self, guild_id: int, *, limit: int = 15) -> list[sqlite3.Row]:
-        """Past patches with saved payloads (excludes the currently live post)."""
+        """Past patches with saved hero balance (excludes the currently live post)."""
         with self.connect() as conn:
-            return conn.execute(
+            rows = conn.execute(
                 """
                 SELECT patch_id, payload, announced_at
                 FROM ow_patch_announcements
@@ -569,8 +584,39 @@ class Database:
                 ORDER BY announced_at DESC
                 LIMIT ?
                 """,
-                (guild_id, limit),
+                (guild_id, max(limit * 4, 40)),
             ).fetchall()
+        out: list[sqlite3.Row] = []
+        for row in rows:
+            if _payload_has_hero_balance(row["payload"]):
+                out.append(row)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def purge_empty_ow_patches(self) -> int:
+        """Delete stored patch notes that have no retail hero balance changes."""
+        deleted = 0
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT guild_id, patch_id, payload
+                FROM ow_patch_announcements
+                WHERE payload IS NOT NULL
+                """
+            ).fetchall()
+            for row in rows:
+                if _payload_has_hero_balance(row["payload"]):
+                    continue
+                conn.execute(
+                    """
+                    DELETE FROM ow_patch_announcements
+                    WHERE guild_id = ? AND patch_id = ?
+                    """,
+                    (row["guild_id"], row["patch_id"]),
+                )
+                deleted += 1
+        return deleted
 
     def get_ow_patch_payload(self, guild_id: int, patch_id: str) -> str | None:
         with self.connect() as conn:

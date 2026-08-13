@@ -22,7 +22,7 @@ from birthday_signup import (
 )
 from birthdays import Birthday, celebration_embed
 from names import SetNameModal, WelcomePrivateView, names_list_embed
-from overwatch_patches import PATCH_URL, build_patch_embeds
+from overwatch_patches import PATCH_URL, build_patch_embeds, has_hero_balance
 from overwatch_tierlist import TIER_URL
 from overwatch_meta import META_URL
 from ow_forum import OW_CHANNEL_TYPES, is_ow_destination
@@ -111,6 +111,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
             "`/help`\n"
             "`/ask` — free Llama chat (or @mention the bot)\n"
             "`/join` · `/disconnect` — voice AI (say **Dream**, …)\n"
+            "`/herohistory` — one hero’s balance changes across patches\n"
             "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"
             "`/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave`"
         ),
@@ -1266,6 +1267,12 @@ class AdminHubView(discord.ui.View):
             if summary is None:
                 await interaction.followup.send(
                     "Could not parse the patch notes page.", ephemeral=True
+                )
+                return
+            if not has_hero_balance(summary):
+                await interaction.followup.send(
+                    "Latest notes have no retail hero balance — nothing posted.",
+                    ephemeral=True,
                 )
                 return
             await cog.publish_live(channel, summary)

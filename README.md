@@ -54,6 +54,8 @@ Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](ht
 
 Patch cards include **Hero Updates** as well as classic Tank / Damage / Support sections (Blizzard’s layout varies by drop). Live patch posts refresh if the notes gain balance lines after the first publish.
 
+**Hero history** — `/herohistory` (autocomplete) or the **Hero history** button under the live patch post: pick a role → hero, then browse every recent balance touch for that character (compact dated cards, Newer / Older navigation). Data comes from live Blizzard notes plus the guild’s saved patch archive.
+
 **Hero icons** come from the official [Blizzard roster](https://overwatch.blizzard.com/en-us/heroes/) (Counterwatch as fallback). Application emojis are created and updated when a new hero ships or a CDN portrait changes — daily sync, plus an extra refresh after a new patch posts — so tier, META, and patch posts stay current.
 
 ---
@@ -74,6 +76,7 @@ A persistent Ukrainian welcome panel with buttons — edit and republish without
 | `/ask` | Chat with free Llama (Groq) |
 | `/join` / `/disconnect` | Voice AI in / out |
 | `/setbirthday` · `/mybirthday` · `/clearbirthday` | Birthday self-service |
+| `/herohistory` | One hero’s balance changes across recent patches |
 | `/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave` | Music (SoundCloud) |
 
 **Admins**

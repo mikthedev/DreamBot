@@ -73,6 +73,13 @@ def _roles_for_display(heroes: list[HeroChange]) -> list[str]:
     return ordered
 
 
+def has_hero_balance(summary: PatchSummary | None) -> bool:
+    """True when a drop actually lists retail hero changes (not bugfix/news)."""
+    if summary is None:
+        return False
+    return any(h.changes for h in summary.heroes)
+
+
 def _balance_fingerprint(summary: PatchSummary) -> str:
     """Compare hero balance content without icon URLs (those may be enriched)."""
     parts: list[str] = [summary.fingerprint]
@@ -443,7 +450,7 @@ def parse_all_patches(html: str, *, limit: int = 15) -> list[PatchSummary]:
         summary = _parse_patch_block(block)
         if summary is None:
             continue
-        if not summary.date and not summary.heroes:
+        if not has_hero_balance(summary):
             continue
         out.append(summary)
         if len(out) >= limit:
@@ -583,7 +590,7 @@ async def fetch_all_patch_summaries(
             _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = patches, now, 1
             return patches[:limit]
         latest = parse_latest_patch(html)
-        out = [latest] if latest else []
+        out = [latest] if latest and has_hero_balance(latest) else []
         _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = out, now, 1
         return out
 
@@ -647,7 +654,7 @@ async def fetch_all_patch_summaries(
         _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = patches, now, 1
         return patches
     latest = parse_latest_patch(html)
-    out = [latest] if latest else []
+    out = [latest] if latest and has_hero_balance(latest) else []
     _PATCH_CACHE, _PATCH_CACHE_AT, _PATCH_CACHE_MONTHS = out, now, 1
     return out
 
@@ -695,7 +702,10 @@ def summary_from_payload(raw: str) -> PatchSummary | None:
                 tone=c.get("tone") or "•",
             )
             for c in (h.get("changes") or [])
+            if (c.get("text") or "").strip()
         ]
+        if not changes:
+            continue
         heroes.append(
             HeroChange(
                 name=h.get("name") or "Hero",
@@ -751,7 +761,7 @@ class OwArchiveSelect(discord.ui.Select):
         patch_id = self.values[0]
         raw = interaction.client.db.get_ow_patch_payload(guild.id, patch_id)
         summary = summary_from_payload(raw) if raw else None
-        if summary is None:
+        if summary is None or not has_hero_balance(summary):
             await interaction.response.send_message(
                 "That archived patch could not be loaded.", ephemeral=True
             )
@@ -788,34 +798,31 @@ class OwPatchHistoryView(discord.ui.View):
             return
 
         rows = interaction.client.db.list_ow_patch_history(guild.id)
-        if not rows:
+        usable: list[tuple[str, PatchSummary]] = []
+        for row in rows:
+            summary = summary_from_payload(row["payload"])
+            if summary is None or not has_hero_balance(summary):
+                continue
+            usable.append((row["patch_id"], summary))
+        if not usable:
             await interaction.response.send_message(
                 "No previous patches saved yet.", ephemeral=True
             )
             return
 
-        if len(rows) == 1:
-            summary = summary_from_payload(rows[0]["payload"])
-            if summary is None:
-                await interaction.response.send_message(
-                    "Could not load the archived patch.", ephemeral=True
-                )
-                return
+        if len(usable) == 1:
             await interaction.response.defer(ephemeral=True)
-            await send_summary_ephemeral(interaction, summary, archive=True)
+            await send_summary_ephemeral(interaction, usable[0][1], archive=True)
             return
 
         options: list[discord.SelectOption] = []
-        for row in rows[:25]:
-            summary = summary_from_payload(row["payload"])
-            label = (summary.date if summary and summary.date else row["patch_id"])[
-                :100
-            ]
-            desc = (summary.title if summary else row["patch_id"])[:100]
+        for patch_id, summary in usable[:25]:
+            label = (summary.date or patch_id)[:100]
+            desc = (summary.title or patch_id)[:100]
             options.append(
                 discord.SelectOption(
                     label=label,
-                    value=row["patch_id"][:100],
+                    value=patch_id[:100],
                     description=desc,
                 )
             )
@@ -825,6 +832,21 @@ class OwPatchHistoryView(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(
+        label="Hero history",
+        style=discord.ButtonStyle.primary,
+        custom_id="ow_patch:hero_history",
+    )
+    async def hero_history(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        from overwatch_hero_history import HeroHistoryBrowseView
+
+        await interaction.response.send_message(
+            "Browse a hero’s balance history across patch notes:",
+            view=HeroHistoryBrowseView(),
+            ephemeral=True,
+        )
 
 
 def build_patch_layouts(
@@ -959,6 +981,9 @@ class OverwatchPatchCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._session: aiohttp.ClientSession | None = None
+        removed = self.bot.db.purge_empty_ow_patches()
+        if removed:
+            log.info("Removed %s empty OW patch archive entries", removed)
         self.check_patches.start()
 
     def cog_unload(self) -> None:
@@ -1026,7 +1051,9 @@ class OverwatchPatchCog(commands.Cog):
             layouts=layouts,
             embeds_fallback=lambda: build_patch_embeds(summary, preview=preview),
             tag_names=OW_PATCH_TAG_NAMES,
-            trailing_content="Earlier balance notes:" if with_history else None,
+            trailing_content=(
+                "Earlier notes · hero history:" if with_history else None
+            ),
             trailing_view=OwPatchHistoryView() if with_history else None,
             existing_thread_id=existing_thread_id,
         )
@@ -1050,6 +1077,12 @@ class OverwatchPatchCog(commands.Cog):
         summary: PatchSummary,
     ) -> list[discord.Message]:
         """Overwrite the live patch post (forum thread or text messages)."""
+        if not has_hero_balance(summary):
+            log.info(
+                "Skipping empty OW patch %s — no retail hero balance",
+                summary.fingerprint,
+            )
+            return []
         guild_id = channel.guild.id
         existing_thread_id = None
         if isinstance(channel, discord.TextChannel):
@@ -1112,6 +1145,9 @@ class OverwatchPatchCog(commands.Cog):
         if summary is None:
             return False, "Could not parse patch notes page."
 
+        if not has_hero_balance(summary):
+            return False, f"Skipped `{summary.fingerprint}` — no hero balance."
+
         if self.bot.db.was_ow_patch_announced(guild.id, summary.fingerprint):
             # Re-edit the live post when Blizzard (or our parser) adds hero cards
             # that the first publish missed — e.g. "Hero Updates" without Tank/Damage/Support.
@@ -1121,10 +1157,14 @@ class OverwatchPatchCog(commands.Cog):
                 summary
             ):
                 return False, f"Already posted `{summary.fingerprint}`."
-            await self.publish_live(channel, summary)
+            messages = await self.publish_live(channel, summary)
+            if not messages:
+                return False, f"Skipped `{summary.fingerprint}` — no hero balance."
             return True, f"Refreshed {summary.title}"
 
-        await self.publish_live(channel, summary)
+        messages = await self.publish_live(channel, summary)
+        if not messages:
+            return False, f"Skipped `{summary.fingerprint}` — no hero balance."
         return True, summary.title
 
     @tasks.loop(hours=config.OW_PATCH_CHECK_HOURS)

@@ -25,6 +25,7 @@ CANON_HEROES: tuple[str, ...] = (
     "reinhardt",
     "winston",
     "d.va",
+    "d.mon",
     "roadhog",
     "junkrat",
     "mei",
@@ -103,6 +104,11 @@ HERO_ALIASES: dict[str, str] = {
     "zyva": "d.va",
     "ziva": "d.va",
     "deeva": "d.va",
+    "д.мон": "d.mon",
+    "дмон": "d.mon",
+    "демон": "d.mon",
+    "dmon": "d.mon",
+    "d mon": "d.mon",
     "сигма": "sigma",
     "ориса": "orisa",
     "бастион": "bastion",
@@ -157,6 +163,31 @@ class HeroPatchHit:
     lines: list[str]
     buffish: bool
     nerfish: bool
+    patch_id: str = ""
+    patch_url: str = ""
+    hero: HeroChange | None = None
+
+
+def _hit_from_summary(
+    summary: PatchSummary,
+    hero: HeroChange,
+    *,
+    index: int,
+    latest_date: str,
+) -> HeroPatchHit:
+    buff, nerf = _tone_flags(hero)
+    return HeroPatchHit(
+        hero_name=hero.name,
+        patch_date=summary.date or "",
+        in_latest=(index == 0),
+        latest_date=latest_date,
+        lines=_hero_lines(hero),
+        buffish=buff,
+        nerfish=nerf,
+        patch_id=summary.patch_id or summary.fingerprint,
+        patch_url=summary.url or "",
+        hero=hero,
+    )
 
 
 def _plain(text: str) -> str:
@@ -333,68 +364,93 @@ async def lookup_hero_patch(
     same month calendar the site uses, newest→oldest, until this hero appears.
     Fall back to the guild archive only if the live site has nothing.
     """
-    hero_query = HERO_ALIASES.get(hero_query.lower().strip(), hero_query)
+    hits, latest_date = await lookup_hero_patch_history(
+        bot, guild_id, hero_query, max_hits=1
+    )
+    return (hits[0] if hits else None), latest_date
+
+
+async def lookup_hero_patch_history(
+    bot,
+    guild_id: int,
+    hero_query: str,
+    *,
+    max_hits: int = 25,
+    max_months: int = 12,
+) -> tuple[list[HeroPatchHit], str]:
+    """
+    Every retail balance touch for one hero, newest → oldest.
+    Prefer live Blizzard notes; fill gaps from the guild's saved patch archive.
+    """
+    hero_query = HERO_ALIASES.get(hero_query.lower().strip(), hero_query.lower().strip())
     patches = await fetch_all_patch_summaries(
-        limit=40, max_months=6, stop_hero=hero_query
+        limit=max(40, max_hits * 2),
+        max_months=max_months,
+        stop_hero=None,
     )
     latest_date = (patches[0].date if patches else "") or ""
+    hits: list[HeroPatchHit] = []
+    seen: set[str] = set()
 
     for i, summary in enumerate(patches):
         hero = find_hero_in_summary(summary, hero_query)
         if hero is None:
             continue
-        buff, nerf = _tone_flags(hero)
-        return (
-            HeroPatchHit(
-                hero_name=hero.name,
-                patch_date=summary.date or "",
-                in_latest=(i == 0),
-                latest_date=latest_date,
-                lines=_hero_lines(hero),
-                buffish=buff,
-                nerfish=nerf,
-            ),
-            latest_date,
+        key = summary.patch_id or summary.date or summary.title
+        if key in seen:
+            continue
+        seen.add(key)
+        hits.append(
+            _hit_from_summary(
+                summary, hero, index=i, latest_date=latest_date
+            )
         )
+        if len(hits) >= max_hits:
+            return hits, latest_date
 
-    # Guild archive as backup if the live page didn't list older retail changes
+    # Guild archive (live + older posts) for anything Blizzard walk missed
+    archive: list = []
     try:
-        rows = bot.db.list_ow_patch_history(guild_id, limit=25)
-    except Exception:
-        rows = []
+        latest_id = bot.db.latest_ow_patch_id(guild_id)
+        if latest_id:
+            raw = bot.db.get_ow_patch_payload(guild_id, latest_id)
+            if raw:
+                archive.append({"patch_id": latest_id, "payload": raw})
+        archive.extend(bot.db.list_ow_patch_history(guild_id, limit=40) or [])
+    except Exception as exc:
+        log.warning("Hero history archive read failed: %s", exc)
 
-    for row in rows:
+    for row in archive:
+        if len(hits) >= max_hits:
+            break
         raw = None
         try:
             raw = row["payload"]
+            pid = row["patch_id"]
         except (KeyError, IndexError, TypeError):
-            raw = None
+            continue
         if not raw:
             try:
-                raw = bot.db.get_ow_patch_payload(guild_id, row["patch_id"])
+                raw = bot.db.get_ow_patch_payload(guild_id, pid)
             except Exception:
                 continue
         summary = summary_from_payload(raw or "")
         if summary is None:
             continue
+        key = summary.patch_id or summary.date or summary.title
+        if key in seen:
+            continue
         hero = find_hero_in_summary(summary, hero_query)
         if hero is None:
             continue
-        buff, nerf = _tone_flags(hero)
-        return (
-            HeroPatchHit(
-                hero_name=hero.name,
-                patch_date=summary.date or "",
-                in_latest=False,
-                latest_date=latest_date,
-                lines=_hero_lines(hero),
-                buffish=buff,
-                nerfish=nerf,
-            ),
-            latest_date,
+        seen.add(key)
+        hits.append(
+            _hit_from_summary(
+                summary, hero, index=len(hits), latest_date=latest_date
+            )
         )
 
-    return None, latest_date
+    return hits[:max_hits], latest_date
 
 
 def change_kind(hit: HeroPatchHit) -> str:

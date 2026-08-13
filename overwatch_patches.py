@@ -73,15 +73,48 @@ def _roles_for_display(heroes: list[HeroChange]) -> list[str]:
     return ordered
 
 
-def has_hero_balance(summary: PatchSummary | None) -> bool:
-    """True when a drop actually lists retail hero changes (not bugfix/news)."""
+FUN_MODE_COLOR = discord.Color.from_rgb(186, 85, 211)
+
+# Arcade / limited events — not competitive, QP, or Competitive balance
+_FUN_MODE_MARKERS = (
+    "community crafted",
+    "community-crafted",
+)
+_FUN_MODE_DATES = frozenset({"june 30, 2026"})
+
+
+def is_fun_mode_patch(summary: PatchSummary | None) -> bool:
+    """True for Arcade fun events (e.g. Community Crafted), not retail balance."""
     if summary is None:
         return False
+    if summary.fun_mode:
+        return True
+    blob = f"{summary.title} {summary.patch_id} {summary.fun_label}".lower()
+    if any(m in blob for m in _FUN_MODE_MARKERS):
+        return True
+    return (summary.date or "").strip().lower() in _FUN_MODE_DATES
+
+
+def has_hero_balance(summary: PatchSummary | None) -> bool:
+    """True when a drop should be announced (retail balance or a fun-mode event)."""
+    if summary is None:
+        return False
+    if is_fun_mode_patch(summary):
+        return True
     return any(h.changes for h in summary.heroes)
 
 
 def _balance_fingerprint(summary: PatchSummary) -> str:
     """Compare hero balance content without icon URLs (those may be enriched)."""
+    if is_fun_mode_patch(summary):
+        return "\n".join(
+            [
+                summary.fingerprint,
+                "fun_mode",
+                summary.fun_label,
+                summary.fun_note,
+            ]
+        )
     parts: list[str] = [summary.fingerprint]
     for hero in summary.heroes:
         parts.append(hero.role)
@@ -118,6 +151,9 @@ class PatchSummary:
     title: str
     heroes: list[HeroChange] = field(default_factory=list)
     url: str = PATCH_URL
+    fun_mode: bool = False
+    fun_label: str = ""
+    fun_note: str = ""
 
     @property
     def fingerprint(self) -> str:
@@ -527,6 +563,28 @@ def _hero_section_text(hero: HeroChange) -> str:
     return _hero_card_text(hero)
 
 
+def _is_fun_mode_section(title: str) -> bool:
+    low = (title or "").lower()
+    return any(m in low for m in _FUN_MODE_MARKERS)
+
+
+def _extract_section_blurb(sec: str, *, limit: int = 480) -> str:
+    """Plain intro text from a section, without hero kit cards."""
+    # After split, the section starts with leftover class names + ">"
+    cleaned = re.sub(r"^[^<>]*>", "", sec, count=1)
+    cleaned = re.sub(
+        r'<div class="PatchNotesHeroUpdate">.*?'
+        r'(?=<div class="PatchNotesHeroUpdate">|<div class="PatchNotes-section|$)',
+        "",
+        cleaned,
+        flags=re.S,
+    )
+    cleaned = re.sub(r"<h4.*?</h4>", "", cleaned, count=1, flags=re.S)
+    text = _strip_tags(cleaned)
+    if len(text) > limit:
+        text = text[: limit - 1].rsplit(" ", 1)[0] + "…"
+    return text
+
 
 def _parse_patch_block(block: str) -> PatchSummary | None:
     """Parse one PatchNotes-patch HTML block into a summary."""
@@ -541,19 +599,30 @@ def _parse_patch_block(block: str) -> PatchSummary | None:
         return None
 
     summary = PatchSummary(patch_id=patch_id or title, date=date, title=title)
+    if _is_fun_mode_section(title):
+        summary.fun_mode = True
+        summary.fun_label = "Community Crafted"
 
     sections = re.split(r'<div class="PatchNotes-section ', block)[1:]
-    mode = "retail"
+    mode = "fun" if summary.fun_mode else "retail"
     current_role = ""
 
     for sec in sections:
         sec_title = _strip_tags(_first(r'PatchNotes-sectionTitle"[^>]*>(.*?)</h4>', sec, re.S))
         low = sec_title.lower()
 
-        if low in ("stadium updates", "bug fixes", "custom game updates"):
-            mode = "skip"
+        if _is_fun_mode_section(sec_title):
+            mode = "fun"
+            summary.fun_mode = True
+            summary.fun_label = sec_title or "Community Crafted"
+            if not summary.fun_note:
+                summary.fun_note = _extract_section_blurb(sec)
             continue
-        if mode == "skip":
+
+        if low in ("stadium updates", "bug fixes", "custom game updates"):
+            continue
+
+        if mode == "fun":
             continue
 
         is_hero_section = sec.startswith("PatchNotes-section-hero_update") or (
@@ -634,6 +703,12 @@ def _parse_patch_block(block: str) -> PatchSummary | None:
         seen.add(key)
         unique.append(h)
     summary.heroes = unique
+    if is_fun_mode_patch(summary):
+        summary.fun_mode = True
+        if not summary.fun_label:
+            summary.fun_label = "Community Crafted"
+        if (summary.date or "").strip().lower() in _FUN_MODE_DATES:
+            summary.heroes = []
     return summary
 
 
@@ -767,6 +842,8 @@ def _hero_name_in_patches(patches: list[PatchSummary], hero_query: str) -> bool:
         return False
     compact_q = q.replace(" ", "")
     for summary in patches:
+        if is_fun_mode_patch(summary):
+            continue
         for h in summary.heroes:
             name = (h.name or "").lower()
             compact = name.replace(" ", "")
@@ -886,6 +963,9 @@ def summary_to_payload(summary: PatchSummary) -> str:
             "date": summary.date,
             "title": summary.title,
             "url": summary.url,
+            "fun_mode": bool(summary.fun_mode or is_fun_mode_patch(summary)),
+            "fun_label": summary.fun_label,
+            "fun_note": summary.fun_note,
             "heroes": [
                 {
                     "name": h.name,
@@ -934,13 +1014,21 @@ def summary_from_payload(raw: str) -> PatchSummary | None:
                 changes=changes,
             )
         )
-    return PatchSummary(
+    summary = PatchSummary(
         patch_id=data.get("patch_id") or data.get("title") or "patch",
         date=data.get("date") or "",
         title=data.get("title") or "Overwatch Patch Notes",
         heroes=heroes,
         url=data.get("url") or PATCH_URL,
+        fun_mode=bool(data.get("fun_mode")),
+        fun_label=data.get("fun_label") or "",
+        fun_note=data.get("fun_note") or "",
     )
+    if is_fun_mode_patch(summary):
+        summary.fun_mode = True
+        if not summary.fun_label:
+            summary.fun_label = "Community Crafted"
+    return summary
 
 
 async def send_summary_ephemeral(
@@ -1069,6 +1157,49 @@ class OwPatchHistoryView(discord.ui.View):
         )
 
 
+def _patch_header_line(
+    summary: PatchSummary, *, preview: bool, archive: bool
+) -> str:
+    date_label = summary.date or "Patch"
+    if preview:
+        return f"🧪 **Preview** · **[{date_label}]({summary.url})**"
+    if archive:
+        return f"📜 **Archive** · **[{date_label}]({summary.url})**"
+    return f"**[{date_label}]({summary.url})**"
+
+
+def _fun_mode_body(summary: PatchSummary) -> str:
+    event = (summary.fun_label or "Community Crafted").strip() or "Fun Mode"
+    note = (summary.fun_note or "").strip()
+    if not note:
+        note = (
+            "Limited-time Arcade event with community-designed hero kits. "
+            "This is a fun mode — not Competitive, Quick Play, or ranked balance."
+        )
+    return (
+        f"**🎮  {event} · Arcade fun mode**\n"
+        f"Not Competitive, Quick Play, or ranked — kits from this mode are "
+        f"omitted from Search Hero Changes.\n\n"
+        f"{note}"
+    )
+
+
+def _build_fun_mode_layout(
+    summary: PatchSummary,
+    *,
+    preview: bool = False,
+    archive: bool = False,
+) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(
+        discord.ui.TextDisplay(_patch_header_line(summary, preview=preview, archive=archive))
+    )
+    container = discord.ui.Container(accent_colour=FUN_MODE_COLOR)
+    container.add_item(discord.ui.TextDisplay(_fun_mode_body(summary)))
+    view.add_item(container)
+    return view
+
+
 def build_patch_layouts(
     summary: PatchSummary,
     *,
@@ -1079,17 +1210,15 @@ def build_patch_layouts(
     One colour-accented container per role; each hero is a compact portrait card.
     Discord's 40-component cap may split a large patch into multiple messages.
     """
+    if is_fun_mode_patch(summary):
+        return [_build_fun_mode_layout(summary, preview=preview, archive=archive)]
+
     by_role: dict[str, list[HeroChange]] = {}
     for h in summary.heroes:
         by_role.setdefault(h.role or "Hero Updates", []).append(h)
 
+    header = _patch_header_line(summary, preview=preview, archive=archive)
     date_label = summary.date or "Patch"
-    if preview:
-        header = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
-    elif archive:
-        header = f"📜 **Archive** · **[{date_label}]({summary.url})**"
-    else:
-        header = f"**[{date_label}]({summary.url})**"
 
     if not summary.heroes:
         view = discord.ui.LayoutView(timeout=None)
@@ -1170,6 +1299,19 @@ def build_patch_layouts(
 
 def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
     """Fallback embeds if Components V2 layout is unavailable."""
+    if is_fun_mode_patch(summary):
+        event = (summary.fun_label or "Community Crafted").strip() or "Fun Mode"
+        emb = discord.Embed(
+            title=summary.date or "Overwatch patch",
+            description=(
+                ("🧪 **Preview**\n\n" if preview else "") + _fun_mode_body(summary)
+            ),
+            color=FUN_MODE_COLOR,
+            url=summary.url,
+        )
+        emb.set_author(name=f"Arcade · {event}")
+        return [emb]
+
     color = OW_BLUE if preview else OW_ORANGE
     head = discord.Embed(
         title=summary.date or "Overwatch patch",
@@ -1267,7 +1409,12 @@ class OverwatchPatchCog(commands.Cog):
         layouts = build_patch_layouts(summary, preview=preview)
         return await post_ow_announcement(
             channel,
-            thread_name=patch_thread_title(date=summary.date, title=summary.title),
+            thread_name=patch_thread_title(
+                date=summary.date,
+                title=summary.title,
+                fun_mode=is_fun_mode_patch(summary),
+                fun_label=summary.fun_label or None,
+            ),
             layouts=layouts,
             embeds_fallback=lambda: build_patch_embeds(summary, preview=preview),
             tag_names=OW_PATCH_TAG_NAMES,

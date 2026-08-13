@@ -6,13 +6,20 @@ from pathlib import Path
 
 
 def _payload_has_hero_balance(raw: str | None) -> bool:
-    """True when a stored patch JSON includes at least one hero change line."""
+    """True when a stored patch should stay in the archive (retail or fun mode)."""
     if not raw:
         return False
     try:
         data = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
         return False
+    if data.get("fun_mode"):
+        return True
+    blob = f"{data.get('title') or ''} {data.get('fun_label') or ''}".lower()
+    if "community crafted" in blob:
+        return True
+    if (data.get("date") or "").strip().lower() == "june 30, 2026":
+        return True
     for hero in data.get("heroes") or []:
         if hero.get("changes"):
             return True

@@ -10,6 +10,7 @@ from overwatch_patches import (
     HeroChange,
     PatchSummary,
     fetch_all_patch_summaries,
+    is_fun_mode_patch,
     summary_from_payload,
 )
 
@@ -321,6 +322,8 @@ def extract_hero_query(text: str) -> str | None:
 def find_hero_in_summary(
     summary: PatchSummary, hero_query: str
 ) -> HeroChange | None:
+    if is_fun_mode_patch(summary):
+        return None
     q = hero_query.lower().strip()
     q = HERO_ALIASES.get(q, q)
     compact_q = q.replace(" ", "").replace(":", "")
@@ -367,11 +370,16 @@ async def lookup_hero_patch_history(
         max_months=max_months,
         stop_hero=None,
     )
-    latest_date = (patches[0].date if patches else "") or ""
+    latest_date = next(
+        (p.date for p in patches if p.date and not is_fun_mode_patch(p)),
+        "",
+    )
     hits: list[HeroPatchHit] = []
     seen: set[str] = set()
 
     for i, summary in enumerate(patches):
+        if is_fun_mode_patch(summary):
+            continue
         hero = find_hero_in_summary(summary, hero_query)
         if hero is None:
             continue
@@ -414,7 +422,7 @@ async def lookup_hero_patch_history(
             except Exception:
                 continue
         summary = summary_from_payload(raw or "")
-        if summary is None:
+        if summary is None or is_fun_mode_patch(summary):
             continue
         key = summary.patch_id or summary.date or summary.title
         if key in seen:

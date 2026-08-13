@@ -42,7 +42,13 @@ def forum_thread_name(title: str) -> str:
     return raw[:100]
 
 
-def patch_thread_title(*, date: str | None = None, title: str | None = None) -> str:
+def patch_thread_title(
+    *,
+    date: str | None = None,
+    title: str | None = None,
+    fun_mode: bool = False,
+    fun_label: str | None = None,
+) -> str:
     """Tag already says Patch Notes — keep a short title with the date for freshness."""
     label = (date or "").strip()
     if not label and title:
@@ -52,6 +58,11 @@ def patch_thread_title(*, date: str | None = None, title: str | None = None) -> 
         )
         if m:
             label = m.group(1)
+    if fun_mode:
+        event = (fun_label or "Community Crafted").strip() or "Fun Mode"
+        if label:
+            return forum_thread_name(f"{event} ({label})")
+        return forum_thread_name(event)
     if label:
         return forum_thread_name(f"Hero Balance ({label})")
     return forum_thread_name("Hero Balance")

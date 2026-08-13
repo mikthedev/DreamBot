@@ -1148,10 +1148,10 @@ class OwPatchHistoryView(discord.ui.View):
     async def hero_history(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        from overwatch_hero_history import HeroHistoryBrowseView
+        from overwatch_hero_history import HISTORY_PROMPT, HeroHistoryBrowseView
 
         await interaction.response.send_message(
-            "Browse a hero’s balance history across patch notes:",
+            HISTORY_PROMPT,
             view=HeroHistoryBrowseView(),
             ephemeral=True,
         )
@@ -1473,6 +1473,14 @@ class OverwatchPatchCog(commands.Cog):
             [m.id for m in messages],
             summary_to_payload(summary),
         )
+        try:
+            from overwatch_hero_history import notify_hero_alert_subscribers
+
+            self.bot.loop.create_task(
+                notify_hero_alert_subscribers(self.bot, channel.guild, summary)
+            )
+        except Exception as exc:
+            log.warning("Hero alert dispatch failed to start: %s", exc)
         return messages
 
     async def send_preview_ephemeral(self, interaction: discord.Interaction) -> None:

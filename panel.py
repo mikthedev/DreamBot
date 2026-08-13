@@ -1344,7 +1344,7 @@ class AdminHubView(discord.ui.View):
                 name="Posted",
                 value=(
                     f"**Search Hero Changes** → {channel.mention}\n"
-                    f"_(Live {kind}; tag **Patch Notes**; pick heroes in-thread.)_"
+                    f"_(Live {kind}; tag **Patch Notes**; pick a role, then a hero.)_"
                 ),
                 inline=False,
             )

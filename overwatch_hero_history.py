@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import unicodedata
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import discord
 from discord import app_commands
@@ -13,6 +15,7 @@ from discord.ext import commands
 from ai_ow import (
     HERO_ALIASES,
     HeroPatchHit,
+    _hit_from_summary,
     lookup_hero_patch_history,
 )
 from overwatch_patches import (
@@ -40,6 +43,13 @@ HISTORY_MAX_HITS = 25
 HISTORY_MAX_MONTHS = 24
 # LayoutView allows 4000 display chars; leave room for the header.
 HISTORY_PAGE_CHAR_BUDGET = 3600
+
+HISTORY_PROMPT = "Browse a hero’s balance history across patch notes:"
+ALERT_PROMPT = (
+    "Pick a role, then a hero. I’ll DM you when they’re patched — "
+    "this post stays quiet for everyone else."
+)
+BrowseMode = Literal["history", "alerts"]
 
 
 def _v2_edit_kwargs(view: discord.ui.LayoutView) -> dict:
@@ -119,6 +129,29 @@ for _heroes in HEROES_BY_ROLE.values():
 def display_hero_name(query: str) -> str:
     q = HERO_ALIASES.get((query or "").lower().strip(), (query or "").lower().strip())
     return _DISPLAY_BY_QUERY.get(q, query.strip().title() if query else "Hero")
+
+
+def hero_alert_key(name: str) -> str:
+    """Stable key so ‘Lúcio’ in notes still matches a ‘Lucio’ subscription."""
+    q = (name or "").lower().strip()
+    if not q:
+        return ""
+    q = HERO_ALIASES.get(q, q)
+    folded = unicodedata.normalize("NFKD", q).encode("ascii", "ignore").decode("ascii")
+    q = folded or q
+    return HERO_ALIASES.get(q, q)
+
+
+def _alert_on_for(interaction: discord.Interaction, hero: str) -> bool:
+    guild = interaction.guild
+    if guild is None:
+        return False
+    try:
+        return interaction.client.db.has_hero_alert(
+            guild.id, interaction.user.id, hero_alert_key(hero)
+        )
+    except Exception:
+        return False
 
 
 def _hit_kind_mark(hit: HeroPatchHit) -> str:
@@ -314,12 +347,86 @@ def _attach_history_nav(
         view.add_item(jump_row)
 
 
+def _make_alert_button(
+    hits: list[HeroPatchHit],
+    hero_label: str,
+    page: int,
+    *,
+    alert_on: bool,
+    row: int | None = None,
+) -> discord.ui.Button:
+    kw: dict = {
+        "label": "Stop alerts" if alert_on else "Notify me",
+        "style": (
+            discord.ButtonStyle.secondary
+            if alert_on
+            else discord.ButtonStyle.primary
+        ),
+    }
+    if row is not None:
+        kw["row"] = row
+    btn = discord.ui.Button(**kw)
+
+    async def on_alert(interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            msg = "Alerts only work in a server."
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+            return
+        on = interaction.client.db.toggle_hero_alert(
+            guild.id, interaction.user.id, hero_alert_key(hero_label)
+        )
+        await _replace_hero_history(
+            interaction, hits, hero_label, page, alert_on=on
+        )
+        note = (
+            f"Private alerts for **{hero_label}** are on. I’ll DM you when "
+            "they’re patched — nothing extra is posted here for everyone else."
+            if on
+            else f"Stopped alerts for **{hero_label}**."
+        )
+        if on:
+            note += await _dm_open_warning(interaction.user, guild, hero_label)
+        try:
+            await interaction.followup.send(note, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+    btn.callback = on_alert
+    return btn
+
+
+def _attach_history_actions(
+    view: discord.ui.LayoutView,
+    hits: list[HeroPatchHit],
+    hero_label: str,
+    page: int,
+    total_pages: int,
+    *,
+    alert_on: bool,
+    show_alert: bool,
+) -> None:
+    if total_pages > 1:
+        _attach_history_nav(view, hits, hero_label, page, total_pages)
+    if show_alert:
+        row = discord.ui.ActionRow()
+        row.add_item(
+            _make_alert_button(hits, hero_label, page, alert_on=alert_on)
+        )
+        view.add_item(row)
+
+
 def build_hero_history_layouts(
     hits: list[HeroPatchHit],
     *,
     hero_label: str,
     page: int = 0,
     per_page: int = HISTORY_PER_PAGE,
+    alert_on: bool = False,
+    show_alert: bool = True,
 ) -> tuple[list[discord.ui.LayoutView], int]:
     """
     Compact timeline — few patches per page, full text (overflow → next page).
@@ -328,7 +435,8 @@ def build_hero_history_layouts(
     pages = _history_pages(hits)
     total = max(1, len(pages))
     page = max(0, min(page, total - 1))
-    timeout = HISTORY_NAV_TIMEOUT if total > 1 else None
+    need_actions = (total > 1) or show_alert
+    timeout = HISTORY_NAV_TIMEOUT if need_actions else None
 
     if not hits:
         view = discord.ui.LayoutView(timeout=timeout)
@@ -339,6 +447,15 @@ def build_hero_history_layouts(
                 f"**{hero_label}**\n"
                 "_No retail balance changes in recent patch notes._"
             )
+        )
+        _attach_history_actions(
+            view,
+            hits,
+            hero_label,
+            page,
+            total,
+            alert_on=alert_on,
+            show_alert=show_alert,
         )
         return [view], 1
 
@@ -386,8 +503,15 @@ def build_hero_history_layouts(
         )
         container.add_item(discord.ui.TextDisplay(_history_hit_block(hit)))
 
-    if total > 1:
-        _attach_history_nav(view, hits, hero_label, page, total)
+    _attach_history_actions(
+        view,
+        hits,
+        hero_label,
+        page,
+        total,
+        alert_on=alert_on,
+        show_alert=show_alert,
+    )
 
     return [view], total
 
@@ -435,11 +559,15 @@ async def _replace_hero_history(
     hits: list[HeroPatchHit],
     hero_label: str,
     page: int,
+    *,
+    alert_on: bool | None = None,
 ) -> None:
     """Swap the current history message to another page — never send a new one."""
+    if alert_on is None:
+        alert_on = _alert_on_for(interaction, hero_label)
     try:
         layouts, _ = build_hero_history_layouts(
-            hits, hero_label=hero_label, page=page
+            hits, hero_label=hero_label, page=page, alert_on=alert_on
         )
         await interaction.response.edit_message(**_v2_edit_kwargs(layouts[0]))
         return
@@ -449,12 +577,12 @@ async def _replace_hero_history(
     embeds, total = build_hero_history_embeds(
         hits, hero_label=hero_label, page=page
     )
-    nav = (
-        HeroHistoryNavView(
-            hits=hits, hero_label=hero_label, page=page, total_pages=total
-        )
-        if total > 1
-        else None
+    nav = HeroHistoryNavView(
+        hits=hits,
+        hero_label=hero_label,
+        page=page,
+        total_pages=total,
+        alert_on=alert_on,
     )
     try:
         if interaction.response.is_done():
@@ -480,9 +608,10 @@ async def send_hero_history(
     edit_searching: bool = False,
 ) -> None:
     """One ephemeral history message (results above nav); optionally replace “Searching…”."""
+    alert_on = _alert_on_for(interaction, hero_label)
     try:
         layouts, _ = build_hero_history_layouts(
-            hits, hero_label=hero_label, page=page
+            hits, hero_label=hero_label, page=page, alert_on=alert_on
         )
         if edit_searching:
             try:
@@ -500,12 +629,12 @@ async def send_hero_history(
     embeds, total = build_hero_history_embeds(
         hits, hero_label=hero_label, page=page
     )
-    nav = (
-        HeroHistoryNavView(
-            hits=hits, hero_label=hero_label, page=page, total_pages=total
-        )
-        if total > 1
-        else None
+    nav = HeroHistoryNavView(
+        hits=hits,
+        hero_label=hero_label,
+        page=page,
+        total_pages=total,
+        alert_on=alert_on,
     )
     if edit_searching:
         try:
@@ -528,19 +657,32 @@ class HeroHistoryNavView(discord.ui.View):
         hero_label: str,
         page: int,
         total_pages: int,
+        alert_on: bool = False,
+        show_alert: bool = True,
     ) -> None:
         super().__init__(timeout=HISTORY_NAV_TIMEOUT)
         self.hits = hits
         self.hero_label = hero_label
         self.page = page
         self.total_pages = max(1, total_pages)
-        prev_btn, next_btn, jump = _history_nav_widgets(
-            hits, hero_label, page, self.total_pages, use_rows=True
-        )
-        self.add_item(prev_btn)
-        self.add_item(next_btn)
-        if hits:
-            self.add_item(jump)
+        if self.total_pages > 1:
+            prev_btn, next_btn, jump = _history_nav_widgets(
+                hits, hero_label, page, self.total_pages, use_rows=True
+            )
+            self.add_item(prev_btn)
+            self.add_item(next_btn)
+            if hits:
+                self.add_item(jump)
+        if show_alert:
+            self.add_item(
+                _make_alert_button(
+                    hits,
+                    hero_label,
+                    page,
+                    alert_on=alert_on,
+                    row=2,
+                )
+            )
 
 
 def _jump_options(
@@ -570,7 +712,7 @@ def _jump_options(
 
 
 class HeroRoleSelect(discord.ui.Select):
-    def __init__(self) -> None:
+    def __init__(self, mode: BrowseMode = "history") -> None:
         super().__init__(
             placeholder="Pick a role…",
             min_values=1,
@@ -581,18 +723,21 @@ class HeroRoleSelect(discord.ui.Select):
                 discord.SelectOption(label="Support", value="Support", emoji="💚"),
             ],
         )
+        self.mode = mode
 
     async def callback(self, interaction: discord.Interaction) -> None:
         role = self.values[0]
         heroes = HEROES_BY_ROLE.get(role) or ()
         await interaction.response.edit_message(
             content=f"**{role}** — choose a hero:",
-            view=HeroPickView(role=role, heroes=heroes),
+            view=HeroPickView(role=role, heroes=heroes, mode=self.mode),
         )
 
 
 class HeroPickSelect(discord.ui.Select):
-    def __init__(self, role: str, heroes: tuple[str, ...]) -> None:
+    def __init__(
+        self, role: str, heroes: tuple[str, ...], *, mode: BrowseMode = "history"
+    ) -> None:
         options = [
             discord.SelectOption(label=name, value=name) for name in heroes[:25]
         ]
@@ -604,6 +749,8 @@ class HeroPickSelect(discord.ui.Select):
             or [discord.SelectOption(label="None", value="__none__")],
         )
         self.role = role
+        self.heroes = heroes
+        self.mode = mode
 
     async def callback(self, interaction: discord.Interaction) -> None:
         name = self.values[0]
@@ -612,19 +759,38 @@ class HeroPickSelect(discord.ui.Select):
                 "No heroes in that list.", ephemeral=True
             )
             return
+        if self.mode == "alerts":
+            await _toggle_alert_from_pick(interaction, name, self.role, self.heroes)
+            return
         await _deliver_history(interaction, name)
+        try:
+            await interaction.message.edit(
+                content=f"**{self.role}** — choose a hero:",
+                view=HeroPickView(
+                    role=self.role, heroes=self.heroes, mode=self.mode
+                ),
+            )
+        except discord.HTTPException:
+            pass
 
 
 class HeroPickView(discord.ui.View):
-    def __init__(self, *, role: str, heroes: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        role: str,
+        heroes: tuple[str, ...],
+        mode: BrowseMode = "history",
+    ) -> None:
         super().__init__(timeout=120)
-        self.add_item(HeroPickSelect(role, heroes))
+        self.mode = mode
+        self.add_item(HeroPickSelect(role, heroes, mode=mode))
         back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
 
         async def on_back(interaction: discord.Interaction) -> None:
             await interaction.response.edit_message(
-                content="Browse a hero’s balance history across patch notes:",
-                view=HeroHistoryBrowseView(),
+                content=ALERT_PROMPT if mode == "alerts" else HISTORY_PROMPT,
+                view=HeroHistoryBrowseView(mode=mode),
             )
 
         back.callback = on_back
@@ -634,13 +800,78 @@ class HeroPickView(discord.ui.View):
 class HeroHistoryBrowseView(discord.ui.View):
     """Ephemeral role → hero picker (opened from the patch forum button)."""
 
-    def __init__(self) -> None:
+    def __init__(self, mode: BrowseMode = "history") -> None:
         super().__init__(timeout=120)
-        self.add_item(HeroRoleSelect())
+        self.add_item(HeroRoleSelect(mode=mode))
 
 
-class OwHubHeroSelect(discord.ui.Select):
-    """Persistent per-role hero picker on the public Hero History forum post."""
+class OwHubRoleSelect(discord.ui.Select):
+    """Public Pick a role… — opens a private hero list so the same hero can be searched again."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Pick a role…",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label="Tank", value="Tank", emoji="🛡️"),
+                discord.SelectOption(label="Damage", value="Damage", emoji="⚔️"),
+                discord.SelectOption(label="Support", value="Support", emoji="💚"),
+            ],
+            custom_id="ow_hero_hist:role",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        role = self.values[0]
+        heroes = HEROES_BY_ROLE.get(role) or ()
+        await interaction.response.send_message(
+            f"**{role}** — choose a hero:",
+            view=HeroPickView(role=role, heroes=heroes, mode="history"),
+            ephemeral=True,
+        )
+        try:
+            await interaction.message.edit(view=OwHeroHistoryHubView())
+        except discord.HTTPException:
+            pass
+
+
+class OwHeroHistoryHubView(discord.ui.View):
+    """Public hub for Search Hero Changes (survives restarts)."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(OwHubRoleSelect())
+
+    @discord.ui.button(
+        label="Notify me",
+        style=discord.ButtonStyle.primary,
+        custom_id="ow_hero_hist:notify",
+        row=1,
+    )
+    async def notify_me(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.send_message(
+            ALERT_PROMPT,
+            view=HeroHistoryBrowseView(mode="alerts"),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="My alerts",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ow_hero_hist:my_alerts",
+        row=1,
+    )
+    async def my_alerts(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _send_my_alerts(interaction)
+
+
+class OwLegacyHubHeroSelect(discord.ui.Select):
+    """Keeps older 3-bar hub messages working until the post is republished."""
 
     def __init__(self, role: str, *, row: int) -> None:
         heroes = HEROES_BY_ROLE.get(role) or ()
@@ -670,14 +901,12 @@ class OwHubHeroSelect(discord.ui.Select):
         await _deliver_history(interaction, name)
 
 
-class OwHeroHistoryHubView(discord.ui.View):
-    """Public hub for Search Hero Changes (survives restarts)."""
-
+class OwLegacyHeroHistoryHubView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
-        self.add_item(OwHubHeroSelect("Tank", row=0))
-        self.add_item(OwHubHeroSelect("Damage", row=1))
-        self.add_item(OwHubHeroSelect("Support", row=2))
+        self.add_item(OwLegacyHubHeroSelect("Tank", row=0))
+        self.add_item(OwLegacyHubHeroSelect("Damage", row=1))
+        self.add_item(OwLegacyHubHeroSelect("Support", row=2))
 
 
 def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
@@ -687,7 +916,7 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     container.add_item(
         discord.ui.TextDisplay(
             "**Search Hero Changes**\n"
-            "Pick a hero · see recent buffs & nerfs · newest first."
+            "Pick a role, then a hero · recent buffs & nerfs · newest first."
         )
     )
     container.add_item(
@@ -698,7 +927,8 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     container.add_item(
         discord.ui.TextDisplay(
             f"{_tone_label('▲')}   {_tone_label('▼')}\n"
-            "🛡️ Tank · ⚔️ Damage · 💚 Support — results are private."
+            "Results are private. **Notify me** DMs you when that hero is patched "
+            "— this post stays quiet for everyone else."
         )
     )
     container.add_item(
@@ -718,9 +948,10 @@ def build_hero_history_hub_embeds() -> list[discord.Embed]:
     emb = discord.Embed(
         title="Search Hero Changes",
         description=(
-            "Pick a hero · see recent buffs & nerfs · newest first.\n\n"
+            "Pick a role, then a hero · recent buffs & nerfs · newest first.\n\n"
             f"{_tone_label('▲')} · {_tone_label('▼')}\n"
-            "🛡️ Tank · ⚔️ Damage · 💚 Support — private results.\n\n"
+            "Results are private. Notify me DMs you when that hero is patched "
+            "— this post stays quiet for everyone else.\n\n"
             f"_Also `/hero` · [patch notes]({PATCH_URL})_"
         ),
         color=OW_ORANGE,
@@ -728,6 +959,161 @@ def build_hero_history_hub_embeds() -> list[discord.Embed]:
     )
     emb.set_footer(text="Patch Notes")
     return [emb]
+
+
+async def _toggle_alert_from_pick(
+    interaction: discord.Interaction,
+    hero: str,
+    role: str,
+    heroes: tuple[str, ...],
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "This only works in a server.", ephemeral=True
+        )
+        return
+    label = display_hero_name(hero)
+    on = interaction.client.db.toggle_hero_alert(
+        guild.id, interaction.user.id, hero_alert_key(hero)
+    )
+    if on:
+        content = (
+            f"Private alerts for **{label}** are on. I’ll DM you when they’re "
+            "patched — nothing extra is posted here for everyone else.\n"
+            f"**{role}** — pick another hero, or the same one to turn alerts off."
+        )
+        content += await _dm_open_warning(interaction.user, guild, label)
+    else:
+        content = (
+            f"Stopped alerts for **{label}**.\n"
+            f"**{role}** — choose a hero:"
+        )
+    await interaction.response.edit_message(
+        content=content,
+        view=HeroPickView(role=role, heroes=heroes, mode="alerts"),
+    )
+
+
+async def _dm_open_warning(
+    user: discord.abc.User, guild: discord.Guild, label: str
+) -> str:
+    """Empty if DMs work; otherwise a note to allow server DMs."""
+    try:
+        await user.send(
+            f"Private **{label}** alerts from **{guild.name}** are on. "
+            "I’ll message you here when they’re patched — not in the forum."
+        )
+        return ""
+    except discord.Forbidden:
+        return (
+            "\n\n⚠️ I couldn’t DM you. Allow DMs from server members "
+            "or these alerts can’t reach you."
+        )
+    except discord.HTTPException:
+        return ""
+
+
+async def _send_my_alerts(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "This only works in a server.", ephemeral=True
+        )
+        return
+    keys = interaction.client.db.list_user_hero_alerts(guild.id, interaction.user.id)
+    if not keys:
+        await interaction.response.send_message(
+            "You’re not subscribed to any hero alerts yet. Use **Notify me** "
+            "or the button on a hero’s history.",
+            ephemeral=True,
+        )
+        return
+    names = [display_hero_name(k) for k in keys]
+    listed = ", ".join(f"**{n}**" for n in names)
+    await interaction.response.send_message(
+        f"Private alerts (DM only): {listed}\n"
+        "Use **Notify me** and pick a hero again to turn one off.",
+        ephemeral=True,
+    )
+
+
+async def _send_hero_alert_dm(
+    user: discord.abc.User,
+    hit: HeroPatchHit,
+    label: str,
+    guild: discord.Guild,
+) -> bool:
+    header = (
+        f"**{label}** was patched — private alert from **{guild.name}**.\n"
+        "_Not posted in Search Hero Changes, so the forum stays quiet._"
+    )
+    try:
+        layouts, _ = build_hero_history_layouts(
+            [hit],
+            hero_label=label,
+            page=0,
+            alert_on=True,
+            show_alert=False,
+        )
+        await user.send(content=header, view=layouts[0])
+        return True
+    except discord.Forbidden:
+        log.info("Hero alert DM blocked for user %s", user.id)
+        return False
+    except Exception:
+        try:
+            embeds, _ = build_hero_history_embeds([hit], hero_label=label)
+            await user.send(content=header, embeds=embeds)
+            return True
+        except Exception as exc:
+            log.warning("Hero alert DM failed for %s: %s", user.id, exc)
+            return False
+
+
+async def notify_hero_alert_subscribers(bot, guild: discord.Guild, summary) -> int:
+    """DM each subscriber whose hero is in this retail patch. Never posts publicly."""
+    from overwatch_patches import is_fun_mode_patch
+
+    if summary is None or is_fun_mode_patch(summary) or not summary.heroes:
+        return 0
+    patch_id = summary.fingerprint or summary.patch_id or summary.date or ""
+    if not patch_id:
+        return 0
+    sent = 0
+    for hero in summary.heroes:
+        key = hero_alert_key(hero.name)
+        if not key:
+            continue
+        user_ids = bot.db.list_hero_alert_subscribers(guild.id, key)
+        if not user_ids:
+            continue
+        hit = _hit_from_summary(
+            summary, hero, index=0, latest_date=summary.date or ""
+        )
+        label = display_hero_name(hero.name)
+        for uid in user_ids:
+            if bot.db.was_hero_alert_sent(guild.id, uid, key, patch_id):
+                continue
+            user = guild.get_member(uid) or bot.get_user(uid)
+            if user is None:
+                try:
+                    user = await bot.fetch_user(uid)
+                except discord.HTTPException:
+                    continue
+            ok = await _send_hero_alert_dm(user, hit, label, guild)
+            if ok:
+                bot.db.mark_hero_alert_sent(guild.id, uid, key, patch_id)
+                sent += 1
+            await asyncio.sleep(0.35)
+    if sent:
+        log.info(
+            "Sent %s private hero alerts in %s for %s",
+            sent,
+            guild.name,
+            patch_id,
+        )
+    return sent
 
 
 async def _deliver_history(interaction: discord.Interaction, hero: str) -> None:
@@ -840,7 +1226,7 @@ class OverwatchHeroHistoryCog(commands.Cog):
         self,
         channel: discord.TextChannel | discord.ForumChannel,
     ) -> list[discord.Message]:
-        """One Patch Notes forum post with role → hero menus (unlocked for buttons)."""
+        """One Patch Notes forum post with role → hero picker (unlocked for buttons)."""
         guild_id = channel.guild.id
         existing_thread_id = None
         if isinstance(channel, discord.ForumChannel):
@@ -852,7 +1238,7 @@ class OverwatchHeroHistoryCog(commands.Cog):
             layouts=build_hero_history_hub_layouts(),
             embeds_fallback=build_hero_history_hub_embeds,
             tag_names=OW_PATCH_TAG_NAMES,
-            trailing_content=None,
+            trailing_content=HISTORY_PROMPT,
             trailing_view=OwHeroHistoryHubView(),
             existing_thread_id=existing_thread_id,
         )

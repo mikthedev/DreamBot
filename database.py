@@ -175,6 +175,29 @@ class Database:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ow_hero_alerts (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    hero_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (guild_id, user_id, hero_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ow_hero_alert_sent (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    hero_key TEXT NOT NULL,
+                    patch_id TEXT NOT NULL,
+                    sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (guild_id, user_id, hero_key, patch_id)
+                )
+                """
+            )
         self.purge_empty_ow_patches()
 
     def _ensure_column(
@@ -523,6 +546,118 @@ class Database:
                     ow_hero_history_thread_id = excluded.ow_hero_history_thread_id
                 """,
                 (guild_id, thread_id),
+            )
+
+    def has_hero_alert(self, guild_id: int, user_id: int, hero_key: str) -> bool:
+        key = (hero_key or "").strip().lower()
+        if not key:
+            return False
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM ow_hero_alerts
+                WHERE guild_id = ? AND user_id = ? AND hero_key = ?
+                """,
+                (guild_id, user_id, key),
+            ).fetchone()
+        return row is not None
+
+    def add_hero_alert(self, guild_id: int, user_id: int, hero_key: str) -> None:
+        key = (hero_key or "").strip().lower()
+        if not key:
+            return
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ow_hero_alerts (guild_id, user_id, hero_key)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, user_id, hero_key) DO NOTHING
+                """,
+                (guild_id, user_id, key),
+            )
+
+    def remove_hero_alert(self, guild_id: int, user_id: int, hero_key: str) -> None:
+        key = (hero_key or "").strip().lower()
+        if not key:
+            return
+        with self.connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM ow_hero_alerts
+                WHERE guild_id = ? AND user_id = ? AND hero_key = ?
+                """,
+                (guild_id, user_id, key),
+            )
+
+    def toggle_hero_alert(self, guild_id: int, user_id: int, hero_key: str) -> bool:
+        """True when the user is subscribed after this call."""
+        if self.has_hero_alert(guild_id, user_id, hero_key):
+            self.remove_hero_alert(guild_id, user_id, hero_key)
+            return False
+        self.add_hero_alert(guild_id, user_id, hero_key)
+        return True
+
+    def list_user_hero_alerts(self, guild_id: int, user_id: int) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT hero_key FROM ow_hero_alerts
+                WHERE guild_id = ? AND user_id = ?
+                ORDER BY hero_key
+                """,
+                (guild_id, user_id),
+            ).fetchall()
+        return [str(row["hero_key"]) for row in rows]
+
+    def list_hero_alert_subscribers(self, guild_id: int, hero_key: str) -> list[int]:
+        key = (hero_key or "").strip().lower()
+        if not key:
+            return []
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id FROM ow_hero_alerts
+                WHERE guild_id = ? AND hero_key = ?
+                """,
+                (guild_id, key),
+            ).fetchall()
+        return [int(row["user_id"]) for row in rows]
+
+    def was_hero_alert_sent(
+        self, guild_id: int, user_id: int, hero_key: str, patch_id: str
+    ) -> bool:
+        key = (hero_key or "").strip().lower()
+        pid = (patch_id or "").strip()
+        if not key or not pid:
+            return False
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM ow_hero_alert_sent
+                WHERE guild_id = ? AND user_id = ? AND hero_key = ?
+                  AND patch_id = ?
+                """,
+                (guild_id, user_id, key, pid),
+            ).fetchone()
+        return row is not None
+
+    def mark_hero_alert_sent(
+        self, guild_id: int, user_id: int, hero_key: str, patch_id: str
+    ) -> None:
+        key = (hero_key or "").strip().lower()
+        pid = (patch_id or "").strip()
+        if not key or not pid:
+            return
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ow_hero_alert_sent (
+                    guild_id, user_id, hero_key, patch_id
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, user_id, hero_key, patch_id) DO NOTHING
+                """,
+                (guild_id, user_id, key, pid),
             )
 
     def was_ow_patch_announced(self, guild_id: int, patch_id: str) -> bool:

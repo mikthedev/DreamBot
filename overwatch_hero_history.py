@@ -18,7 +18,8 @@ from overwatch_patches import (
     OW_ORANGE,
     PATCH_URL,
     ROLE_COLOR,
-    _hero_card_text,
+    ROLE_HEADER,
+    _hero_changes_text,
 )
 from ow_forum import (
     OW_PATCH_TAG_NAMES,
@@ -101,15 +102,45 @@ def display_hero_name(query: str) -> str:
     return _DISPLAY_BY_QUERY.get(q, query.strip().title() if query else "Hero")
 
 
+def _hit_kind_mark(hit: HeroPatchHit) -> str:
+    if hit.buffish and not hit.nerfish:
+        return "▲"
+    if hit.nerfish and not hit.buffish:
+        return "▼"
+    if hit.buffish and hit.nerfish:
+        return "▲▼"
+    return "·"
+
+
+def _hit_role_colour(hit: HeroPatchHit) -> discord.Color:
+    if hit.hero and hit.hero.role in ROLE_COLOR:
+        return ROLE_COLOR[hit.hero.role]
+    return OW_ORANGE
+
+
+def _history_hit_body(hit: HeroPatchHit) -> str:
+    """Changes only — hero name lives in the page header."""
+    if hit.hero is not None:
+        return _hero_changes_text(hit.hero) or "_No detail lines_"
+    return "\n".join(f"· {ln}" for ln in hit.lines[:8]) or "_No detail lines_"
+
+
+def _history_hit_block(hit: HeroPatchHit) -> str:
+    date_label = hit.patch_date or "Patch"
+    url = hit.patch_url or PATCH_URL
+    mark = _hit_kind_mark(hit)
+    return f"**[{date_label}]({url})** · {mark}\n{_history_hit_body(hit)}"
+
+
 def build_hero_history_layouts(
     hits: list[HeroPatchHit],
     *,
     hero_label: str,
     page: int = 0,
-    per_page: int = 4,
+    per_page: int = 6,
 ) -> tuple[list[discord.ui.LayoutView], int]:
     """
-    Compact Components V2 cards — one dated block per patch touch.
+    One accented timeline card per page — dated blocks separated by hairlines.
     Returns (layouts_for_this_page, total_pages).
     """
     total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
@@ -117,70 +148,62 @@ def build_hero_history_layouts(
 
     if not hits:
         view = discord.ui.LayoutView(timeout=None)
-        view.add_item(
+        empty = discord.ui.Container(accent_colour=OW_ORANGE)
+        view.add_item(empty)
+        empty.add_item(
             discord.ui.TextDisplay(
-                f"**{hero_label}** · balance history\n"
-                "_No retail hero balance changes found in recent patch notes._"
+                f"**{hero_label}**\n"
+                "_No retail balance changes in recent patch notes._"
             )
         )
         return [view], 1
 
     chunk = hits[page * per_page : (page + 1) * per_page]
     pages_note = f" · {page + 1}/{total}" if total > 1 else ""
-    header = (
-        f"**{hero_label}** · balance history "
-        f"({len(hits)} patch{'es' if len(hits) != 1 else ''}){pages_note}"
+    colour = _hit_role_colour(chunk[0])
+    icon_url = next(
+        (h.hero.icon_url for h in chunk if h.hero and h.hero.icon_url),
+        None,
+    )
+    role_label = ""
+    if chunk[0].hero and chunk[0].hero.role:
+        role_label = ROLE_HEADER.get(
+            chunk[0].hero.role, chunk[0].hero.role.upper()
+        )
+
+    header = f"**{hero_label}**"
+    if role_label:
+        header += f" · {role_label}"
+    header += (
+        f"\n{len(hits)} patch touch"
+        f"{'es' if len(hits) != 1 else ''}"
+        f"{pages_note}"
     )
 
-    BUDGET = 38
-    PATCH_COST = 5  # container + title + section(+thumb) approx
-    views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.TextDisplay(header))
+    container = discord.ui.Container(accent_colour=colour)
+    view.add_item(container)
 
-    def flush() -> None:
-        nonlocal view
-        views.append(view)
-        view = discord.ui.LayoutView(timeout=None)
-        view.add_item(
-            discord.ui.TextDisplay(f"**{hero_label}** · history cont.{pages_note}")
-        )
-
-    for hit in chunk:
-        if view._total_children + PATCH_COST > BUDGET:
-            flush()
-
-        date_label = hit.patch_date or "Patch"
-        url = hit.patch_url or PATCH_URL
-        colour = OW_ORANGE
-        if hit.hero and hit.hero.role in ROLE_COLOR:
-            colour = ROLE_COLOR[hit.hero.role]
-
-        container = discord.ui.Container(accent_colour=colour)
-        view.add_item(container)
+    if icon_url:
         container.add_item(
-            discord.ui.TextDisplay(f"**[{date_label}]({url})**")
-        )
-
-        if hit.hero is not None:
-            card = _hero_card_text(hit.hero)
-            if hit.hero.icon_url:
-                container.add_item(
-                    discord.ui.Section(
-                        card,
-                        accessory=discord.ui.Thumbnail(hit.hero.icon_url),
-                    )
-                )
-            else:
-                container.add_item(discord.ui.TextDisplay(card))
-        else:
-            body = "\n".join(f"• {ln}" for ln in hit.lines[:8]) or "_No detail lines_"
-            container.add_item(
-                discord.ui.TextDisplay(f"**{hit.hero_name}**\n{body}")
+            discord.ui.Section(
+                header,
+                accessory=discord.ui.Thumbnail(icon_url),
             )
+        )
+    else:
+        container.add_item(discord.ui.TextDisplay(header))
 
-    views.append(view)
-    return views, total
+    for i, hit in enumerate(chunk):
+        container.add_item(
+            discord.ui.Separator(
+                visible=True,
+                spacing=discord.SeparatorSpacing.small,
+            )
+        )
+        container.add_item(discord.ui.TextDisplay(_history_hit_block(hit)))
+
+    return [view], total
 
 
 def build_hero_history_embeds(
@@ -188,19 +211,18 @@ def build_hero_history_embeds(
     *,
     hero_label: str,
     page: int = 0,
-    per_page: int = 4,
+    per_page: int = 6,
 ) -> tuple[list[discord.Embed], int]:
     total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
     page = max(0, min(page, total - 1))
+    colour = _hit_role_colour(hits[0]) if hits else OW_ORANGE
     head = discord.Embed(
-        title=f"{hero_label} · balance history",
-        color=OW_ORANGE,
+        title=hero_label,
+        color=colour,
         url=PATCH_URL,
     )
     if not hits:
-        head.description = (
-            "No retail hero balance changes found in recent patch notes."
-        )
+        head.description = "No retail balance changes in recent patch notes."
         return [head], 1
 
     chunk = hits[page * per_page : (page + 1) * per_page]
@@ -209,20 +231,16 @@ def build_hero_history_embeds(
         f"{'es' if len(hits) != 1 else ''}"
         + (f" · page {page + 1}/{total}" if total > 1 else "")
     )
-    embeds: list[discord.Embed] = [head]
-    for hit in chunk:
-        emb = discord.Embed(
-            title=hit.patch_date or "Patch",
-            description=_hero_card_text(hit.hero)
-            if hit.hero
-            else "\n".join(f"• {ln}" for ln in hit.lines[:8]),
-            color=OW_ORANGE,
-            url=hit.patch_url or PATCH_URL,
-        )
-        if hit.hero and hit.hero.icon_url:
-            emb.set_thumbnail(url=hit.hero.icon_url)
-        embeds.append(emb)
-    return embeds, total
+    icon = next(
+        (h.hero.icon_url for h in chunk if h.hero and h.hero.icon_url),
+        None,
+    )
+    if icon:
+        head.set_thumbnail(url=icon)
+
+    body = "\n\n".join(_history_hit_block(h) for h in chunk)
+    head.description = f"{head.description}\n\n{body}"[:4096]
+    return [head], total
 
 
 async def send_hero_history(
@@ -232,7 +250,7 @@ async def send_hero_history(
     hero_label: str,
     page: int = 0,
 ) -> None:
-    """Ephemeral history pages + nav buttons when needed."""
+    """Ephemeral history page; nav only when there are multiple pages."""
     try:
         layouts, total = build_hero_history_layouts(
             hits, hero_label=hero_label, page=page
@@ -247,7 +265,7 @@ async def send_hero_history(
         )
         await interaction.followup.send(embeds=embeds, ephemeral=True)
 
-    if total > 1 or hits:
+    if total > 1:
         await interaction.followup.send(
             view=HeroHistoryNavView(
                 hits=hits, hero_label=hero_label, page=page, total_pages=total
@@ -317,7 +335,7 @@ class HeroHistoryNavView(discord.ui.View):
                 idx = int(jump.values[0])
             except ValueError:
                 idx = 0
-            per_page = 4
+            per_page = 6
             await send_hero_history(
                 interaction,
                 self.hits,
@@ -338,12 +356,13 @@ def _jump_options(
     hits: list[HeroPatchHit], current_page: int
 ) -> list[discord.SelectOption]:
     opts: list[discord.SelectOption] = []
-    per_page = 4
+    per_page = 6
     for i, hit in enumerate(hits[:25]):
         label = hit.patch_date or hit.patch_id or f"Patch {i + 1}"
+        mark = _hit_kind_mark(hit)
         opts.append(
             discord.SelectOption(
-                label=label[:100],
+                label=f"{label} · {mark}"[:100],
                 value=str(i),
                 description=(hit.lines[0][:80] if hit.lines else None),
                 default=(i // per_page) == current_page and i % per_page == 0,
@@ -432,10 +451,11 @@ class OwHubHeroSelect(discord.ui.Select):
         heroes = HEROES_BY_ROLE.get(role) or ()
         emoji = {"Tank": "🛡️", "Damage": "⚔️", "Support": "💚"}.get(role)
         options = [
-            discord.SelectOption(label=name, value=name) for name in heroes[:25]
+            discord.SelectOption(label=name, value=name, emoji=emoji)
+            for name in heroes[:25]
         ]
         super().__init__(
-            placeholder=f"{role} heroes…",
+            placeholder=f"{emoji + ' ' if emoji else ''}{role}…",
             min_values=1,
             max_values=1,
             options=options
@@ -444,9 +464,6 @@ class OwHubHeroSelect(discord.ui.Select):
             row=row,
         )
         self.role = role
-        if emoji and options:
-            # emoji on placeholder isn't supported; put on first option only if needed
-            pass
 
     async def callback(self, interaction: discord.Interaction) -> None:
         name = self.values[0]
@@ -476,9 +493,29 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     container.add_item(
         discord.ui.TextDisplay(
             "**Hero Balance History**\n"
-            "Pick a hero below to see every recent retail balance change — "
-            "same compact cards as patch notes, one character at a time.\n\n"
-            f"_Source: [Blizzard patch notes]({PATCH_URL}) + this server’s archive._"
+            "One hero · every recent retail change · newest first."
+        )
+    )
+    container.add_item(
+        discord.ui.Separator(
+            visible=True, spacing=discord.SeparatorSpacing.small
+        )
+    )
+    container.add_item(
+        discord.ui.TextDisplay(
+            "🛡️ **Tank**   ⚔️ **Damage**   💚 **Support**\n"
+            "Pick a hero in the menus below — results stay private to you."
+        )
+    )
+    container.add_item(
+        discord.ui.Separator(
+            visible=True, spacing=discord.SeparatorSpacing.small
+        )
+    )
+    container.add_item(
+        discord.ui.TextDisplay(
+            f"_Live [patch notes]({PATCH_URL}) + this server’s archive · "
+            "also `/hero` anywhere._"
         )
     )
     return [view]
@@ -488,13 +525,15 @@ def build_hero_history_hub_embeds() -> list[discord.Embed]:
     emb = discord.Embed(
         title="Hero Balance History",
         description=(
-            "Pick a hero below to see every recent retail balance change — "
-            "same compact cards as patch notes, one character at a time."
+            "One hero · every recent retail change · newest first.\n\n"
+            "🛡️ **Tank** · ⚔️ **Damage** · 💚 **Support**\n"
+            "Use the menus below — results are private to you.\n\n"
+            f"_Also `/hero` anywhere · [patch notes]({PATCH_URL})_"
         ),
         color=OW_ORANGE,
         url=PATCH_URL,
     )
-    emb.set_footer(text="Tank / Damage / Support menus · Patch Notes")
+    emb.set_footer(text="Patch Notes")
     return [emb]
 
 
@@ -591,7 +630,7 @@ class OverwatchHeroHistoryCog(commands.Cog):
             layouts=build_hero_history_hub_layouts(),
             embeds_fallback=build_hero_history_hub_embeds,
             tag_names=OW_PATCH_TAG_NAMES,
-            trailing_content="Choose a hero:",
+            trailing_content=None,
             trailing_view=OwHeroHistoryHubView(),
             existing_thread_id=existing_thread_id,
         )

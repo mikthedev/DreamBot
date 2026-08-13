@@ -80,7 +80,7 @@ The bot notices when several people on the server have recently played the same 
 6. **Social invites** — once the minimum shows up, the bot may DM people who often sit in voice or play with that group: “Ilya, Sasha and Edik are getting together… Wanna join them?”
 7. **Discord Event** — at the minimum (or when an admin taps Create event), a scheduled event is created on the **existing** voice channel you picked (e.g. General). No extra channels.
 
-**Required:** in the [Discord Developer Portal](https://discord.com/developers/applications) → Bot → Privileged Gateway Intents, turn on **Presence Intent** (alongside Server Members and Message Content). Without it, the bot may fail to start, and game history stays empty. The bot also needs **Create Events** (and the usual send/embed permissions) on the suggestion and voice channels. Personal invites are DMs — members who block DMs are skipped.
+**Required for automatic game history:** in the [Discord Developer Portal](https://discord.com/developers/applications) → Bot → Privileged Gateway Intents, turn on **Presence Intent**, then set `PLAY_PRESENCE_INTENT=1` in the host env and restart. The bot starts without it (manual suggestions still work); requesting Presence before it is enabled in the portal crashes login. The bot also needs **Create Events** (and the usual send/embed permissions) on the suggestion and voice channels. Personal invites are DMs — members who block DMs are skipped.
 
 Auto suggestions, auto events, and personal invites each have an on/off toggle. Detection never publishes if auto is off — Review still shows overlap so you can post by hand.
 

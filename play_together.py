@@ -550,7 +550,7 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
             lines.append(f"**{row['game_name']}** · {stamp} · {n} in · `{row['status']}`")
         embed.add_field(name="Open sessions", value="\n".join(lines), inline=False)
     embed.set_footer(
-        text="Presence Intent must be on in the Discord Developer Portal"
+        text="Set PLAY_PRESENCE_INTENT=1 after enabling Presence Intent in the Developer Portal"
     )
     return embed
 

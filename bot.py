@@ -53,7 +53,7 @@ class DreamTeamBot(commands.Bot):
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
-        intents.presences = True
+        intents.presences = config.PLAY_PRESENCE_INTENT
 
         super().__init__(command_prefix="!", intents=intents)
         self.db = db
@@ -81,6 +81,14 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(AICog(self))
         await self.add_cog(VoiceAICog(self))
         await self.add_cog(PlayTogetherCog(self))
+        if config.PLAY_PRESENCE_INTENT:
+            log.info("Play together: Presence Intent on — tracking game activity")
+        else:
+            log.warning(
+                "Play together: Presence Intent off — bot will start, but game "
+                "history stays empty until you enable Presence Intent in the "
+                "Developer Portal and set PLAY_PRESENCE_INTENT=1"
+            )
         if config.GROQ_API_KEY:
             log.info("Free Groq Llama AI enabled (model=%s)", config.GROQ_MODEL)
         else:

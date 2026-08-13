@@ -287,6 +287,8 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
             "One locked **forum post** is updated in place (title + body) when a new "
             "patch drops — reactions only, no comments. "
             "**Previous patches** still opens archives privately.\n\n"
+            "**Hero history** — one **Patch Notes** forum hub with Tank / Damage / Support "
+            "menus. Pick a hero to browse every recent balance touch (`/hero` works anywhere).\n\n"
             "**Tier list** — [Counterwatch]({tier_url}), about every "
             "**{days} days**. Same single-post overwrite with hero emojis + win / pick "
             "rates (tag **META**).\n\n"
@@ -1094,6 +1096,7 @@ class AdminHubView(discord.ui.View):
             )
             self.bot.db.set_ow_patch_channel(self.guild_id, int(channel_id))
             self.bot.db.set_ow_patch_thread_id(self.guild_id, None)
+            self.bot.db.set_ow_hero_history_thread_id(self.guild_id, None)
             cog = self.bot.get_cog("OverwatchPatchCog")
             note = f"Patch channel set to {mention}."
             if cog is not None:
@@ -1202,31 +1205,50 @@ class AdminHubView(discord.ui.View):
         self.add_item(tier_pick)
         self.add_item(news_pick)
 
-        # Row 4 only has 5 slots (news select took row 3)
-        post_patch = discord.ui.Button(
-            label="Post patch",
-            style=discord.ButtonStyle.success,
+        # Row 4 only has 5 slots — use one Publish menu for all post actions
+        publish = discord.ui.Select(
+            placeholder="Publish to forum…",
+            min_values=1,
+            max_values=1,
             row=4,
-        )
-        post_tier = discord.ui.Button(
-            label="Post tier",
-            style=discord.ButtonStyle.success,
-            row=4,
-        )
-        post_meta = discord.ui.Button(
-            label="Post META",
-            style=discord.ButtonStyle.success,
-            row=4,
-        )
-        post_news = discord.ui.Button(
-            label="Post news",
-            style=discord.ButtonStyle.success,
-            row=4,
-        )
-        custom_news = discord.ui.Button(
-            label="Custom post",
-            style=discord.ButtonStyle.primary,
-            row=4,
+            options=[
+                discord.SelectOption(
+                    label="Post patch",
+                    value="patch",
+                    description="Latest hero balance notes",
+                    emoji="📝",
+                ),
+                discord.SelectOption(
+                    label="Post hero history",
+                    value="hero",
+                    description="Hub to browse one hero across patches",
+                    emoji="📜",
+                ),
+                discord.SelectOption(
+                    label="Post tier",
+                    value="tier",
+                    description="Counterwatch tier list",
+                    emoji="📊",
+                ),
+                discord.SelectOption(
+                    label="Post META",
+                    value="meta",
+                    description="Best heroes to main",
+                    emoji="⭐",
+                ),
+                discord.SelectOption(
+                    label="Post news",
+                    value="news",
+                    description="Seed recent Bluesky news",
+                    emoji="📰",
+                ),
+                discord.SelectOption(
+                    label="Custom post",
+                    value="custom",
+                    description="Manual news / custom forum post",
+                    emoji="✏️",
+                ),
+            ],
         )
 
         async def on_post_patch(interaction: discord.Interaction) -> None:
@@ -1287,6 +1309,60 @@ class AdminHubView(discord.ui.View):
                 value=(
                     f"**{summary.title}** → {channel.mention}\n"
                     f"_(Live {kind}; reactions allowed, no comments.)_"
+                ),
+                inline=False,
+            )
+            self._rebuild()
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        async def on_post_hero_history(interaction: discord.Interaction) -> None:
+            if not await self._admin_ok(interaction):
+                return
+            channel_id = self.bot.db.get_ow_patch_channel(self.guild_id)
+            if not channel_id:
+                await interaction.response.send_message(
+                    "Set a patch channel first.", ephemeral=True
+                )
+                return
+            channel = (
+                interaction.guild.get_channel(channel_id) if interaction.guild else None
+            )
+            if channel is None and interaction.guild is not None:
+                try:
+                    channel = await interaction.guild.fetch_channel(channel_id)
+                except discord.HTTPException:
+                    channel = None
+            if not is_ow_destination(channel):
+                await interaction.response.send_message(
+                    "Patch channel missing — pick a forum (or text) channel again.",
+                    ephemeral=True,
+                )
+                return
+            cog = self.bot.get_cog("OverwatchHeroHistoryCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    "Hero history cog not loaded.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            try:
+                await cog.publish_hub(channel)
+            except Exception as exc:
+                await interaction.followup.send(
+                    f"Hero history post failed: {exc}", ephemeral=True
+                )
+                return
+            kind = (
+                "forum post (edited in place)"
+                if isinstance(channel, discord.ForumChannel)
+                else "channel"
+            )
+            embed = hub_overwatch_embed(interaction.guild, self.bot)
+            embed.add_field(
+                name="Posted",
+                value=(
+                    f"**Hero Balance History** → {channel.mention}\n"
+                    f"_(Live {kind}; tag **Patch Notes**; pick heroes in-thread.)_"
                 ),
                 inline=False,
             )
@@ -1454,16 +1530,27 @@ class AdminHubView(discord.ui.View):
                 return
             await interaction.response.send_modal(CustomNewsModal(self))
 
-        post_patch.callback = on_post_patch
-        post_tier.callback = on_post_tier
-        post_meta.callback = on_post_meta
-        post_news.callback = on_post_news
-        custom_news.callback = on_custom_news
-        self.add_item(post_patch)
-        self.add_item(post_tier)
-        self.add_item(post_meta)
-        self.add_item(post_news)
-        self.add_item(custom_news)
+        async def on_publish(interaction: discord.Interaction) -> None:
+            choice = publish.values[0] if publish.values else ""
+            if choice == "patch":
+                await on_post_patch(interaction)
+            elif choice == "hero":
+                await on_post_hero_history(interaction)
+            elif choice == "tier":
+                await on_post_tier(interaction)
+            elif choice == "meta":
+                await on_post_meta(interaction)
+            elif choice == "news":
+                await on_post_news(interaction)
+            elif choice == "custom":
+                await on_custom_news(interaction)
+            else:
+                await interaction.response.send_message(
+                    "Unknown publish action.", ephemeral=True
+                )
+
+        publish.callback = on_publish
+        self.add_item(publish)
 
     def _add_onboard_controls(self) -> None:
         ch_select = discord.ui.ChannelSelect(

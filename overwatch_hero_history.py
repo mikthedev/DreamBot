@@ -20,6 +20,11 @@ from overwatch_patches import (
     ROLE_COLOR,
     _hero_card_text,
 )
+from ow_forum import (
+    OW_PATCH_TAG_NAMES,
+    hero_history_thread_title,
+    post_ow_announcement,
+)
 
 if TYPE_CHECKING:
     from bot import DreamTeamBot
@@ -420,6 +425,79 @@ class HeroHistoryBrowseView(discord.ui.View):
         self.add_item(HeroRoleSelect())
 
 
+class OwHubHeroSelect(discord.ui.Select):
+    """Persistent per-role hero picker on the public Hero History forum post."""
+
+    def __init__(self, role: str, *, row: int) -> None:
+        heroes = HEROES_BY_ROLE.get(role) or ()
+        emoji = {"Tank": "🛡️", "Damage": "⚔️", "Support": "💚"}.get(role)
+        options = [
+            discord.SelectOption(label=name, value=name) for name in heroes[:25]
+        ]
+        super().__init__(
+            placeholder=f"{role} heroes…",
+            min_values=1,
+            max_values=1,
+            options=options
+            or [discord.SelectOption(label="None", value="__none__")],
+            custom_id=f"ow_hero_hist:{role.lower()}",
+            row=row,
+        )
+        self.role = role
+        if emoji and options:
+            # emoji on placeholder isn't supported; put on first option only if needed
+            pass
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        name = self.values[0]
+        if name == "__none__":
+            await interaction.response.send_message(
+                "No heroes in that list.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _deliver_history(interaction, name)
+
+
+class OwHeroHistoryHubView(discord.ui.View):
+    """Public hub under the Hero Balance History forum post (survives restarts)."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(OwHubHeroSelect("Tank", row=0))
+        self.add_item(OwHubHeroSelect("Damage", row=1))
+        self.add_item(OwHubHeroSelect("Support", row=2))
+
+
+def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
+    view = discord.ui.LayoutView(timeout=None)
+    container = discord.ui.Container(accent_colour=OW_ORANGE)
+    view.add_item(container)
+    container.add_item(
+        discord.ui.TextDisplay(
+            "**Hero Balance History**\n"
+            "Pick a hero below to see every recent retail balance change — "
+            "same compact cards as patch notes, one character at a time.\n\n"
+            f"_Source: [Blizzard patch notes]({PATCH_URL}) + this server’s archive._"
+        )
+    )
+    return [view]
+
+
+def build_hero_history_hub_embeds() -> list[discord.Embed]:
+    emb = discord.Embed(
+        title="Hero Balance History",
+        description=(
+            "Pick a hero below to see every recent retail balance change — "
+            "same compact cards as patch notes, one character at a time."
+        ),
+        color=OW_ORANGE,
+        url=PATCH_URL,
+    )
+    emb.set_footer(text="Tank / Damage / Support menus · Patch Notes")
+    return [emb]
+
+
 async def _deliver_history(interaction: discord.Interaction, hero: str) -> None:
     guild = interaction.guild
     if guild is None:
@@ -475,7 +553,7 @@ async def hero_autocomplete(
 
 
 class OverwatchHeroHistoryCog(commands.Cog):
-    """Slash `/hero` — full balance timeline for one hero."""
+    """Slash `/hero` + panel-posted Hero Balance History hub."""
 
     def __init__(self, bot: DreamTeamBot) -> None:
         self.bot = bot
@@ -496,6 +574,30 @@ class OverwatchHeroHistoryCog(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         await _deliver_history(interaction, hero)
+
+    async def publish_hub(
+        self,
+        channel: discord.TextChannel | discord.ForumChannel,
+    ) -> list[discord.Message]:
+        """One locked Patch Notes forum post with role → hero menus."""
+        guild_id = channel.guild.id
+        existing_thread_id = None
+        if isinstance(channel, discord.ForumChannel):
+            existing_thread_id = self.bot.db.get_ow_hero_history_thread_id(guild_id)
+
+        messages, thread_id = await post_ow_announcement(
+            channel,
+            thread_name=hero_history_thread_title(),
+            layouts=build_hero_history_hub_layouts(),
+            embeds_fallback=build_hero_history_hub_embeds,
+            tag_names=OW_PATCH_TAG_NAMES,
+            trailing_content="Choose a hero:",
+            trailing_view=OwHeroHistoryHubView(),
+            existing_thread_id=existing_thread_id,
+        )
+        if thread_id is not None:
+            self.bot.db.set_ow_hero_history_thread_id(guild_id, thread_id)
+        return messages
 
 
 async def setup(bot: DreamTeamBot) -> None:

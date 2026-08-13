@@ -70,6 +70,10 @@ def meta_thread_title(*, season: str | None) -> str:
     return forum_thread_name("Best to main")
 
 
+def hero_history_thread_title() -> str:
+    return forum_thread_name("Hero Balance History")
+
+
 async def resolve_forum_tags(
     forum: discord.ForumChannel, names: Sequence[str]
 ) -> list[discord.ForumTag]:

@@ -22,7 +22,7 @@ from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
 from overwatch_tierlist import OverwatchTierCog
 from overwatch_meta import OverwatchMetaCog
 from overwatch_news import OverwatchNewsCog
-from overwatch_hero_history import OverwatchHeroHistoryCog
+from overwatch_hero_history import OverwatchHeroHistoryCog, OwHeroHistoryHubView
 from onboarding import OnboardingView
 from panel import PanelCog
 from anniversary import AnniversaryCog
@@ -52,6 +52,7 @@ class DreamTeamBot(commands.Bot):
         self.add_view(BirthdaySignupView())
         self.add_view(WelcomeNameView())
         self.add_view(OwPatchHistoryView())
+        self.add_view(OwHeroHistoryHubView())
         self.add_view(OnboardingView())
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))

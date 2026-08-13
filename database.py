@@ -88,6 +88,9 @@ class Database:
             self._ensure_column(conn, "guild_settings", "welcome_message", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_patch_channel_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "ow_patch_thread_id", "INTEGER")
+            self._ensure_column(
+                conn, "guild_settings", "ow_hero_history_thread_id", "INTEGER"
+            )
             self._ensure_column(conn, "guild_settings", "ow_tier_channel_id", "INTEGER")
             self._ensure_column(conn, "guild_settings", "ow_tier_last_posted_at", "TEXT")
             self._ensure_column(conn, "guild_settings", "ow_tier_message_ids", "TEXT")
@@ -491,6 +494,26 @@ class Database:
                 VALUES (?, ?)
                 ON CONFLICT(guild_id) DO UPDATE SET
                     ow_patch_thread_id = excluded.ow_patch_thread_id
+                """,
+                (guild_id, thread_id),
+            )
+
+    def get_ow_hero_history_thread_id(self, guild_id: int) -> int | None:
+        settings = self.get_settings(guild_id)
+        if not settings or not settings["ow_hero_history_thread_id"]:
+            return None
+        return int(settings["ow_hero_history_thread_id"])
+
+    def set_ow_hero_history_thread_id(
+        self, guild_id: int, thread_id: int | None
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, ow_hero_history_thread_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    ow_hero_history_thread_id = excluded.ow_hero_history_thread_id
                 """,
                 (guild_id, thread_id),
             )

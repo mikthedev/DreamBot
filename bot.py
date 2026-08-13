@@ -25,6 +25,7 @@ from overwatch_news import OverwatchNewsCog
 from overwatch_hero_history import (
     OverwatchHeroHistoryCog,
     OwHeroHistoryHubView,
+    OwHubRoleSelectLegacyView,
     OwLegacyHeroHistoryHubView,
 )
 from onboarding import OnboardingView
@@ -64,6 +65,8 @@ class DreamTeamBot(commands.Bot):
         self.add_view(WelcomeNameView())
         self.add_view(OwPatchHistoryView())
         self.add_view(OwHeroHistoryHubView())
+        # Older Search Hero Changes posts may still have Pick a role… / 3 bars
+        self.add_view(OwHubRoleSelectLegacyView())
         self.add_view(OwLegacyHeroHistoryHubView())
         self.add_view(OnboardingView())
         self.add_view(PlayRsvpView())

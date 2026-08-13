@@ -762,16 +762,8 @@ class HeroPickSelect(discord.ui.Select):
         if self.mode == "alerts":
             await _toggle_alert_from_pick(interaction, name, self.role, self.heroes)
             return
-        await _deliver_history(interaction, name)
-        try:
-            await interaction.message.edit(
-                content=f"**{self.role}** — choose a hero:",
-                view=HeroPickView(
-                    role=self.role, heroes=self.heroes, mode=self.mode
-                ),
-            )
-        except discord.HTTPException:
-            pass
+        # Same message: Searching… → history (no extra ephemeral)
+        await _deliver_history(interaction, name, replace_picker=True)
 
 
 class HeroPickView(discord.ui.View):
@@ -805,8 +797,60 @@ class HeroHistoryBrowseView(discord.ui.View):
         self.add_item(HeroRoleSelect(mode=mode))
 
 
+async def _open_private_browse(
+    interaction: discord.Interaction, *, mode: BrowseMode
+) -> None:
+    """One ephemeral message — role → hero edits in place (no chat flood)."""
+    prompt = ALERT_PROMPT if mode == "alerts" else HISTORY_PROMPT
+    await interaction.response.send_message(
+        prompt,
+        view=HeroHistoryBrowseView(mode=mode),
+        ephemeral=True,
+    )
+
+
+class OwHeroHistoryHubView(discord.ui.View):
+    """Public hub for Search Hero Changes (survives restarts)."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Browse heroes",
+        style=discord.ButtonStyle.primary,
+        custom_id="ow_hero_hist:browse",
+        row=0,
+    )
+    async def browse_heroes(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _open_private_browse(interaction, mode="history")
+
+    @discord.ui.button(
+        label="Notify me",
+        style=discord.ButtonStyle.primary,
+        custom_id="ow_hero_hist:notify",
+        row=0,
+    )
+    async def notify_me(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _open_private_browse(interaction, mode="alerts")
+
+    @discord.ui.button(
+        label="My alerts",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ow_hero_hist:my_alerts",
+        row=0,
+    )
+    async def my_alerts(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _send_my_alerts(interaction)
+
+
 class OwHubRoleSelect(discord.ui.Select):
-    """Public Pick a role… — opens a private hero list so the same hero can be searched again."""
+    """Older hub posts with Pick a role… — open the same private browse message."""
 
     def __init__(self) -> None:
         super().__init__(
@@ -823,6 +867,7 @@ class OwHubRoleSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        # One private message starting at the chosen role (edits in place from there).
         role = self.values[0]
         heroes = HEROES_BY_ROLE.get(role) or ()
         await interaction.response.send_message(
@@ -836,38 +881,12 @@ class OwHubRoleSelect(discord.ui.Select):
             pass
 
 
-class OwHeroHistoryHubView(discord.ui.View):
-    """Public hub for Search Hero Changes (survives restarts)."""
+class OwHubRoleSelectLegacyView(discord.ui.View):
+    """Persistent handler for older hubs that still show Pick a role…"""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self.add_item(OwHubRoleSelect())
-
-    @discord.ui.button(
-        label="Notify me",
-        style=discord.ButtonStyle.primary,
-        custom_id="ow_hero_hist:notify",
-        row=1,
-    )
-    async def notify_me(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        await interaction.response.send_message(
-            ALERT_PROMPT,
-            view=HeroHistoryBrowseView(mode="alerts"),
-            ephemeral=True,
-        )
-
-    @discord.ui.button(
-        label="My alerts",
-        style=discord.ButtonStyle.secondary,
-        custom_id="ow_hero_hist:my_alerts",
-        row=1,
-    )
-    async def my_alerts(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        await _send_my_alerts(interaction)
 
 
 class OwLegacyHubHeroSelect(discord.ui.Select):
@@ -916,7 +935,7 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     container.add_item(
         discord.ui.TextDisplay(
             "**Search Hero Changes**\n"
-            "Pick a role, then a hero · recent buffs & nerfs · newest first."
+            "**Browse heroes** opens a private picker (role → hero in one message)."
         )
     )
     container.add_item(
@@ -927,7 +946,7 @@ def build_hero_history_hub_layouts() -> list[discord.ui.LayoutView]:
     container.add_item(
         discord.ui.TextDisplay(
             f"{_tone_label('▲')}   {_tone_label('▼')}\n"
-            "Results are private. **Notify me** DMs you when that hero is patched "
+            "Results stay private. **Notify me** DMs you when that hero is patched "
             "— this post stays quiet for everyone else."
         )
     )
@@ -948,9 +967,9 @@ def build_hero_history_hub_embeds() -> list[discord.Embed]:
     emb = discord.Embed(
         title="Search Hero Changes",
         description=(
-            "Pick a role, then a hero · recent buffs & nerfs · newest first.\n\n"
+            "Browse heroes opens a private picker (role → hero in one message).\n\n"
             f"{_tone_label('▲')} · {_tone_label('▼')}\n"
-            "Results are private. Notify me DMs you when that hero is patched "
+            "Results stay private. Notify me DMs you when that hero is patched "
             "— this post stays quiet for everyone else.\n\n"
             f"_Also `/hero` · [patch notes]({PATCH_URL})_"
         ),
@@ -1116,7 +1135,12 @@ async def notify_hero_alert_subscribers(bot, guild: discord.Guild, summary) -> i
     return sent
 
 
-async def _deliver_history(interaction: discord.Interaction, hero: str) -> None:
+async def _deliver_history(
+    interaction: discord.Interaction,
+    hero: str,
+    *,
+    replace_picker: bool = False,
+) -> None:
     guild = interaction.guild
     if guild is None:
         if interaction.response.is_done():
@@ -1135,6 +1159,14 @@ async def _deliver_history(interaction: discord.Interaction, hero: str) -> None:
             f"🔍 Searching **{label}**…", ephemeral=True
         )
         edit_searching = False
+    elif replace_picker:
+        # Stay on the same ephemeral (role → hero → results)
+        await interaction.response.edit_message(
+            content=f"🔍 Searching **{label}**…",
+            view=None,
+            embed=None,
+        )
+        edit_searching = True
     else:
         await interaction.response.send_message(
             f"🔍 Searching **{label}**…", ephemeral=True
@@ -1153,7 +1185,7 @@ async def _deliver_history(interaction: discord.Interaction, hero: str) -> None:
         msg = f"Could not load history for **{label}** right now."
         if edit_searching:
             try:
-                await interaction.edit_original_response(content=msg)
+                await interaction.edit_original_response(content=msg, view=None)
                 return
             except Exception:
                 pass
@@ -1238,7 +1270,7 @@ class OverwatchHeroHistoryCog(commands.Cog):
             layouts=build_hero_history_hub_layouts(),
             embeds_fallback=build_hero_history_hub_embeds,
             tag_names=OW_PATCH_TAG_NAMES,
-            trailing_content=HISTORY_PROMPT,
+            trailing_content="Private browse · alerts by DM:",
             trailing_view=OwHeroHistoryHubView(),
             existing_thread_id=existing_thread_id,
         )

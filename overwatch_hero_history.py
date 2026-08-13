@@ -33,6 +33,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dream_team.ow_hero_history")
 
+HISTORY_PER_PAGE = 3
+HISTORY_NAV_TIMEOUT = 180.0
+
 # Display name → role for forum select menus (≤25 options per role)
 HEROES_BY_ROLE: dict[str, tuple[str, ...]] = {
     "Tank": (
@@ -136,12 +139,91 @@ def _history_hit_block(hit: HeroPatchHit) -> str:
     return f"**[{date_label}]({url})** · {mark}\n{_history_hit_body(hit)}"
 
 
+def _history_nav_widgets(
+    hits: list[HeroPatchHit],
+    hero_label: str,
+    page: int,
+    total_pages: int,
+    *,
+    use_rows: bool,
+) -> tuple[discord.ui.Button, discord.ui.Button, discord.ui.Select]:
+    """Newer / Older + jump select. Clicks edit the same message."""
+    prev_kw: dict = {
+        "label": "Newer",
+        "style": discord.ButtonStyle.secondary,
+        "disabled": page <= 0,
+    }
+    next_kw: dict = {
+        "label": "Older",
+        "style": discord.ButtonStyle.secondary,
+        "disabled": page >= total_pages - 1,
+    }
+    jump_kw: dict = {
+        "placeholder": f"Jump to patch… ({page + 1}/{total_pages})",
+        "min_values": 1,
+        "max_values": 1,
+        "options": _jump_options(hits, page),
+    }
+    if use_rows:
+        prev_kw["row"] = 0
+        next_kw["row"] = 0
+        jump_kw["row"] = 1
+    prev_btn = discord.ui.Button(**prev_kw)
+    next_btn = discord.ui.Button(**next_kw)
+    jump = discord.ui.Select(**jump_kw)
+
+    async def on_prev(interaction: discord.Interaction) -> None:
+        await _replace_hero_history(
+            interaction, hits, hero_label, max(0, page - 1)
+        )
+
+    async def on_next(interaction: discord.Interaction) -> None:
+        await _replace_hero_history(
+            interaction, hits, hero_label, min(total_pages - 1, page + 1)
+        )
+
+    async def on_jump(interaction: discord.Interaction) -> None:
+        try:
+            idx = int(jump.values[0])
+        except ValueError:
+            idx = 0
+        await _replace_hero_history(
+            interaction, hits, hero_label, idx // HISTORY_PER_PAGE
+        )
+
+    prev_btn.callback = on_prev
+    next_btn.callback = on_next
+    jump.callback = on_jump
+    return prev_btn, next_btn, jump
+
+
+def _attach_history_nav(
+    view: discord.ui.LayoutView,
+    hits: list[HeroPatchHit],
+    hero_label: str,
+    page: int,
+    total_pages: int,
+) -> None:
+    """Keep results above the nav bar, in the same message."""
+    prev_btn, next_btn, jump = _history_nav_widgets(
+        hits, hero_label, page, total_pages, use_rows=False
+    )
+    btn_row = discord.ui.ActionRow()
+    btn_row.add_item(prev_btn)
+    btn_row.add_item(next_btn)
+    view.add_item(btn_row)
+    if hits:
+        jump_row = discord.ui.ActionRow()
+        jump_row.add_item(jump)
+        view.add_item(jump_row)
+
+
 def build_hero_history_layouts(
     hits: list[HeroPatchHit],
     *,
     hero_label: str,
     page: int = 0,
-    per_page: int = 3,
+    per_page: int = HISTORY_PER_PAGE,
 ) -> tuple[list[discord.ui.LayoutView], int]:
     """
     Compact timeline — few patches per page, one line per tweak.
@@ -149,9 +231,10 @@ def build_hero_history_layouts(
     """
     total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
     page = max(0, min(page, total - 1))
+    timeout = HISTORY_NAV_TIMEOUT if total > 1 else None
 
     if not hits:
-        view = discord.ui.LayoutView(timeout=None)
+        view = discord.ui.LayoutView(timeout=timeout)
         empty = discord.ui.Container(accent_colour=OW_ORANGE)
         view.add_item(empty)
         empty.add_item(
@@ -183,7 +266,7 @@ def build_hero_history_layouts(
         f"{pages_note} · {_tone_label('▲')} · {_tone_label('▼')}"
     )
 
-    view = discord.ui.LayoutView(timeout=None)
+    view = discord.ui.LayoutView(timeout=timeout)
     container = discord.ui.Container(accent_colour=colour)
     view.add_item(container)
 
@@ -206,6 +289,9 @@ def build_hero_history_layouts(
         )
         container.add_item(discord.ui.TextDisplay(_history_hit_block(hit)))
 
+    if total > 1:
+        _attach_history_nav(view, hits, hero_label, page, total)
+
     return [view], total
 
 
@@ -214,7 +300,7 @@ def build_hero_history_embeds(
     *,
     hero_label: str,
     page: int = 0,
-    per_page: int = 3,
+    per_page: int = HISTORY_PER_PAGE,
 ) -> tuple[list[discord.Embed], int]:
     total = max(1, (len(hits) + per_page - 1) // per_page) if hits else 1
     page = max(0, min(page, total - 1))
@@ -246,6 +332,53 @@ def build_hero_history_embeds(
     return [head], total
 
 
+async def _replace_hero_history(
+    interaction: discord.Interaction,
+    hits: list[HeroPatchHit],
+    hero_label: str,
+    page: int,
+) -> None:
+    """Swap the current history message to another page — never send a new one."""
+    try:
+        layouts, _ = build_hero_history_layouts(
+            hits, hero_label=hero_label, page=page
+        )
+        await interaction.response.edit_message(
+            content=None,
+            embed=None,
+            embeds=[],
+            attachments=[],
+            view=layouts[0],
+        )
+        return
+    except Exception as exc:
+        log.warning("Hero history layout edit failed: %s", exc)
+
+    embeds, total = build_hero_history_embeds(
+        hits, hero_label=hero_label, page=page
+    )
+    nav = (
+        HeroHistoryNavView(
+            hits=hits, hero_label=hero_label, page=page, total_pages=total
+        )
+        if total > 1
+        else None
+    )
+    try:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(
+                content=None, embeds=embeds, view=nav
+            )
+        else:
+            await interaction.response.edit_message(
+                content=None, embeds=embeds, view=nav
+            )
+    except Exception as exc:
+        log.warning("Hero history embed edit failed: %s", exc)
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+
+
 async def send_hero_history(
     interaction: discord.Interaction,
     hits: list[HeroPatchHit],
@@ -254,48 +387,51 @@ async def send_hero_history(
     page: int = 0,
     edit_searching: bool = False,
 ) -> None:
-    """Ephemeral history page; optionally replace a prior “Searching…” message."""
+    """One ephemeral history message (results above nav); optionally replace “Searching…”."""
     try:
-        layouts, total = build_hero_history_layouts(
+        layouts, _ = build_hero_history_layouts(
             hits, hero_label=hero_label, page=page
         )
-        if edit_searching and page == 0:
+        if edit_searching:
             try:
                 await interaction.edit_original_response(
-                    content=None, embeds=[], view=layouts[0]
+                    content=None,
+                    embed=None,
+                    embeds=[],
+                    attachments=[],
+                    view=layouts[0],
                 )
+                return
             except Exception:
-                await interaction.followup.send(view=layouts[0], ephemeral=True)
-        else:
-            await interaction.followup.send(view=layouts[0], ephemeral=True)
-        for layout in layouts[1:]:
-            await interaction.followup.send(view=layout, ephemeral=True)
+                pass
+        await interaction.followup.send(view=layouts[0], ephemeral=True)
+        return
     except Exception as exc:
         log.warning("Hero history layout failed: %s", exc)
-        embeds, total = build_hero_history_embeds(
-            hits, hero_label=hero_label, page=page
-        )
-        if edit_searching and page == 0:
-            try:
-                await interaction.edit_original_response(
-                    content=None, embeds=embeds, view=None
-                )
-            except Exception:
-                await interaction.followup.send(embeds=embeds, ephemeral=True)
-        else:
-            await interaction.followup.send(embeds=embeds, ephemeral=True)
 
-    if total > 1:
-        await interaction.followup.send(
-            view=HeroHistoryNavView(
-                hits=hits, hero_label=hero_label, page=page, total_pages=total
-            ),
-            ephemeral=True,
+    embeds, total = build_hero_history_embeds(
+        hits, hero_label=hero_label, page=page
+    )
+    nav = (
+        HeroHistoryNavView(
+            hits=hits, hero_label=hero_label, page=page, total_pages=total
         )
+        if total > 1
+        else None
+    )
+    if edit_searching:
+        try:
+            await interaction.edit_original_response(
+                content=None, embeds=embeds, view=nav
+            )
+            return
+        except Exception:
+            pass
+    await interaction.followup.send(embeds=embeds, view=nav, ephemeral=True)
 
 
 class HeroHistoryNavView(discord.ui.View):
-    """Prev / next through a hero's patch touches."""
+    """Embed fallback: prev / next on the same message as the results."""
 
     def __init__(
         self,
@@ -305,67 +441,14 @@ class HeroHistoryNavView(discord.ui.View):
         page: int,
         total_pages: int,
     ) -> None:
-        super().__init__(timeout=180)
+        super().__init__(timeout=HISTORY_NAV_TIMEOUT)
         self.hits = hits
         self.hero_label = hero_label
         self.page = page
         self.total_pages = max(1, total_pages)
-
-        prev_btn = discord.ui.Button(
-            label="Newer",
-            style=discord.ButtonStyle.secondary,
-            disabled=page <= 0,
-            row=0,
+        prev_btn, next_btn, jump = _history_nav_widgets(
+            hits, hero_label, page, self.total_pages, use_rows=True
         )
-        next_btn = discord.ui.Button(
-            label="Older",
-            style=discord.ButtonStyle.secondary,
-            disabled=page >= self.total_pages - 1,
-            row=0,
-        )
-        jump = discord.ui.Select(
-            placeholder=f"Jump to patch… ({page + 1}/{self.total_pages})",
-            min_values=1,
-            max_values=1,
-            options=_jump_options(hits, page),
-            row=1,
-        )
-
-        async def on_prev(interaction: discord.Interaction) -> None:
-            await interaction.response.defer(ephemeral=True)
-            await send_hero_history(
-                interaction,
-                self.hits,
-                hero_label=self.hero_label,
-                page=max(0, self.page - 1),
-            )
-
-        async def on_next(interaction: discord.Interaction) -> None:
-            await interaction.response.defer(ephemeral=True)
-            await send_hero_history(
-                interaction,
-                self.hits,
-                hero_label=self.hero_label,
-                page=min(self.total_pages - 1, self.page + 1),
-            )
-
-        async def on_jump(interaction: discord.Interaction) -> None:
-            await interaction.response.defer(ephemeral=True)
-            try:
-                idx = int(jump.values[0])
-            except ValueError:
-                idx = 0
-            per_page = 3
-            await send_hero_history(
-                interaction,
-                self.hits,
-                hero_label=self.hero_label,
-                page=idx // per_page,
-            )
-
-        prev_btn.callback = on_prev
-        next_btn.callback = on_next
-        jump.callback = on_jump
         self.add_item(prev_btn)
         self.add_item(next_btn)
         if hits:
@@ -376,7 +459,7 @@ def _jump_options(
     hits: list[HeroPatchHit], current_page: int
 ) -> list[discord.SelectOption]:
     opts: list[discord.SelectOption] = []
-    per_page = 3
+    per_page = HISTORY_PER_PAGE
     for i, hit in enumerate(hits[:25]):
         label = hit.patch_date or hit.patch_id or f"Patch {i + 1}"
         mark = _hit_kind_mark(hit)

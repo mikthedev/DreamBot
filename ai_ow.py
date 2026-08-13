@@ -355,7 +355,7 @@ async def lookup_hero_patch_history(
     hero_query: str,
     *,
     max_hits: int = 25,
-    max_months: int = 12,
+    max_months: int = 24,
 ) -> tuple[list[HeroPatchHit], str]:
     """
     Every retail balance touch for one hero, newest → oldest.
@@ -363,7 +363,7 @@ async def lookup_hero_patch_history(
     """
     hero_query = HERO_ALIASES.get(hero_query.lower().strip(), hero_query.lower().strip())
     patches = await fetch_all_patch_summaries(
-        limit=max(40, max_hits * 2),
+        limit=max(120, max_hits * 5),
         max_months=max_months,
         stop_hero=None,
     )

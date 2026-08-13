@@ -35,6 +35,18 @@ log = logging.getLogger("dream_team.ow_hero_history")
 
 HISTORY_PER_PAGE = 3
 HISTORY_NAV_TIMEOUT = 180.0
+HISTORY_MAX_HITS = 25
+HISTORY_MAX_MONTHS = 24
+
+
+def _v2_edit_kwargs(view: discord.ui.LayoutView) -> dict:
+    """Kwargs to swap a message to a LayoutView. Do not pass embed and embeds together."""
+    return {
+        "content": None,
+        "embed": None,
+        "attachments": [],
+        "view": view,
+    }
 
 # Display name → role for forum select menus (≤25 options per role)
 HEROES_BY_ROLE: dict[str, tuple[str, ...]] = {
@@ -343,13 +355,7 @@ async def _replace_hero_history(
         layouts, _ = build_hero_history_layouts(
             hits, hero_label=hero_label, page=page
         )
-        await interaction.response.edit_message(
-            content=None,
-            embed=None,
-            embeds=[],
-            attachments=[],
-            view=layouts[0],
-        )
+        await interaction.response.edit_message(**_v2_edit_kwargs(layouts[0]))
         return
     except Exception as exc:
         log.warning("Hero history layout edit failed: %s", exc)
@@ -395,11 +401,7 @@ async def send_hero_history(
         if edit_searching:
             try:
                 await interaction.edit_original_response(
-                    content=None,
-                    embed=None,
-                    embeds=[],
-                    attachments=[],
-                    view=layouts[0],
+                    **_v2_edit_kwargs(layouts[0])
                 )
                 return
             except Exception:
@@ -663,7 +665,11 @@ async def _deliver_history(interaction: discord.Interaction, hero: str) -> None:
         edit_searching = True
     try:
         hits, _latest = await lookup_hero_patch_history(
-            interaction.client, guild.id, hero, max_hits=25, max_months=12
+            interaction.client,
+            guild.id,
+            hero,
+            max_hits=HISTORY_MAX_HITS,
+            max_months=HISTORY_MAX_MONTHS,
         )
     except Exception as exc:
         log.warning("Hero history lookup failed for %s: %s", hero, exc)

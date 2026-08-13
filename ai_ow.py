@@ -207,38 +207,17 @@ def _hero_lines(hero: HeroChange) -> list[str]:
 
 
 def _tone_flags(hero: HeroChange) -> tuple[bool, bool]:
+    from overwatch_patches import classify_change_tone
+
     buff = nerf = False
     for ch in hero.changes:
-        if ch.tone == "▲":
+        tone = ch.tone
+        if tone not in ("▲", "▼"):
+            tone = classify_change_tone(ch.ability or "", ch.text or "")
+        if tone == "▲":
             buff = True
-        elif ch.tone == "▼":
+        elif tone == "▼":
             nerf = True
-        else:
-            low = (ch.text or "").lower()
-            if any(
-                w in low
-                for w in (
-                    "increased",
-                    "increases",
-                    "buff",
-                    "grants",
-                    "added",
-                    "boost",
-                )
-            ):
-                buff = True
-            if any(
-                w in low
-                for w in (
-                    "reduced",
-                    "reduces",
-                    "nerf",
-                    "decreased",
-                    "decreases",
-                    "removed",
-                )
-            ):
-                nerf = True
     return buff, nerf
 
 

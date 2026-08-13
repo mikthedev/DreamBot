@@ -142,28 +142,180 @@ def _first(pattern: str, text: str, flags: int = 0) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _tone_from(text: str) -> str:
+# Lower value = better for the hero (reducing these is a buff).
+_LESS_IS_BETTER = (
+    "cooldown",
+    "cool down",
+    "charge time",
+    "charge delay",
+    "cast time",
+    "cast delay",
+    "wind-up",
+    "windup",
+    "wind up",
+    "startup",
+    "recovery",
+    "reload time",
+    "reload delay",
+    "reload duration",
+    "time between",
+    "delay",
+    "fuel drain",
+    "resource drain",
+    "drain rate",
+    "ammo consumption",
+    "ammo cost",
+    "resource cost",
+    "energy cost",
+    "ultimate cost",
+    "ult cost",
+    "cost per",
+    "spread",
+    "bloom",
+    "recoil",
+    "self-damage",
+    "self damage",
+    "movement penalty",
+    "move penalty",
+    "move slow",
+    "slow amount",
+    "slow %",
+    "vulnerability",
+    "knockback taken",
+    "knockback received",
+    "falloff min",
+    "minimum spread",
+)
+
+# Higher value = better for the hero (reducing these is a nerf).
+_MORE_IS_BETTER = (
+    "damage",
+    "healing",
+    "heal ",
+    "health",
+    "hp",
+    "armor",
+    "armour",
+    "shields",
+    "overhealth",
+    "ammo",
+    "magazine",
+    "clip size",
+    "duration",
+    "range",
+    "radius",
+    "projectile speed",
+    "move speed",
+    "movement speed",
+    "speed boost",
+    "crit",
+    "headshot",
+    "lifesteal",
+    "fuel regen",
+    "regen rate",
+    "regeneration",
+    "resource regen",
+    "reload speed",
+    "fire rate",
+    "attack speed",
+    "knockback",
+    "stun",
+    "slow duration",
+    "falloff range",
+    "max range",
+    "bonus",
+    "multiplier",
+)
+
+
+def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
+    return any(p in text for p in phrases)
+
+
+def _direction_from_text(text: str) -> str | None:
+    """'up' | 'down' | 'add' | 'remove' | None from verbs and from→to numbers."""
     low = text.lower()
-    buff = any(
-        w in low
-        for w in (
-            "increased",
-            "up from",
-            "buff",
-            "now grants",
-            "added",
-            "restores",
+    m = re.search(
+        r"(?:from|down from|up from)\s+(-?\d+(?:\.\d+)?)\s*(?:%|s|m)?\s*"
+        r"(?:→|->|to)\s*(-?\d+(?:\.\d+)?)",
+        low,
+    )
+    if not m:
+        m = re.search(
+            r"`(-?\d+(?:\.\d+)?)\s*(?:%|s)?\s*→\s*(-?\d+(?:\.\d+)?)",
+            low,
         )
-    )
-    nerf = any(
-        w in low
-        for w in ("reduced", "down from", "nerf", "decreased", "removed", "lower")
-    )
-    if buff and not nerf:
-        return "▲"
-    if nerf and not buff:
+    if m:
+        try:
+            a, b = float(m.group(1)), float(m.group(2))
+            if b > a:
+                return "up"
+            if b < a:
+                return "down"
+        except ValueError:
+            pass
+
+    if re.search(r"\b(no longer|removed|removes)\b", low):
+        if _contains_any(low, ("cooldown", "penalty", "restriction", "self-damage", "self damage")):
+            return "add"  # removing a downside
+        return "remove"
+    if re.search(
+        r"\b(added|adds|now grants|now applies|now restores|can now|now has)\b",
+        low,
+    ):
+        return "add"
+    if re.search(r"\b(increased|increases|up from|raised|higher)\b", low):
+        return "up"
+    if re.search(r"\b(reduced|reduces|decreased|decreases|down from|lowered|lower)\b", low):
+        return "down"
+    return None
+
+
+def _stat_polarity(text: str) -> str | None:
+    """'less' (lower is better) | 'more' (higher is better) | None."""
+    low = text.lower()
+    # More specific phrases first so "fuel drain" wins over generic "fuel"
+    if _contains_any(low, _LESS_IS_BETTER):
+        return "less"
+    if _contains_any(low, _MORE_IS_BETTER):
+        return "more"
+    return None
+
+
+def classify_change_tone(*parts: str) -> str:
+    """
+    Buff/nerf from *what* changed, not just increased/reduced.
+    Cooldown/cost/drain down = buff; damage/heal/HP down = nerf.
+    """
+    blob = " ".join(p for p in parts if p)
+    low = blob.lower()
+    if re.search(r"\bnerf", low) and not re.search(r"\bbuff", low):
         return "▼"
+    if re.search(r"\bbuff", low) and not re.search(r"\bnerf", low):
+        return "▲"
+
+    direction = _direction_from_text(low)
+    polarity = _stat_polarity(low)
+
+    if direction == "add":
+        return "▲"
+    if direction == "remove":
+        return "▼"
+    if direction is None:
+        return "•"
+
+    if polarity == "less":
+        # Lower cooldown/cost/drain = buff
+        return "▲" if direction == "down" else "▼"
+    if polarity == "more":
+        return "▲" if direction == "up" else "▼"
+
+    # Unknown stat: don't guess — "reduced" is often a buff
     return "•"
+
+
+def _tone_from(text: str, *, ability: str = "", label: str = "") -> str:
+    return classify_change_tone(ability, label, text)
 
 
 def _compact_value(raw: str) -> tuple[str, str, str | None]:
@@ -241,7 +393,7 @@ def _make_change(
     if not clean:
         return None
     label, value, mode = _compact_value(clean)
-    tone = _tone_from(clean)
+    tone = _tone_from(clean, ability=ability, label=label)
     # Drop ability name if Blizzard repeats it in the label
     if label and ability and label.lower().startswith(ability.lower()):
         trimmed = label[len(ability) :].lstrip(" :-–—")

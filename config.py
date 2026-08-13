@@ -101,3 +101,11 @@ TTS_VOICE_UK = (
 # Slightly more expressive delivery
 TTS_RATE = os.getenv("TTS_RATE", "+8%").strip() or "+8%"
 TTS_PITCH = os.getenv("TTS_PITCH", "+4Hz").strip() or "+4Hz"
+
+# Play together — recency decay and background loops (guild panel can override windows)
+PLAY_HALF_LIFE_DAYS = max(1.0, float(os.getenv("PLAY_HALF_LIFE_DAYS", "7")))
+PLAY_DETECT_INTERVAL_HOURS = max(1, int(os.getenv("PLAY_DETECT_INTERVAL_HOURS", "6")))
+PLAY_VOICE_SAMPLE_MINUTES = max(1, int(os.getenv("PLAY_VOICE_SAMPLE_MINUTES", "5")))
+PLAY_REMIND_MINUTES = max(5, int(os.getenv("PLAY_REMIND_MINUTES", "60")))
+PLAY_EXPAND_MAX = max(1, int(os.getenv("PLAY_EXPAND_MAX", "5")))
+PLAY_EXPAND_MIN_SCORE = max(0.1, float(os.getenv("PLAY_EXPAND_MIN_SCORE", "1.5")))

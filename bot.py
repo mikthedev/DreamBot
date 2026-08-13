@@ -32,6 +32,12 @@ from panel import PanelCog
 from anniversary import AnniversaryCog
 from ai import AICog
 from voice_ai import VoiceAICog
+from play_together import (
+    PlayExpandInButton,
+    PlayExpandNopeButton,
+    PlayRsvpView,
+    PlayTogetherCog,
+)
 from birthday_signup import (
     BirthdaySignupView,
     OpenSignupModalView,
@@ -47,6 +53,7 @@ class DreamTeamBot(commands.Bot):
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
+        intents.presences = True
 
         super().__init__(command_prefix="!", intents=intents)
         self.db = db
@@ -59,6 +66,8 @@ class DreamTeamBot(commands.Bot):
         self.add_view(OwHeroHistoryHubView())
         self.add_view(OwLegacyHeroHistoryHubView())
         self.add_view(OnboardingView())
+        self.add_view(PlayRsvpView())
+        self.add_dynamic_items(PlayExpandInButton, PlayExpandNopeButton)
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(AnniversaryCog(self))
@@ -71,6 +80,7 @@ class DreamTeamBot(commands.Bot):
         await self.add_cog(OverwatchHeroHistoryCog(self))
         await self.add_cog(AICog(self))
         await self.add_cog(VoiceAICog(self))
+        await self.add_cog(PlayTogetherCog(self))
         if config.GROQ_API_KEY:
             log.info("Free Groq Llama AI enabled (model=%s)", config.GROQ_MODEL)
         else:

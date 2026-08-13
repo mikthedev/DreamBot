@@ -1,6 +1,6 @@
 # Dream Team Bot
 
-The Discord companion for **Dream Team** — nicknames, birthdays, music, Overwatch news, and a voice AI you can call by name.
+The Discord companion for **Dream Team** — nicknames, birthdays, music, Overwatch news, play-together nights, and a voice AI you can call by name.
 
 ---
 
@@ -66,6 +66,26 @@ A persistent Ukrainian welcome panel with buttons — edit and republish without
 
 ---
 
+## Play together
+
+The bot notices when several people on the server have recently played the same multiplayer game, then offers a session — without treating “played it” as a yes.
+
+**Activity is a hint. I'm in is intent. An admin can confirm someone by hand. A Discord Event is the end result.** Those are never mixed.
+
+1. **Activity history** — Discord rich presence (Playing …) is stored per person, with recency decay. Playing Minecraft two days ago is a much stronger signal than six months ago. Windows and weights are set in `/panel` → Play together → Settings.
+2. **Detection** — finds overlapping interest (you do **not** have to be in voice at the same time). One person is ignored; two is a maybe; four or so is a real signal. Regular launches count extra.
+3. **Allow-list** — nothing is proposed unless an admin **allows** that game. Blocked games are still recorded, never auto-suggested (Warframe can be popular and still stay off-limits). Admins can always create a session for any game by hand.
+4. **Suggestion** — a message in the configured channel: game, next Saturday evening (default 19:00, Kyiv time), I'm in / Nope. Playing the game does **not** put you on the list.
+5. **RSVP** — the card shows `3/6` (or similar). Admins can add or remove people in `/panel` when plans happened in chat.
+6. **Social invites** — once the minimum shows up, the bot may DM people who often sit in voice or play with that group: “Ilya, Sasha and Edik are getting together… Wanna join them?”
+7. **Discord Event** — at the minimum (or when an admin taps Create event), a scheduled event is created on the **existing** voice channel you picked (e.g. General). No extra channels.
+
+**Required:** in the [Discord Developer Portal](https://discord.com/developers/applications) → Bot → Privileged Gateway Intents, turn on **Presence Intent** (alongside Server Members and Message Content). Without it, the bot may fail to start, and game history stays empty. The bot also needs **Create Events** (and the usual send/embed permissions) on the suggestion and voice channels. Personal invites are DMs — members who block DMs are skipped.
+
+Auto suggestions, auto events, and personal invites each have an on/off toggle. Detection never publishes if auto is off — Review still shows overlap so you can post by hand.
+
+---
+
 ## Commands at a glance
 
 **Everyone**
@@ -83,6 +103,6 @@ A persistent Ukrainian welcome panel with buttons — edit and republish without
 
 | | |
 |---|---|
-| `/panel` | Channels, roles, names, birthdays, Overwatch, onboarding, anniversary, status |
+| `/panel` | Channels, roles, names, birthdays, Overwatch, play together, onboarding, anniversary, status |
 
 One hub, fewer slash commands — setup that used to be scattered now lives in the panel.

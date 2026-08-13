@@ -35,6 +35,13 @@ from onboarding import (
     onboard_embed,
     publish_onboard,
 )
+from play_together import (
+    add_play_hub_controls,
+    games_embed,
+    hub_play_embed,
+    manage_embed,
+    review_embed,
+)
 
 log = logging.getLogger("dream_team.panel")
 
@@ -120,7 +127,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
     if is_admin:
         embed.add_field(
             name="Admins",
-            value="`/panel` — channels, Dream AI, names, birthdays, Overwatch, onboarding, anniversary",
+            value="`/panel` — channels, Dream AI, names, birthdays, Overwatch, play together, onboarding, anniversary",
             inline=False,
         )
     return embed
@@ -534,6 +541,8 @@ class AdminHubView(discord.ui.View):
             self._add_welcome_controls()
         elif self.page == "overwatch":
             self._add_overwatch_controls()
+        elif self.page in ("play", "play_games", "play_review", "play_manage"):
+            add_play_hub_controls(self)
         elif self.page == "onboard":
             self._add_onboard_controls()
         elif self.page == "anniversary":
@@ -581,6 +590,12 @@ class AdminHubView(discord.ui.View):
                     value="overwatch",
                     description="Patches & Counterwatch tier list",
                     emoji="🎯",
+                ),
+                discord.SelectOption(
+                    label="Play together",
+                    value="play",
+                    description="Game nights from shared activity",
+                    emoji="🎲",
                 ),
                 discord.SelectOption(
                     label="Онбординг",
@@ -631,6 +646,19 @@ class AdminHubView(discord.ui.View):
             return hub_welcome_embed(guild, self.bot)
         if self.page == "overwatch":
             return hub_overwatch_embed(guild, self.bot)
+        if self.page == "play":
+            return hub_play_embed(guild, self.bot)
+        if self.page == "play_games":
+            return games_embed(
+                guild, self.bot, selected=getattr(self, "play_game_key", None)
+            )
+        if self.page == "play_review":
+            return review_embed(guild, self.bot)
+        if self.page == "play_manage":
+            sid = getattr(self, "play_suggestion_id", None)
+            if sid:
+                return manage_embed(guild, self.bot, sid)
+            return hub_play_embed(guild, self.bot)
         if self.page == "onboard":
             return hub_onboard_embed(guild, self.bot)
         if self.page == "anniversary":
@@ -1730,7 +1758,7 @@ class PanelCog(commands.Cog):
 
     @app_commands.command(
         name="panel",
-        description="Admin hub — setup, birthdays, welcome text, anniversary",
+        description="Admin hub — setup, birthdays, play together, Overwatch",
     )
     async def panel_cmd(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):

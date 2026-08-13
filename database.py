@@ -198,7 +198,99 @@ class Database:
                 )
                 """
             )
+            self._init_play_together_schema(conn)
         self.purge_empty_ow_patches()
+
+    def _init_play_together_schema(self, conn: sqlite3.Connection) -> None:
+        for column, col_type in (
+            ("play_suggest_channel_id", "INTEGER"),
+            ("play_voice_channel_id", "INTEGER"),
+            ("play_auto_enabled", "INTEGER NOT NULL DEFAULT 0"),
+            ("play_auto_event", "INTEGER NOT NULL DEFAULT 1"),
+            ("play_auto_expand", "INTEGER NOT NULL DEFAULT 1"),
+            ("play_decay_days", "INTEGER NOT NULL DEFAULT 30"),
+            ("play_detect_days", "INTEGER NOT NULL DEFAULT 14"),
+            ("play_detect_min_people", "INTEGER NOT NULL DEFAULT 4"),
+            ("play_default_hour", "INTEGER NOT NULL DEFAULT 19"),
+            ("play_default_min_players", "INTEGER NOT NULL DEFAULT 3"),
+            ("play_default_max_players", "INTEGER NOT NULL DEFAULT 6"),
+            ("play_cooldown_days", "INTEGER NOT NULL DEFAULT 7"),
+        ):
+            self._ensure_column(conn, "guild_settings", column, col_type)
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS play_activity (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                game_key TEXT NOT NULL,
+                game_name TEXT NOT NULL,
+                application_id INTEGER,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                play_count INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (guild_id, user_id, game_key)
+            );
+            CREATE TABLE IF NOT EXISTS play_games (
+                guild_id INTEGER NOT NULL,
+                game_key TEXT NOT NULL,
+                game_name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                blocked INTEGER NOT NULL DEFAULT 0,
+                min_players INTEGER,
+                max_players INTEGER,
+                steam_url TEXT,
+                store_note TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (guild_id, game_key)
+            );
+            CREATE TABLE IF NOT EXISTS play_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                game_key TEXT NOT NULL,
+                game_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                proposed_at TEXT NOT NULL,
+                min_players INTEGER NOT NULL,
+                max_players INTEGER NOT NULL,
+                channel_id INTEGER,
+                message_id INTEGER,
+                discord_event_id INTEGER,
+                steam_url TEXT,
+                store_note TEXT,
+                created_by INTEGER,
+                created_at TEXT NOT NULL,
+                reminder_sent INTEGER NOT NULL DEFAULT 0,
+                expansion_sent INTEGER NOT NULL DEFAULT 0,
+                auto_event INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS play_rsvps (
+                suggestion_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (suggestion_id, user_id)
+            );
+            CREATE TABLE IF NOT EXISTS play_voice_pairs (
+                guild_id INTEGER NOT NULL,
+                user_a INTEGER NOT NULL,
+                user_b INTEGER NOT NULL,
+                minutes INTEGER NOT NULL DEFAULT 0,
+                last_together TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_a, user_b)
+            );
+            CREATE TABLE IF NOT EXISTS play_expansion_invites (
+                suggestion_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                sent_at TEXT NOT NULL,
+                PRIMARY KEY (suggestion_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_play_activity_seen
+                ON play_activity (guild_id, game_key, last_seen);
+            CREATE INDEX IF NOT EXISTS idx_play_suggestions_guild
+                ON play_suggestions (guild_id, status, game_key);
+            """
+        )
 
     def _ensure_column(
         self, conn: sqlite3.Connection, table: str, column: str, col_type: str
@@ -1313,3 +1405,628 @@ class Database:
                 """,
                 (emoji_name, icon_url, sha256),
             )
+
+    # --- Play together -------------------------------------------------
+
+    _PLAY_SETTING_COLS = frozenset(
+        {
+            "play_suggest_channel_id",
+            "play_voice_channel_id",
+            "play_auto_enabled",
+            "play_auto_event",
+            "play_auto_expand",
+            "play_decay_days",
+            "play_detect_days",
+            "play_detect_min_people",
+            "play_default_hour",
+            "play_default_min_players",
+            "play_default_max_players",
+            "play_cooldown_days",
+        }
+    )
+
+    _PLAY_SETTING_DEFAULTS: dict[str, int | None] = {
+        "play_suggest_channel_id": None,
+        "play_voice_channel_id": None,
+        "play_auto_enabled": 0,
+        "play_auto_event": 1,
+        "play_auto_expand": 1,
+        "play_decay_days": 30,
+        "play_detect_days": 14,
+        "play_detect_min_people": 4,
+        "play_default_hour": 19,
+        "play_default_min_players": 3,
+        "play_default_max_players": 6,
+        "play_cooldown_days": 7,
+    }
+
+    def get_play_settings(self, guild_id: int) -> dict[str, int | None]:
+        settings = self.get_settings(guild_id)
+        out: dict[str, int | None] = {}
+        for key, default in self._PLAY_SETTING_DEFAULTS.items():
+            if settings is None:
+                out[key] = default
+                continue
+            try:
+                value = settings[key]
+            except (IndexError, KeyError):
+                out[key] = default
+                continue
+            if value is None:
+                out[key] = default
+            else:
+                out[key] = int(value)
+        return out
+
+    def set_play_setting(self, guild_id: int, column: str, value: int | None) -> None:
+        if column not in self._PLAY_SETTING_COLS:
+            raise ValueError(f"unknown play setting: {column}")
+        with self.connect() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO guild_settings (guild_id, {column})
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET {column} = excluded.{column}
+                """,
+                (guild_id, value),
+            )
+
+    def upsert_play_activity(
+        self,
+        guild_id: int,
+        user_id: int,
+        game_key: str,
+        game_name: str,
+        application_id: int | None,
+        seen_at: str,
+        *,
+        session_gap_hours: int = 4,
+    ) -> None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT last_seen, play_count FROM play_activity
+                WHERE guild_id = ? AND user_id = ? AND game_key = ?
+                """,
+                (guild_id, user_id, game_key),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO play_activity (
+                        guild_id, user_id, game_key, game_name, application_id,
+                        first_seen, last_seen, play_count
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        guild_id,
+                        user_id,
+                        game_key,
+                        game_name,
+                        application_id,
+                        seen_at,
+                        seen_at,
+                    ),
+                )
+            else:
+                bump = 0
+                try:
+                    prev = datetime.fromisoformat(row["last_seen"])
+                    now = datetime.fromisoformat(seen_at)
+                    if prev.tzinfo is None:
+                        prev = prev.replace(tzinfo=timezone.utc)
+                    if now.tzinfo is None:
+                        now = now.replace(tzinfo=timezone.utc)
+                    gap = (now - prev).total_seconds()
+                    if gap >= session_gap_hours * 3600:
+                        bump = 1
+                except (TypeError, ValueError):
+                    bump = 1
+                conn.execute(
+                    """
+                    UPDATE play_activity
+                    SET game_name = ?,
+                        application_id = COALESCE(?, application_id),
+                        last_seen = ?,
+                        play_count = play_count + ?
+                    WHERE guild_id = ? AND user_id = ? AND game_key = ?
+                    """,
+                    (
+                        game_name,
+                        application_id,
+                        seen_at,
+                        bump,
+                        guild_id,
+                        user_id,
+                        game_key,
+                    ),
+                )
+            conn.execute(
+                """
+                INSERT INTO play_games (guild_id, game_key, game_name)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, game_key) DO UPDATE SET
+                    game_name = CASE
+                        WHEN play_games.game_name = excluded.game_name THEN play_games.game_name
+                        ELSE play_games.game_name
+                    END
+                """,
+                (guild_id, game_key, game_name),
+            )
+
+    def purge_old_play_activity(self, guild_id: int, before_iso: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM play_activity
+                WHERE guild_id = ? AND last_seen < ?
+                """,
+                (guild_id, before_iso),
+            )
+
+    def list_play_activity_for_game(
+        self, guild_id: int, game_key: str, since_iso: str
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT user_id, game_name, last_seen, play_count, first_seen
+                FROM play_activity
+                WHERE guild_id = ? AND game_key = ? AND last_seen >= ?
+                ORDER BY last_seen DESC
+                """,
+                (guild_id, game_key, since_iso),
+            ).fetchall()
+
+    def list_user_play_activity(
+        self, guild_id: int, user_id: int, since_iso: str | None = None
+    ) -> list[sqlite3.Row]:
+        sql = """
+            SELECT game_key, game_name, last_seen, play_count
+            FROM play_activity
+            WHERE guild_id = ? AND user_id = ?
+        """
+        params: list[object] = [guild_id, user_id]
+        if since_iso:
+            sql += " AND last_seen >= ?"
+            params.append(since_iso)
+        sql += " ORDER BY last_seen DESC"
+        with self.connect() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def list_recent_play_games(
+        self, guild_id: int, since_iso: str, *, min_people: int = 1
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    a.game_key,
+                    MAX(a.game_name) AS game_name,
+                    COUNT(*) AS people,
+                    MAX(a.last_seen) AS last_seen
+                FROM play_activity a
+                WHERE a.guild_id = ? AND a.last_seen >= ?
+                GROUP BY a.game_key
+                HAVING people >= ?
+                ORDER BY people DESC, last_seen DESC
+                """,
+                (guild_id, since_iso, min_people),
+            ).fetchall()
+
+    def list_known_play_games(self, guild_id: int, *, limit: int = 40) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    g.game_key,
+                    g.game_name,
+                    g.enabled,
+                    g.blocked,
+                    g.min_players,
+                    g.max_players,
+                    g.steam_url,
+                    g.store_note
+                FROM play_games g
+                WHERE g.guild_id = ?
+                ORDER BY g.blocked ASC, g.enabled DESC, g.game_name COLLATE NOCASE
+                LIMIT ?
+                """,
+                (guild_id, limit),
+            ).fetchall()
+
+    def get_play_game(self, guild_id: int, game_key: str) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT game_key, game_name, enabled, blocked,
+                       min_players, max_players, steam_url, store_note
+                FROM play_games
+                WHERE guild_id = ? AND game_key = ?
+                """,
+                (guild_id, game_key),
+            ).fetchone()
+
+    def upsert_play_game(
+        self,
+        guild_id: int,
+        game_key: str,
+        game_name: str,
+        *,
+        enabled: int | None = None,
+        blocked: int | None = None,
+        min_players: int | None = None,
+        max_players: int | None = None,
+        steam_url: str | None = None,
+        store_note: str | None = None,
+        set_min: bool = False,
+        set_max: bool = False,
+        set_steam: bool = False,
+        set_note: bool = False,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO play_games (guild_id, game_key, game_name)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, game_key) DO UPDATE SET
+                    game_name = excluded.game_name,
+                    updated_at = datetime('now')
+                """,
+                (guild_id, game_key, game_name),
+            )
+            sets: list[str] = []
+            params: list[object] = []
+            if enabled is not None:
+                sets.append("enabled = ?")
+                params.append(1 if enabled else 0)
+            if blocked is not None:
+                sets.append("blocked = ?")
+                params.append(1 if blocked else 0)
+            if set_min:
+                sets.append("min_players = ?")
+                params.append(min_players)
+            if set_max:
+                sets.append("max_players = ?")
+                params.append(max_players)
+            if set_steam:
+                sets.append("steam_url = ?")
+                params.append(steam_url)
+            if set_note:
+                sets.append("store_note = ?")
+                params.append(store_note)
+            if sets:
+                params.extend([guild_id, game_key])
+                conn.execute(
+                    f"""
+                    UPDATE play_games SET {', '.join(sets)}, updated_at = datetime('now')
+                    WHERE guild_id = ? AND game_key = ?
+                    """,
+                    params,
+                )
+
+    def create_play_suggestion(
+        self,
+        guild_id: int,
+        *,
+        game_key: str,
+        game_name: str,
+        status: str,
+        proposed_at: str,
+        min_players: int,
+        max_players: int,
+        steam_url: str | None,
+        store_note: str | None,
+        created_by: int | None,
+        auto_event: int = 1,
+    ) -> int:
+        stamped = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO play_suggestions (
+                    guild_id, game_key, game_name, status, proposed_at,
+                    min_players, max_players, steam_url, store_note,
+                    created_by, created_at, auto_event
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    guild_id,
+                    game_key,
+                    game_name,
+                    status,
+                    proposed_at,
+                    min_players,
+                    max_players,
+                    steam_url,
+                    store_note,
+                    created_by,
+                    stamped,
+                    auto_event,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def get_play_suggestion(self, suggestion_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT * FROM play_suggestions WHERE id = ?",
+                (suggestion_id,),
+            ).fetchone()
+
+    def get_play_suggestion_by_message(
+        self, channel_id: int, message_id: int
+    ) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM play_suggestions
+                WHERE channel_id = ? AND message_id = ?
+                """,
+                (channel_id, message_id),
+            ).fetchone()
+
+    def update_play_suggestion(self, suggestion_id: int, **fields: object) -> None:
+        allowed = {
+            "status",
+            "proposed_at",
+            "min_players",
+            "max_players",
+            "channel_id",
+            "message_id",
+            "discord_event_id",
+            "steam_url",
+            "store_note",
+            "reminder_sent",
+            "expansion_sent",
+            "auto_event",
+            "game_name",
+        }
+        sets: list[str] = []
+        params: list[object] = []
+        for key, value in fields.items():
+            if key not in allowed:
+                raise ValueError(f"unknown suggestion field: {key}")
+            sets.append(f"{key} = ?")
+            params.append(value)
+        if not sets:
+            return
+        params.append(suggestion_id)
+        with self.connect() as conn:
+            conn.execute(
+                f"UPDATE play_suggestions SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+
+    def list_play_suggestions(
+        self,
+        guild_id: int,
+        *,
+        statuses: tuple[str, ...] | None = None,
+        game_key: str | None = None,
+        limit: int = 20,
+    ) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM play_suggestions WHERE guild_id = ?"
+        params: list[object] = [guild_id]
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            sql += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        if game_key:
+            sql += " AND game_key = ?"
+            params.append(game_key)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def latest_play_suggestion_for_game(
+        self, guild_id: int, game_key: str
+    ) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM play_suggestions
+                WHERE guild_id = ? AND game_key = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (guild_id, game_key),
+            ).fetchone()
+
+    def list_due_play_reminders(self, now_iso: str, start_iso: str) -> list[sqlite3.Row]:
+        """Suggestions whose start is between now and start_iso, reminder not sent."""
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM play_suggestions
+                WHERE reminder_sent = 0
+                  AND status IN ('published', 'event')
+                  AND proposed_at > ?
+                  AND proposed_at <= ?
+                """,
+                (now_iso, start_iso),
+            ).fetchall()
+
+    def list_play_suggestions_to_complete(self, cutoff_iso: str) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM play_suggestions
+                WHERE status IN ('published', 'event')
+                  AND proposed_at <= ?
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+
+    def set_play_rsvp(
+        self,
+        suggestion_id: int,
+        user_id: int,
+        status: str,
+        source: str,
+        updated_at: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO play_rsvps (
+                    suggestion_id, user_id, status, source, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(suggestion_id, user_id) DO UPDATE SET
+                    status = excluded.status,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+                """,
+                (suggestion_id, user_id, status, source, updated_at),
+            )
+
+    def get_play_rsvp(
+        self, suggestion_id: int, user_id: int
+    ) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT status, source FROM play_rsvps
+                WHERE suggestion_id = ? AND user_id = ?
+                """,
+                (suggestion_id, user_id),
+            ).fetchone()
+
+    def list_play_rsvps(
+        self, suggestion_id: int, *, status: str | None = None
+    ) -> list[sqlite3.Row]:
+        sql = """
+            SELECT user_id, status, source, updated_at
+            FROM play_rsvps
+            WHERE suggestion_id = ?
+        """
+        params: list[object] = [suggestion_id]
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY updated_at ASC"
+        with self.connect() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def remove_play_rsvp(self, suggestion_id: int, user_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM play_rsvps
+                WHERE suggestion_id = ? AND user_id = ?
+                """,
+                (suggestion_id, user_id),
+            )
+
+    def add_voice_pair_minutes(
+        self,
+        guild_id: int,
+        user_a: int,
+        user_b: int,
+        minutes: int,
+        seen_at: str,
+    ) -> None:
+        a, b = (user_a, user_b) if user_a < user_b else (user_b, user_a)
+        if a == b:
+            return
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO play_voice_pairs (
+                    guild_id, user_a, user_b, minutes, last_together
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id, user_a, user_b) DO UPDATE SET
+                    minutes = play_voice_pairs.minutes + excluded.minutes,
+                    last_together = excluded.last_together
+                """,
+                (guild_id, a, b, minutes, seen_at),
+            )
+
+    def voice_minutes_between(
+        self, guild_id: int, user_id: int, other_ids: list[int]
+    ) -> dict[int, int]:
+        if not other_ids:
+            return {}
+        others = list({int(x) for x in other_ids if int(x) != user_id})
+        if not others:
+            return {}
+        placeholders = ",".join("?" * len(others))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT user_a, user_b, minutes
+                FROM play_voice_pairs
+                WHERE guild_id = ?
+                  AND (
+                    (user_a = ? AND user_b IN ({placeholders}))
+                    OR (user_b = ? AND user_a IN ({placeholders}))
+                  )
+                """,
+                (guild_id, user_id, *others, user_id, *others),
+            ).fetchall()
+        out: dict[int, int] = {oid: 0 for oid in others}
+        for row in rows:
+            a, b = int(row["user_a"]), int(row["user_b"])
+            other = b if a == user_id else a
+            out[other] = int(row["minutes"])
+        return out
+
+    def shared_play_session_counts(
+        self, guild_id: int, user_id: int, other_ids: list[int]
+    ) -> dict[int, int]:
+        """How many past suggestions both users confirmed (I'm in / admin)."""
+        others = list({int(x) for x in other_ids if int(x) != user_id})
+        out = {oid: 0 for oid in others}
+        if not others:
+            return out
+        placeholders = ",".join("?" * len(others))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT r2.user_id AS other_id, COUNT(*) AS n
+                FROM play_rsvps r1
+                JOIN play_rsvps r2
+                  ON r1.suggestion_id = r2.suggestion_id
+                 AND r2.user_id IN ({placeholders})
+                JOIN play_suggestions s ON s.id = r1.suggestion_id
+                WHERE s.guild_id = ?
+                  AND r1.user_id = ?
+                  AND r1.status = 'in'
+                  AND r2.status = 'in'
+                  AND s.status IN ('event', 'completed')
+                GROUP BY r2.user_id
+                """,
+                (*others, guild_id, user_id),
+            ).fetchall()
+        for row in rows:
+            out[int(row["other_id"])] = int(row["n"])
+        return out
+
+    def add_play_expansion_invite(
+        self, suggestion_id: int, user_id: int, sent_at: str
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO play_expansion_invites (suggestion_id, user_id, sent_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(suggestion_id, user_id) DO NOTHING
+                """,
+                (suggestion_id, user_id, sent_at),
+            )
+
+    def list_play_expansion_invites(self, suggestion_id: int) -> set[int]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id FROM play_expansion_invites
+                WHERE suggestion_id = ?
+                """,
+                (suggestion_id,),
+            ).fetchall()
+        return {int(row["user_id"]) for row in rows}

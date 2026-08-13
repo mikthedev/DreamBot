@@ -152,6 +152,23 @@ async def lock_thread_for_reactions_only(thread: discord.Thread) -> None:
         log.warning("Could not lock forum thread %s: %s", thread.id, exc)
 
 
+async def unlock_thread_for_buttons(thread: discord.Thread) -> None:
+    """Keep Patch Notes posts unlocked so persistent buttons/menus stay clickable."""
+    try:
+        if thread.locked or thread.archived:
+            await thread.edit(
+                locked=False,
+                archived=False,
+                reason="OW Patch Notes — buttons need an unlocked post",
+            )
+    except discord.HTTPException as exc:
+        log.warning("Could not unlock forum thread %s: %s", thread.id, exc)
+
+
+def _is_patch_notes_post(tag_names: Sequence[str]) -> bool:
+    return any(name.casefold() == "patch notes" for name in tag_names)
+
+
 async def close_forum_post(thread: discord.Thread, *, reason: str | None = None) -> bool:
     """Discord 'Close Post' — archives the forum thread so it leaves the active feed."""
     try:
@@ -299,7 +316,10 @@ async def post_ow_announcement(
                         )
                     )
 
-                await lock_thread_for_reactions_only(thread)
+                if _is_patch_notes_post(tag_names):
+                    await unlock_thread_for_buttons(thread)
+                else:
+                    await lock_thread_for_reactions_only(thread)
                 return messages, thread.id
             except Exception as exc:
                 log.warning(
@@ -344,7 +364,10 @@ async def post_ow_announcement(
                 )
             )
 
-        await lock_thread_for_reactions_only(thread)
+        if _is_patch_notes_post(tag_names):
+            await unlock_thread_for_buttons(thread)
+        else:
+            await lock_thread_for_reactions_only(thread)
         return messages, thread.id
 
     # Classic text channel (kept for transition / fallback)

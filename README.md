@@ -50,11 +50,11 @@ Voice transcript embeds (text copies of what Dream said) go to a channel you set
 
 ## Overwatch
 
-Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](https://www.counterwatch.gg/stats/overwatch/tier-list), [best one-tricks](https://www.counterwatch.gg/stats/overwatch/best-onetricks), and filtered general **News** from Bluesky (map/mode/lore — no shop, skins, OWCS, or patch dumps). Patch / tier / META keep **one locked post** edited in place. News creates a locked thread per story (tag **News**), with optional **Custom post** from `/panel`. Video posts share a Bluesky link (no download/transcode); image posts still attach files. Configure under **`/panel` → Overwatch**.
+Automatic **forum posts** for Blizzard patch notes, Counterwatch [tier lists](https://www.counterwatch.gg/stats/overwatch/tier-list), [best one-tricks](https://www.counterwatch.gg/stats/overwatch/best-onetricks), and filtered general **News** from Bluesky (map/mode/lore — no shop, skins, OWCS, or patch dumps). Patch / tier / META keep **one post** edited in place. **Patch Notes** threads stay unlocked so buttons work; META / News stay locked (reactions only). News creates a thread per story (tag **News**), with optional **Custom post** from `/panel`. Video posts share a Bluesky link (no download/transcode); image posts still attach files. Configure under **`/panel` → Overwatch**.
 
 Patch cards include **Hero Updates** as well as classic Tank / Damage / Support sections (Blizzard’s layout varies by drop). Live patch posts refresh if the notes gain balance lines after the first publish.
 
-**Hero history** — `/hero` (autocomplete), the **Hero history** button under live patch posts, or **Hero history** in `/panel` → Overwatch (creates a locked **Patch Notes** hub titled **Search Hero Changes**). Browse recent buffs/nerfs for one character. Data comes from live Blizzard notes plus the guild’s saved patch archive.
+**Hero history** — `/hero` (autocomplete), the **Hero history** button under live patch posts, or **Hero history** in `/panel` → Overwatch (creates an unlocked **Patch Notes** hub titled **Search Hero Changes**). Browse recent buffs/nerfs for one character. Data comes from live Blizzard notes plus the guild’s saved patch archive.
 
 **Hero icons** come from the official [Blizzard roster](https://overwatch.blizzard.com/en-us/heroes/) (Counterwatch as fallback). Application emojis are created and updated when a new hero ships or a CDN portrait changes — daily sync, plus an extra refresh after a new patch posts — so tier, META, and patch posts stay current.
 

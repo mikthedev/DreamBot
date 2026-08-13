@@ -284,8 +284,9 @@ def hub_overwatch_embed(guild: discord.Guild, bot) -> discord.Embed:
         title="Overwatch",
         description=(
             "**Patches** — [official notes]({patch_url}), checked daily. "
-            "One locked **forum post** is updated in place (title + body) when a new "
-            "patch drops — reactions only, no comments. "
+            "One **forum post** is updated in place (title + body) when a new "
+            "patch drops. Posts tagged **Patch Notes** stay **unlocked** so "
+            "history buttons work. "
             "**Previous patches** still opens archives privately.\n\n"
             "**Hero history** — one **Patch Notes** forum hub with Tank / Damage / Support "
             "menus. Pick a hero to browse every recent balance touch (`/hero` works anywhere).\n\n"

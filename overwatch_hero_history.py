@@ -749,7 +749,7 @@ class OverwatchHeroHistoryCog(commands.Cog):
         self,
         channel: discord.TextChannel | discord.ForumChannel,
     ) -> list[discord.Message]:
-        """One locked Patch Notes forum post with role → hero menus."""
+        """One Patch Notes forum post with role → hero menus (unlocked for buttons)."""
         guild_id = channel.guild.id
         existing_thread_id = None
         if isinstance(channel, discord.ForumChannel):

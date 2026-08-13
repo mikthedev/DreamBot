@@ -507,6 +507,52 @@ def snapshot_guild_games(bot, guild: discord.Guild) -> int:
     return seen
 
 
+def _add_chunked_fields(
+    embed: discord.Embed,
+    title: str,
+    lines: list[str],
+    *,
+    empty: str | None = None,
+    max_fields: int = 6,
+) -> None:
+    """Split a long list across embed fields (1024 chars each)."""
+    if not lines:
+        if empty:
+            embed.add_field(name=title, value=empty, inline=False)
+        return
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for line in lines:
+        add = len(line) + (1 if current else 0)
+        if current and size + add > 1024:
+            chunks.append(current)
+            current = [line]
+            size = len(line)
+        else:
+            current.append(line)
+            size += add
+    if current:
+        chunks.append(current)
+    shown = chunks[:max_fields]
+    omitted = sum(len(part) for part in chunks[max_fields:])
+    for i, chunk in enumerate(shown):
+        name = title if i == 0 else f"{title} · {i + 1}"
+        value = "\n".join(chunk)
+        if i == len(shown) - 1 and omitted:
+            extra = f"\n_+{omitted} more_"
+            if len(value) + len(extra) <= 1024:
+                value += extra
+        embed.add_field(name=name, value=value, inline=False)
+
+
+GAMES_SELECT_PAGE = 25
+
+
+def _hub_games_page(hub) -> int:
+    return max(0, int(getattr(hub, "play_games_page", 0) or 0))
+
+
 def tracking_field(guild: discord.Guild, bot) -> tuple[str, str]:
     days, since = _lookback_since(guild.id, bot)
     records, people = bot.db.count_play_activity(guild.id, since)
@@ -520,25 +566,21 @@ def tracking_field(guild: discord.Guild, bot) -> tuple[str, str]:
             f"History ({days}d): **{people}** people · **{records}** records · "
             f"visible right now: **{len(live)}**",
         )
-    if live:
-        live_line = ", ".join(
-            f"{person_label(bot, guild, m.id)} · {game}" for m, game in live[:8]
-        )
-        extra = f" · +{len(live) - 8} more" if len(live) > 8 else ""
-        now_line = live_line + extra
-    else:
-        now_line = "_nobody in Playing … right now_"
     return (
         "Watching games",
-        f"**Yes.** Right now: {now_line}\n"
-        f"History ({days}d): **{people}** people · **{records}** records",
+        f"**Yes.** **{len(live)}** playing now · "
+        f"history ({days}d): **{people}** people · **{records}** records",
     )
 
 
 def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
     settings = bot.db.get_play_settings(guild.id)
     groups = detect_groups(bot.db, guild.id)
-    allowed = [g for g in bot.db.list_known_play_games(guild.id) if g["enabled"] and not g["blocked"]]
+    allowed = [
+        g
+        for g in bot.db.list_known_play_games(guild.id, limit=500)
+        if g["enabled"] and not g["blocked"]
+    ]
     active = bot.db.list_play_suggestions(guild.id, statuses=ACTIVE_STATUSES, limit=8)
     auto = "on" if settings["play_auto_enabled"] else "off"
     events = "on" if settings["play_auto_event"] else "off"
@@ -562,6 +604,16 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
     )
     watch_name, watch_value = tracking_field(guild, bot)
     embed.add_field(name=watch_name, value=watch_value, inline=False)
+    live = live_playing(guild)
+    _add_chunked_fields(
+        embed,
+        f"Playing now ({len(live)})",
+        [
+            f"{person_label(bot, guild, member.id)} · **{game}**"
+            for member, game in live
+        ],
+        empty="_nobody in Playing … right now_",
+    )
     embed.add_field(
         name="Setup",
         value=(
@@ -584,23 +636,25 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
         ),
         inline=False,
     )
-    allowed_names = ", ".join(f"**{r['game_name']}**" for r in allowed[:8]) or "_none allowed yet_"
+    allowed_names = [f"**{r['game_name']}**" for r in allowed]
     embed.add_field(
         name=f"Allowed games ({len(allowed)})",
-        value=allowed_names,
+        value=", ".join(allowed_names)[:1024] if allowed_names else "_none allowed yet_",
         inline=False,
     )
 
     detect_lines: list[str] = []
-    for group in groups[:6]:
+    for group in groups:
         flag = "allowed" if group.allowed else ("blocked" if group.blocked else "not allowed")
         detect_lines.append(
             f"**{group.game_name}** — {group.count} people ({flag})"
         )
-    embed.add_field(
-        name="Recent overlap",
-        value="\n".join(detect_lines) if detect_lines else "_no shared games in the look-back window_",
-        inline=False,
+    _add_chunked_fields(
+        embed,
+        "Recent overlap",
+        detect_lines,
+        empty="_no shared games in the look-back window_",
+        max_fields=4,
     )
     if active:
         lines = []
@@ -613,7 +667,7 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
     if not bot.intents.presences:
         embed.set_footer(text="Not watching games — Presence Intent is off")
     else:
-        embed.set_footer(text="Open Activity to see everyone the bot has noticed")
+        embed.set_footer(text="Activity has the stored history for each person")
     return embed
 
 
@@ -934,7 +988,10 @@ class EditGameModal(discord.ui.Modal, title="Edit game"):
         self.hub._rebuild()
         await interaction.response.edit_message(
             embed=games_embed(
-                interaction.guild, self.hub.bot, selected=self.game_key
+                interaction.guild,
+                self.hub.bot,
+                selected=self.game_key,
+                page=_hub_games_page(self.hub),
             ),
             view=self.hub,
         )
@@ -1010,45 +1067,37 @@ def hub_search_embed(hub) -> discord.Embed:
 def activity_embed(guild: discord.Guild, bot) -> discord.Embed:
     days, since = _lookback_since(guild.id, bot)
     live = live_playing(guild)
-    rows = bot.db.list_play_activity_recent(guild.id, since, limit=25)
+    rows = bot.db.list_play_activity_recent(guild.id, since, limit=200)
     embed = discord.Embed(
         title="Play together · activity",
         description=(
-            "What Discord is sending the bot **right now**, and what it has "
-            "stored recently. Review only lists games **two or more** people share."
+            "Everyone Discord is sending the bot **right now**, and everyone "
+            "stored in the look-back window. Review only lists games "
+            "**two or more** people share."
         ),
         color=ACCENT if bot.intents.presences else MUTED,
     )
     watch_name, watch_value = tracking_field(guild, bot)
     embed.add_field(name=watch_name, value=watch_value, inline=False)
 
-    if live:
-        live_lines = [
+    _add_chunked_fields(
+        embed,
+        f"Playing right now ({len(live)})",
+        [
             f"{person_label(bot, guild, member.id)} — **{game}**"
-            for member, game in live[:15]
-        ]
-        if len(live) > 15:
-            live_lines.append(f"_+{len(live) - 15} more_")
-        embed.add_field(
-            name=f"Playing right now ({len(live)})",
-            value="\n".join(live_lines)[:1024],
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="Playing right now",
-            value=(
-                "_nothing visible — if people are in a game, Presence Intent "
-                "is still off or Discord has not sent an update yet._"
-                if not bot.intents.presences
-                else "_nobody with a Playing status right now_"
-            ),
-            inline=False,
-        )
+            for member, game in live
+        ],
+        empty=(
+            "_nothing visible — if people are in a game, Presence Intent "
+            "is still off or Discord has not sent an update yet._"
+            if not bot.intents.presences
+            else "_nobody with a Playing status right now_"
+        ),
+    )
 
     if rows:
         hist = []
-        for row in rows[:18]:
+        for row in rows:
             last = parse_iso(row["last_seen"])
             ago = (
                 format_days_ago(
@@ -1061,11 +1110,7 @@ def activity_embed(guild: discord.Guild, bot) -> discord.Embed:
                 f"{person_label(bot, guild, int(row['user_id']))} — "
                 f"**{row['game_name']}** · {ago}"
             )
-        embed.add_field(
-            name=f"Stored ({days}d)",
-            value="\n".join(hist)[:1024],
-            inline=False,
-        )
+        _add_chunked_fields(embed, f"Stored ({days}d, {len(hist)})", hist)
     else:
         embed.add_field(
             name=f"Stored ({days}d)",
@@ -1076,9 +1121,13 @@ def activity_embed(guild: discord.Guild, bot) -> discord.Embed:
 
 
 def games_embed(
-    guild: discord.Guild, bot, *, selected: str | None = None
+    guild: discord.Guild,
+    bot,
+    *,
+    selected: str | None = None,
+    page: int = 0,
 ) -> discord.Embed:
-    games = bot.db.list_known_play_games(guild.id, limit=25)
+    games = bot.db.list_known_play_games(guild.id, limit=500)
     embed = discord.Embed(
         title="Play together · games",
         description=(
@@ -1108,7 +1157,14 @@ def games_embed(
         if game["min_players"]:
             extra = f" · {game['min_players']}-{game['max_players'] or '?'}"
         lines.append(f"{mark}**{game['game_name']}** — {state}{extra}")
-    embed.add_field(name="Known games", value="\n".join(lines)[:1024], inline=False)
+    _add_chunked_fields(embed, f"Known games ({len(games)})", lines)
+    total = len(games)
+    if total > GAMES_SELECT_PAGE:
+        start = page * GAMES_SELECT_PAGE
+        end = min(start + GAMES_SELECT_PAGE, total)
+        embed.set_footer(
+            text=f"Dropdown shows {start + 1}–{end} of {total} · Next / Previous for the rest"
+        )
     if selected:
         game = bot.db.get_play_game(guild.id, selected)
         if game:
@@ -1120,7 +1176,7 @@ def games_embed(
             who = ", ".join(
                 f"{person_label(bot, guild, int(p['user_id']))} "
                 f"({format_days_ago((_now_utc() - (parse_iso(p['last_seen']) or _now_utc())).total_seconds() / 86400)})"
-                for p in people[:8]
+                for p in people
             ) or "_nobody recently_"
             link = store_link_markdown(game["steam_url"]) or "_no store page yet — Add game to search_"
             embed.add_field(
@@ -1145,15 +1201,15 @@ def review_embed(guild: discord.Guild, bot) -> discord.Embed:
     )
     if groups:
         lines = []
-        for group in groups[:10]:
+        for group in groups:
             flag = "allowed" if group.allowed else ("blocked" if group.blocked else "off")
             names = join_names(
-                [person_label(bot, guild, uid) for uid, _w, _t in group.people[:5]]
+                [person_label(bot, guild, uid) for uid, _w, _t in group.people]
             )
             lines.append(
                 f"**{group.game_name}** · {group.count} · {flag}\n{names}"
             )
-        embed.add_field(name="Overlap", value="\n".join(lines)[:1024], inline=False)
+        _add_chunked_fields(embed, "Overlap", lines)
     else:
         hint = (
             "_none yet — overlap means 2+ people with the same game. "
@@ -1337,9 +1393,10 @@ def _add_main_controls(hub) -> None:
             return
         hub.page = "play_games"
         hub.play_game_key = None
+        hub.play_games_page = 0
         hub._rebuild()
         await i.response.edit_message(
-            embed=games_embed(i.guild, hub.bot), view=hub
+            embed=games_embed(i.guild, hub.bot, page=0), view=hub
         )
 
     async def on_create(i: discord.Interaction) -> None:
@@ -1425,7 +1482,13 @@ def _add_activity_controls(hub) -> None:
 
 
 def _add_games_controls(hub) -> None:
-    games = hub.bot.db.list_known_play_games(hub.guild_id, limit=25)
+    games = hub.bot.db.list_known_play_games(hub.guild_id, limit=500)
+    page = max(0, int(getattr(hub, "play_games_page", 0) or 0))
+    max_page = max(0, (len(games) - 1) // GAMES_SELECT_PAGE) if games else 0
+    if page > max_page:
+        page = max_page
+        hub.play_games_page = page
+    slice_ = games[page * GAMES_SELECT_PAGE : (page + 1) * GAMES_SELECT_PAGE]
     options = [
         discord.SelectOption(
             label=str(g["game_name"])[:100],
@@ -1436,7 +1499,7 @@ def _add_games_controls(hub) -> None:
                 else ("allowed" if g["enabled"] else "off")
             ),
         )
-        for g in games
+        for g in slice_
     ]
     if options:
         select = discord.ui.Select(
@@ -1450,7 +1513,12 @@ def _add_games_controls(hub) -> None:
             hub.page = "play_games"
             hub._rebuild()
             await i.response.edit_message(
-                embed=games_embed(i.guild, hub.bot, selected=hub.play_game_key),
+                embed=games_embed(
+                    i.guild,
+                    hub.bot,
+                    selected=hub.play_game_key,
+                    page=_hub_games_page(hub),
+                ),
                 view=hub,
             )
 
@@ -1472,7 +1540,13 @@ def _add_games_controls(hub) -> None:
         )
         hub._rebuild()
         await i.response.edit_message(
-            embed=games_embed(i.guild, hub.bot, selected=key), view=hub
+            embed=games_embed(
+                i.guild,
+                hub.bot,
+                selected=key,
+                page=_hub_games_page(hub),
+            ),
+            view=hub,
         )
 
     allow = discord.ui.Button(label="Allow", style=discord.ButtonStyle.success, row=2)
@@ -1522,6 +1596,56 @@ def _add_games_controls(hub) -> None:
     hub.add_item(block)
     hub.add_item(edit)
     hub.add_item(add)
+    if len(games) > GAMES_SELECT_PAGE:
+        prev_btn = discord.ui.Button(
+            label="Previous",
+            style=discord.ButtonStyle.secondary,
+            row=4,
+            disabled=page <= 0,
+        )
+        next_btn = discord.ui.Button(
+            label="Next",
+            style=discord.ButtonStyle.secondary,
+            row=4,
+            disabled=page >= max_page,
+        )
+
+        async def on_prev(i: discord.Interaction) -> None:
+            if not await hub._admin_ok(i):
+                return
+            hub.play_games_page = max(0, page - 1)
+            hub.page = "play_games"
+            hub._rebuild()
+            await i.response.edit_message(
+                embed=games_embed(
+                    i.guild,
+                    hub.bot,
+                    selected=getattr(hub, "play_game_key", None),
+                    page=hub.play_games_page,
+                ),
+                view=hub,
+            )
+
+        async def on_next(i: discord.Interaction) -> None:
+            if not await hub._admin_ok(i):
+                return
+            hub.play_games_page = min(max_page, page + 1)
+            hub.page = "play_games"
+            hub._rebuild()
+            await i.response.edit_message(
+                embed=games_embed(
+                    i.guild,
+                    hub.bot,
+                    selected=getattr(hub, "play_game_key", None),
+                    page=hub.play_games_page,
+                ),
+                view=hub,
+            )
+
+        prev_btn.callback = on_prev
+        next_btn.callback = on_next
+        hub.add_item(prev_btn)
+        hub.add_item(next_btn)
     hub.add_item(_back_to_play(hub))
 
 
@@ -1570,7 +1694,7 @@ def _add_search_controls(hub) -> None:
             hub.page = "play_games"
             hub._rebuild()
             await i.response.edit_message(
-                embed=games_embed(i.guild, hub.bot, selected=key),
+                embed=games_embed(i.guild, hub.bot, selected=key, page=_hub_games_page(hub)),
                 view=hub,
             )
             await i.followup.send(
@@ -1596,7 +1720,12 @@ def _add_search_controls(hub) -> None:
         hub.page = "play_games"
         hub._rebuild()
         await i.response.edit_message(
-            embed=games_embed(i.guild, hub.bot, selected=getattr(hub, "play_game_key", None)),
+            embed=games_embed(
+                i.guild,
+                hub.bot,
+                selected=getattr(hub, "play_game_key", None),
+                page=_hub_games_page(hub),
+            ),
             view=hub,
         )
 
@@ -1613,7 +1742,7 @@ def _add_review_controls(hub) -> None:
         hub.guild_id, statuses=ACTIVE_STATUSES, limit=10
     )
     options: list[discord.SelectOption] = []
-    for group in groups[:15]:
+    for group in groups[:25]:
         options.append(
             discord.SelectOption(
                 label=f"{group.game_name} · {group.count} people"[:100],

@@ -1642,7 +1642,7 @@ class Database:
             ).fetchone()
         return int(row["n"] or 0), int(row["people"] or 0)
 
-    def list_known_play_games(self, guild_id: int, *, limit: int = 40) -> list[sqlite3.Row]:
+    def list_known_play_games(self, guild_id: int, *, limit: int = 500) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return conn.execute(
                 """

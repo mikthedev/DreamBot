@@ -16,7 +16,18 @@ from play_together import (
     recency_weight,
     should_auto_suggest,
     social_score,
+    _add_chunked_fields,
 )
+import discord
+
+
+def test_chunked_fields_split_long_lists():
+    embed = discord.Embed(title="t")
+    lines = [f"line-{i:03d} " + ("x" * 80) for i in range(40)]
+    _add_chunked_fields(embed, "Known games (40)", lines)
+    assert len(embed.fields) >= 2
+    total = sum(f.value.count("line-") for f in embed.fields)
+    assert total == 40
 
 
 def test_game_key():
@@ -156,4 +167,5 @@ if __name__ == "__main__":
     test_join_and_relative()
     test_social_score_prefers_voice_and_this_game()
     test_activity_session_and_detection()
+    test_chunked_fields_split_long_lists()
     print("ok")

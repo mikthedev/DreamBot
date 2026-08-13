@@ -659,7 +659,10 @@ class AdminHubView(discord.ui.View):
             return hub_play_embed(guild, self.bot)
         if self.page == "play_games":
             return games_embed(
-                guild, self.bot, selected=getattr(self, "play_game_key", None)
+                guild,
+                self.bot,
+                selected=getattr(self, "play_game_key", None),
+                page=max(0, int(getattr(self, "play_games_page", 0) or 0)),
             )
         if self.page == "play_game_search":
             return hub_search_embed(self)

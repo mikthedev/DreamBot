@@ -1,0 +1,14 @@
+---
+description: Always commit and push when work is ready
+alwaysApply: true
+---
+
+# Commit and push when ready
+
+When a feature, fix, or docs update is finished and working:
+
+1. Commit with a clear message (follow the repo’s git commit protocol).
+2. Push to `origin` on the current branch unless the user said not to push.
+3. Do not wait for an extra “commit/push” ask — treat that as the default for this project.
+
+Still never force-push, amend others’ commits, or commit secrets.

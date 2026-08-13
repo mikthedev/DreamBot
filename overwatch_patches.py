@@ -87,7 +87,8 @@ def _balance_fingerprint(summary: PatchSummary) -> str:
         parts.append(hero.role)
         parts.append(hero.name)
         for ch in hero.changes:
-            parts.append(f"{ch.ability}|{ch.mode or ''}|{ch.text}")
+            tone = classify_change_tone(hero.name, ch.ability, ch.text)
+            parts.append(f"{ch.ability}|{ch.mode or ''}|{ch.text}|{tone}")
     return "\n".join(parts)
 
 
@@ -229,20 +230,27 @@ _MORE_IS_BETTER = (
 
 
 def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
-    return any(p in text for p in phrases)
+    """Phrase match with word edges so 'range' does not hit 'increased'."""
+    for phrase in phrases:
+        pat = re.escape(phrase).replace(r"\ ", r"[\s-]+")
+        if re.search(rf"(?<![a-z0-9]){pat}(?![a-z0-9])", text):
+            return True
+    return False
 
 
 def _direction_from_text(text: str) -> str | None:
     """'up' | 'down' | 'add' | 'remove' | None from verbs and from→to numbers."""
     low = text.lower()
+    # Prefer the actual numbers: 13s → 12s is down, even if the verb is missing.
     m = re.search(
-        r"(?:from|down from|up from)\s+(-?\d+(?:\.\d+)?)\s*(?:%|s|m)?\s*"
-        r"(?:→|->|to)\s*(-?\d+(?:\.\d+)?)",
+        r"(-?\d+(?:\.\d+)?)\s*(?:%|s|m|sec|seconds?)?\s*(?:→|->)\s*"
+        r"(-?\d+(?:\.\d+)?)",
         low,
     )
     if not m:
         m = re.search(
-            r"`(-?\d+(?:\.\d+)?)\s*(?:%|s)?\s*→\s*(-?\d+(?:\.\d+)?)",
+            r"(?:from|down from|up from)\s+(-?\d+(?:\.\d+)?)\s*(?:%|s|m)?\s*"
+            r"(?:→|->|to)\s*(-?\d+(?:\.\d+)?)",
             low,
         )
     if m:
@@ -256,7 +264,9 @@ def _direction_from_text(text: str) -> str | None:
             pass
 
     if re.search(r"\b(no longer|removed|removes)\b", low):
-        if _contains_any(low, ("cooldown", "penalty", "restriction", "self-damage", "self damage")):
+        if _contains_any(
+            low, ("cooldown", "penalty", "restriction", "self-damage", "self damage")
+        ):
             return "add"  # removing a downside
         return "remove"
     if re.search(
@@ -274,7 +284,9 @@ def _direction_from_text(text: str) -> str | None:
 def _stat_polarity(text: str) -> str | None:
     """'less' (lower is better) | 'more' (higher is better) | None."""
     low = text.lower()
-    # More specific phrases first so "fuel drain" wins over generic "fuel"
+    # Cooldown always: less waiting = more ability uptime = buff.
+    if re.search(r"\bcool\s*-?downs?\b", low):
+        return "less"
     if _contains_any(low, _LESS_IS_BETTER):
         return "less"
     if _contains_any(low, _MORE_IS_BETTER):
@@ -312,6 +324,24 @@ def classify_change_tone(*parts: str) -> str:
 
     # Unknown stat: don't guess — "reduced" is often a buff
     return "•"
+
+
+def _resolved_tone(ability: str, ch: ChangeLine) -> str:
+    """Re-classify at display time so old saved payloads pick up cooldown fixes."""
+    tone = classify_change_tone(ability, ch.ability or "", ch.text or "")
+    if tone in ("▲", "▼"):
+        return tone
+    return ch.tone if ch.tone in ("▲", "▼") else "•"
+
+
+def _payload_tones_stale(summary: PatchSummary) -> bool:
+    """True when stored ▲/▼ disagrees with cooldown-aware classification."""
+    for hero in summary.heroes:
+        for ch in hero.changes:
+            resolved = _resolved_tone(ch.ability, ch)
+            if ch.tone in ("▲", "▼") and resolved in ("▲", "▼") and ch.tone != resolved:
+                return True
+    return False
 
 
 def _tone_from(text: str, *, ability: str = "", label: str = "") -> str:
@@ -430,18 +460,26 @@ def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
 
     rows: list[str] = [ability]
     for c in shared:
-        rows.append(f"{_tone_label(c.tone)}  {c.text}")
+        rows.append(f"{_tone_label(_resolved_tone(ability, c))}  {c.text}")
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                rows.append(f"{_tone_label(a.tone)}  5v5  {a.text}")
-                rows.append(f"{_tone_label(b.tone)}  6v6  {b.text}")
+                rows.append(
+                    f"{_tone_label(_resolved_tone(ability, a))}  5v5  {a.text}"
+                )
+                rows.append(
+                    f"{_tone_label(_resolved_tone(ability, b))}  6v6  {b.text}"
+                )
         else:
             for c in v5:
-                rows.append(f"{_tone_label(c.tone)}  5v5  {c.text}")
+                rows.append(
+                    f"{_tone_label(_resolved_tone(ability, c))}  5v5  {c.text}"
+                )
             for c in v6:
-                rows.append(f"{_tone_label(c.tone)}  6v6  {c.text}")
+                rows.append(
+                    f"{_tone_label(_resolved_tone(ability, c))}  6v6  {c.text}"
+                )
 
     return "\n".join(rows)
 
@@ -453,7 +491,9 @@ def _hero_changes_compact(
     rows: list[str] = []
     for ch in hero.changes[:max_lines]:
         mode = f" · {ch.mode}" if ch.mode else ""
-        rows.append(f"{_tone_label(ch.tone)} · {ch.ability}{mode} · {ch.text}")
+        rows.append(
+            f"{_tone_label(_resolved_tone(ch.ability, ch))} · {ch.ability}{mode} · {ch.text}"
+        )
     extra = len(hero.changes) - max_lines
     if extra > 0:
         rows.append(f"_+{extra} more…_")
@@ -1328,9 +1368,12 @@ class OverwatchPatchCog(commands.Cog):
             # that the first publish missed — e.g. "Hero Updates" without Tank/Damage/Support.
             old_raw = self.bot.db.get_ow_patch_payload(guild.id, summary.fingerprint)
             old = summary_from_payload(old_raw) if old_raw else None
-            if old is not None and _balance_fingerprint(old) == _balance_fingerprint(
-                summary
-            ):
+            same_lines = (
+                old is not None
+                and _balance_fingerprint(old) == _balance_fingerprint(summary)
+            )
+            stale_tones = old is not None and _payload_tones_stale(old)
+            if same_lines and not stale_tones:
                 return False, f"Already posted `{summary.fingerprint}`."
             messages = await self.publish_live(channel, summary)
             if not messages:

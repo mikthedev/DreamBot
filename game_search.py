@@ -120,13 +120,103 @@ def steam_app_id_from_url(url: str | None) -> int | None:
     return int(match.group(1))
 
 
-def steam_cdn_art(app_id: int) -> GameArt:
-    """CDN paths that usually exist for every Steam app."""
+def steam_cdn_candidates(app_id: int) -> tuple[list[str], list[str]]:
+    """Possible portrait (icon) and banner (image) URLs on the classic CDN."""
     base = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{int(app_id)}"
-    return GameArt(
-        icon_url=f"{base}/library_600x900.jpg",
-        image_url=f"{base}/header.jpg",
-    )
+    alt = f"https://steamcdn-a.akamaihd.net/steam/apps/{int(app_id)}"
+    portraits = [
+        f"{base}/library_600x900.jpg",
+        f"{alt}/library_600x900.jpg",
+        f"{base}/capsule_231x87.jpg",
+        f"{alt}/capsule_231x87.jpg",
+    ]
+    banners = [
+        f"{base}/header.jpg",
+        f"{alt}/header.jpg",
+        f"{base}/library_hero.jpg",
+        f"{alt}/library_hero.jpg",
+        f"{base}/capsule_616x353.jpg",
+        f"{alt}/capsule_616x353.jpg",
+    ]
+    return portraits, banners
+
+
+def steam_cdn_art(app_id: int) -> GameArt:
+    """Unverified classic CDN paths (may 404 for some apps). Prefer resolve_game_art."""
+    portraits, banners = steam_cdn_candidates(app_id)
+    return GameArt(icon_url=portraits[0], image_url=banners[0])
+
+
+async def _url_is_image(session: aiohttp.ClientSession, url: str | None) -> bool:
+    if not url:
+        return False
+    try:
+        async with session.head(url, ssl=_SSL_CTX, allow_redirects=True) as resp:
+            ctype = (resp.content_type or "").lower()
+            if resp.status == 200 and ctype.startswith("image/"):
+                return True
+        async with session.get(
+            url,
+            ssl=_SSL_CTX,
+            allow_redirects=True,
+            headers={"Range": "bytes=0-1023"},
+        ) as resp:
+            ctype = (resp.content_type or "").lower()
+            return resp.status in (200, 206) and ctype.startswith("image/")
+    except Exception:
+        return False
+
+
+async def _first_live_image(
+    session: aiohttp.ClientSession, urls: list[str | None]
+) -> str | None:
+    for url in urls:
+        if url and await _url_is_image(session, url):
+            return url
+    return None
+
+
+def _prefer_raster(url: str | None) -> str | None:
+    """Discord embeds often fail on SVG logos."""
+    if not url:
+        return None
+    low = url.lower().split("?", 1)[0]
+    if low.endswith(".svg"):
+        return None
+    return url
+
+
+async def _steam_appdetails_art(
+    session: aiohttp.ClientSession, app_id: int
+) -> GameArt:
+    try:
+        async with session.get(
+            "https://store.steampowered.com/api/appdetails",
+            params={"appids": int(app_id), "l": "english"},
+            ssl=_SSL_CTX,
+        ) as resp:
+            if resp.status >= 400:
+                return GameArt()
+            data = await resp.json(content_type=None)
+    except Exception:
+        log.debug("Steam appdetails failed for %s", app_id, exc_info=True)
+        return GameArt()
+    entry = (data or {}).get(str(app_id)) or {}
+    if not entry.get("success"):
+        return GameArt()
+    payload = entry.get("data") or {}
+    header = str(payload.get("header_image") or "").strip() or None
+    capsule = str(payload.get("capsule_image") or "").strip() or None
+    screens = payload.get("screenshots") or []
+    screen = None
+    if isinstance(screens, list) and screens:
+        first = screens[0] if isinstance(screens[0], dict) else {}
+        screen = str(first.get("path_full") or first.get("path_thumbnail") or "").strip() or None
+    portraits, banners = steam_cdn_candidates(app_id)
+    icon = await _first_live_image(session, [capsule, *portraits])
+    image = await _first_live_image(session, [header, *banners, screen])
+    return GameArt(icon_url=icon, image_url=image)
+
 
 
 
@@ -527,10 +617,10 @@ async def _wiki_summary_if_game(
     image = None
     thumbnail = page.get("thumbnail")
     if isinstance(thumbnail, dict):
-        thumb = str(thumbnail.get("source") or "").strip() or None
+        thumb = _prefer_raster(str(thumbnail.get("source") or "").strip() or None)
     original = page.get("originalimage")
     if isinstance(original, dict):
-        image = str(original.get("source") or "").strip() or None
+        image = _prefer_raster(str(original.get("source") or "").strip() or None)
     return GameHit(
         name=name,
         url=url,
@@ -544,35 +634,50 @@ async def _wiki_summary_if_game(
 async def resolve_game_art(
     game_name: str, *, store_url: str | None = None
 ) -> GameArt:
-    """Best available cover art for embeds: Steam CDN, then Wikipedia."""
-    app_id = steam_app_id_from_url(store_url)
-    if app_id:
-        return steam_cdn_art(app_id)
-
+    """Best available cover art: Steam appdetails (real CDN hashes), then Wikipedia."""
     q = " ".join((game_name or "").split())
-    if len(q) < 2:
-        return GameArt()
+    app_id = steam_app_id_from_url(store_url)
 
-    timeout = aiohttp.ClientTimeout(total=15)
+    timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
-        steam_hit = await _best_steam_match(session, q)
-        if steam_hit is not None:
-            if steam_hit.app_id:
-                cdn = steam_cdn_art(steam_hit.app_id)
-                return GameArt(
-                    icon_url=steam_hit.icon_url or cdn.icon_url,
-                    image_url=steam_hit.image_url or cdn.image_url,
-                )
-            return GameArt(icon_url=steam_hit.icon_url, image_url=steam_hit.image_url)
+        if app_id:
+            art = await _steam_appdetails_art(session, app_id)
+            if art.icon_url or art.image_url:
+                return art
 
-        wiki = await _safe_wiki(session, q)
-        for hit in wiki:
-            if _bare_key(hit.name) == _bare_key(q) or steam_title_matches(q, hit.name):
-                if hit.icon_url or hit.image_url:
-                    return GameArt(icon_url=hit.icon_url, image_url=hit.image_url)
-        for hit in wiki:
-            if hit.icon_url or hit.image_url:
-                return GameArt(icon_url=hit.icon_url, image_url=hit.image_url)
+        if len(q) >= 2:
+            steam_hit = await _best_steam_match(session, q)
+            if steam_hit is not None and steam_hit.app_id:
+                art = await _steam_appdetails_art(session, steam_hit.app_id)
+                if art.icon_url or art.image_url:
+                    return art
+                # Fall back to store-search capsule + classic CDN probe.
+                portraits, banners = steam_cdn_candidates(steam_hit.app_id)
+                icon = await _first_live_image(
+                    session, [steam_hit.icon_url, *portraits]
+                )
+                image = await _first_live_image(
+                    session, [steam_hit.image_url, *banners]
+                )
+                if icon or image:
+                    return GameArt(icon_url=icon, image_url=image)
+
+            wiki = await _safe_wiki(session, q)
+            for hit in wiki:
+                if not (
+                    _bare_key(hit.name) == _bare_key(q)
+                    or steam_title_matches(q, hit.name)
+                ):
+                    continue
+                icon = _prefer_raster(hit.icon_url)
+                image = _prefer_raster(hit.image_url) or icon
+                if icon or image:
+                    return GameArt(icon_url=icon, image_url=image)
+            for hit in wiki:
+                icon = _prefer_raster(hit.icon_url)
+                image = _prefer_raster(hit.image_url) or icon
+                if icon or image:
+                    return GameArt(icon_url=icon, image_url=image)
     return GameArt()
 
 

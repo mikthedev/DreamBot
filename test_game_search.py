@@ -82,12 +82,14 @@ def test_store_link_label():
 
 
 def test_steam_cdn_art():
-    from game_search import steam_app_id_from_url, steam_cdn_art
+    from game_search import steam_app_id_from_url, steam_cdn_art, steam_cdn_candidates
 
     assert steam_app_id_from_url("https://store.steampowered.com/app/3527290/PEAK/") == 3527290
     art = steam_cdn_art(3527290)
     assert "3527290" in (art.icon_url or "")
-    assert art.image_url and art.image_url.endswith("header.jpg")
+    assert art.image_url and "header.jpg" in art.image_url
+    portraits, banners = steam_cdn_candidates(3527290)
+    assert any("library_hero.jpg" in u for u in banners)
 
 
 def test_known_official_fallback():

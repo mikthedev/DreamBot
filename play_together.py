@@ -420,16 +420,17 @@ async def ensure_game_art(
     game_key: str,
     game_name: str,
     store_url: str | None = None,
+    force: bool = False,
 ) -> tuple[str | None, str | None]:
     game = bot.db.get_play_game(guild_id, game_key)
     icon = _row_get(game, "icon_url") if game else None
     image = _row_get(game, "image_url") if game else None
-    if icon and image:
+    if icon and image and not force:
         return icon, image
     store = store_url or (_row_get(game, "steam_url") if game else None)
     art = await resolve_game_art(game_name, store_url=store)
-    icon = art.icon_url or icon
-    image = art.image_url or image
+    icon = art.icon_url or (None if force else icon)
+    image = art.image_url or (None if force else image)
     if icon or image:
         bot.db.upsert_play_game(
             guild_id,
@@ -1475,11 +1476,18 @@ def games_embed(
             link = store_link_markdown(game["steam_url"]) or (
                 "_no link yet — use **Fix link** (Steam first, then website)_"
             )
+            has_art = bool(_row_get(game, "icon_url") or _row_get(game, "image_url"))
+            art_line = (
+                "Banner ready"
+                if has_art
+                else "No banner yet — use **Refresh banners**"
+            )
             embed.add_field(
                 name=str(game["game_name"]),
                 value=(
                     f"{who}\n"
                     f"{link}\n"
+                    f"{art_line}\n"
                     f"{game['store_note'] or ''}"
                 )[:1024],
                 inline=False,
@@ -2018,6 +2026,7 @@ def _add_games_controls(hub) -> None:
             game_key=key,
             game_name=str(game["game_name"]),
             store_url=resolved.url,
+            force=True,
         )
         hub.page = "play_games"
         hub.play_game_key = key
@@ -2055,6 +2064,11 @@ def _add_games_controls(hub) -> None:
         style=discord.ButtonStyle.secondary,
         row=4,
     )
+    banners = discord.ui.Button(
+        label="Refresh banners",
+        style=discord.ButtonStyle.primary,
+        row=4,
+    )
 
     async def on_fill(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i):
@@ -2082,6 +2096,14 @@ def _add_games_controls(hub) -> None:
                     steam_url=resolved.url,
                     set_steam=True,
                 )
+                await ensure_game_art(
+                    hub.bot,
+                    hub.guild_id,
+                    game_key=str(g["game_key"]),
+                    game_name=str(g["game_name"]),
+                    store_url=resolved.url,
+                    force=True,
+                )
                 fixed += 1
             else:
                 failed.append(str(g["game_name"]))
@@ -2106,8 +2128,84 @@ def _add_games_controls(hub) -> None:
             ephemeral=True,
         )
 
+    async def on_banners(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i):
+            return
+        await i.response.defer()
+        targets = hub.bot.db.list_known_play_games(hub.guild_id, limit=500)
+        # Prefer selected game first, then the rest.
+        if key:
+            targets = sorted(
+                targets,
+                key=lambda g: 0 if str(g["game_key"]) == key else 1,
+            )
+        if not targets:
+            await i.followup.send("Add games first.", ephemeral=True)
+            return
+        updated = 0
+        failed: list[str] = []
+        for g in targets[:40]:
+            icon, image = await ensure_game_art(
+                hub.bot,
+                hub.guild_id,
+                game_key=str(g["game_key"]),
+                game_name=str(g["game_name"]),
+                store_url=(g["steam_url"] or None),
+                force=True,
+            )
+            if icon or image:
+                updated += 1
+            else:
+                failed.append(str(g["game_name"]))
+        hub.page = "play_games"
+        hub._rebuild()
+        await i.edit_original_response(
+            embed=games_embed(
+                i.guild,
+                hub.bot,
+                selected=getattr(hub, "play_game_key", None),
+                page=_hub_games_page(hub),
+            ),
+            view=hub,
+        )
+        # Also refresh open suggestion cards that share these games.
+        cog = hub.bot.get_cog("PlayTogetherCog")
+        refreshed = 0
+        if cog is not None:
+            active = hub.bot.db.list_play_suggestions(
+                hub.guild_id, statuses=ACTIVE_STATUSES, limit=20
+            )
+            for row in active:
+                game = hub.bot.db.get_play_game(hub.guild_id, str(row["game_key"]))
+                if game is None:
+                    continue
+                icon = _row_get(game, "icon_url")
+                image = _row_get(game, "image_url")
+                if not icon and not image:
+                    continue
+                hub.bot.db.update_play_suggestion(
+                    int(row["id"]),
+                    icon_url=icon,
+                    image_url=image,
+                )
+                await cog.refresh_suggestion_message(int(row["id"]))
+                refreshed += 1
+        extra = ""
+        if failed:
+            extra = " No art for: " + ", ".join(failed[:8])
+            if len(failed) > 8:
+                extra += f" (+{len(failed) - 8})"
+        await i.followup.send(
+            f"Updated banners for **{updated}** game(s)"
+            + (f", refreshed **{refreshed}** open card(s)" if refreshed else "")
+            + f".{extra}",
+            ephemeral=True,
+        )
+
     fill.callback = on_fill
+    banners.callback = on_banners
     hub.add_item(fill)
+    hub.add_item(banners)
     if len(games) > GAMES_SELECT_PAGE:
         prev_btn = discord.ui.Button(
             label="Previous",
@@ -2719,6 +2817,7 @@ class PlayTogetherCog(commands.Cog):
             game_key=game_key,
             game_name=game_name,
             store_url=steam_url,
+            force=True,
         )
         sid = self.bot.db.create_play_suggestion(
             guild.id,

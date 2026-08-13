@@ -485,18 +485,20 @@ def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
 
 
 def _hero_changes_compact(
-    hero: HeroChange, *, max_lines: int = 5
+    hero: HeroChange, *, max_lines: int | None = None
 ) -> str:
     """One line per tweak — used by hero history timelines."""
+    changes = hero.changes if max_lines is None else hero.changes[:max_lines]
     rows: list[str] = []
-    for ch in hero.changes[:max_lines]:
+    for ch in changes:
         mode = f" · {ch.mode}" if ch.mode else ""
         rows.append(
             f"{_tone_label(_resolved_tone(ch.ability, ch))} · {ch.ability}{mode} · {ch.text}"
         )
-    extra = len(hero.changes) - max_lines
-    if extra > 0:
-        rows.append(f"_+{extra} more…_")
+    if max_lines is not None:
+        extra = len(hero.changes) - max_lines
+        if extra > 0:
+            rows.append(f"_+{extra} more…_")
     return "\n".join(rows) if rows else "_No detail lines_"
 
 

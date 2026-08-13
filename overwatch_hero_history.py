@@ -135,12 +135,10 @@ def _hit_role_colour(hit: HeroPatchHit) -> discord.Color:
 
 
 def _history_hit_body(hit: HeroPatchHit) -> str:
-    """Ultra-compact change lines for the timeline."""
+    """Every change line for this patch — no '+N more' truncation."""
     if hit.hero is not None:
-        return _hero_changes_compact(hit.hero, max_lines=4)
-    rows = [f"· {ln}" for ln in hit.lines[:4]]
-    if len(hit.lines) > 4:
-        rows.append(f"_+{len(hit.lines) - 4} more…_")
+        return _hero_changes_compact(hit.hero, max_lines=None)
+    rows = [f"· {ln}" for ln in hit.lines]
     return "\n".join(rows) or "_No detail lines_"
 
 

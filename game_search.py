@@ -283,9 +283,16 @@ async def fetch_steam_ua_price(
             hit = await _best_steam_match(session, game_name)
             app_id = hit.app_id if hit else None
         if app_id is None:
+            if store_url or game_name:
+                log.info(
+                    "No Steam app id for price lookup (%r / %r)", game_name, store_url
+                )
             return ""
         payload = await _steam_appdetails(session, app_id, cc="ua")
-        return format_steam_ua_price(payload)
+        text = format_steam_ua_price(payload)
+        if not text:
+            log.info("No UA price for Steam app %s (%r)", app_id, game_name)
+        return text
 
 
 async def _steam_appdetails_art(
@@ -306,7 +313,7 @@ async def _steam_appdetails_art(
         )
     hashes = _hashes_from_steam_urls(header, capsule)
     portraits, banners = steam_cdn_candidates(app_id)
-    # Vertical-only candidates for the Discord thumbnail / top slot.
+    # Vertical covers only — used for Discord thumbnail AND preferred large image.
     vertical = [
         *portraits,
         *_hashed_asset_urls(
@@ -322,16 +329,20 @@ async def _steam_appdetails_art(
             ],
         ),
     ]
-    # Wide banner for the large embed image — never used as the top thumbnail.
+    # Wide store header — fallback large image only when no portrait exists.
     wide = [
         header,
         *banners,
         capsule,
         screen,
     ]
-    icon = await _first_live_image(session, vertical)
-    image = await _first_live_image(session, wide)
-    return GameArt(icon_url=icon, image_url=image)
+    portrait = await _first_live_image(session, vertical)
+    wide_banner = await _first_live_image(session, wide)
+    return GameArt(
+        icon_url=portrait,
+        # Prefer the vertical poster as the main banner when Steam has one.
+        image_url=portrait or wide_banner,
+    )
 
 
 
@@ -767,15 +778,18 @@ async def resolve_game_art(
                 art = await _steam_appdetails_art(session, steam_hit.app_id)
                 if art.icon_url or art.image_url:
                     return art
-                # Fall back: vertical library art only for thumbnail; wide for banner.
+                # Fall back: vertical library art preferred for both slots.
                 portraits, banners = steam_cdn_candidates(steam_hit.app_id)
-                icon = await _first_live_image(session, portraits)
-                image = await _first_live_image(
+                portrait = await _first_live_image(session, portraits)
+                wide_banner = await _first_live_image(
                     session,
                     [steam_hit.image_url, steam_hit.icon_url, *banners],
                 )
-                if icon or image:
-                    return GameArt(icon_url=icon, image_url=image)
+                if portrait or wide_banner:
+                    return GameArt(
+                        icon_url=portrait,
+                        image_url=portrait or wide_banner,
+                    )
 
             wiki = await _safe_wiki(session, q)
             for hit in wiki:

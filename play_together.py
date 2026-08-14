@@ -517,9 +517,14 @@ def suggestion_embed(
     )
     guild_id = int(row["guild_id"]) if row["guild_id"] else (guild.id if guild else 0)
     copy = load_play_suggest_copy(bot, guild_id)
-    title = _fill_play_template(copy["title"], values)[:256] or str(row["game_name"])
-    body = _fill_play_template(copy["body"], values)
-    footer = _fill_play_template(copy["footer"], values)
+    # Price is always rendered as its own embed field so custom templates
+    # without {price} still show the UA Steam amount.
+    price_value = values.get("price") or ""
+    body_values = dict(values)
+    body_values["price"] = ""
+    title = _fill_play_template(copy["title"], body_values)[:256] or str(row["game_name"])
+    body = _fill_play_template(copy["body"], body_values)
+    footer = _fill_play_template(copy["footer"], body_values)
     if status == "event":
         footer = "Discord event is up · same voice channel as always"
     elif status == "cancelled":
@@ -531,16 +536,29 @@ def suggestion_embed(
 
     color = SUGGEST_COLOR if status in ACTIVE_STATUSES or preview else MUTED
     embed = discord.Embed(title=title, description=body[:4096], color=color)
+    if price_value:
+        embed.add_field(name="Steam price · UA", value=price_value, inline=False)
 
     icon_url = _row_get(row, "icon_url")
     image_url = _row_get(row, "image_url")
-    if guild_id and (not icon_url or not image_url or _looks_wide_art_url(icon_url)):
+    if guild_id:
         game = bot.db.get_play_game(guild_id, str(row["game_key"]))
         if game:
-            icon_url = icon_url or _row_get(game, "icon_url")
-            image_url = image_url or _row_get(game, "image_url")
+            if not icon_url or _looks_wide_art_url(icon_url):
+                icon_url = _row_get(game, "icon_url") or icon_url
+            if not image_url or _looks_wide_art_url(image_url):
+                # Prefer catalog vertical poster over a leftover wide header.
+                game_icon = _row_get(game, "icon_url")
+                game_image = _row_get(game, "image_url")
+                if game_icon and not _looks_wide_art_url(game_icon):
+                    image_url = game_icon
+                elif game_image:
+                    image_url = game_image
     if _looks_wide_art_url(icon_url):
         icon_url = None
+    # If we have a vertical cover, use it as the large banner too.
+    if icon_url and (not image_url or _looks_wide_art_url(image_url)):
+        image_url = icon_url
 
     author_icon = None
     if getattr(bot, "user", None) is not None:
@@ -594,17 +612,27 @@ def preview_suggestion_embed(
         status="published",
     )
     copy = load_play_suggest_copy(bot, guild.id)
+    price_value = values.get("price") or ""
+    body_values = dict(values)
+    body_values["price"] = ""
     embed = discord.Embed(
-        title=_fill_play_template(copy["title"], values)[:256],
-        description=_fill_play_template(copy["body"], values)[:4096],
+        title=_fill_play_template(copy["title"], body_values)[:256],
+        description=_fill_play_template(copy["body"], body_values)[:4096],
         color=SUGGEST_COLOR,
     )
+    if price_value:
+        embed.add_field(name="Steam price · UA", value=price_value, inline=False)
+    if _looks_wide_art_url(icon_url):
+        icon_url = None
+    if icon_url and (not image_url or _looks_wide_art_url(image_url)):
+        image_url = icon_url
     author_icon = bot.user.display_avatar.url if bot.user else None
     _apply_suggestion_art(
         embed,
         icon_url=icon_url,
         image_url=image_url,
-        footer_text=_fill_play_template(copy["footer"], values)[:2000] + " · Preview",
+        footer_text=_fill_play_template(copy["footer"], body_values)[:2000]
+        + " · Preview",
         author_name="Play together · preview",
         author_icon=author_icon,
     )
@@ -2919,41 +2947,29 @@ class PlayTogetherCog(commands.Cog):
         guild = self.bot.get_guild(int(row["guild_id"]))
         if guild is None:
             return
-        need_art = (
-            not _row_get(row, "icon_url")
-            or not _row_get(row, "image_url")
-            or _looks_wide_art_url(_row_get(row, "icon_url"))
+        # Always refresh art + UA price so open cards pick up vertical posters
+        # and sale tags even if they were posted before those fields existed.
+        icon_url, image_url = await ensure_game_art(
+            self.bot,
+            int(row["guild_id"]),
+            game_key=str(row["game_key"]),
+            game_name=str(row["game_name"]),
+            store_url=_row_get(row, "steam_url"),
+            force=True,
         )
-        if need_art:
-            icon_url, image_url = await ensure_game_art(
-                self.bot,
-                int(row["guild_id"]),
-                game_key=str(row["game_key"]),
-                game_name=str(row["game_name"]),
-                store_url=_row_get(row, "steam_url"),
-                force=_looks_wide_art_url(_row_get(row, "icon_url")),
-            )
-            if icon_url or image_url:
-                self.bot.db.update_play_suggestion(
-                    suggestion_id,
-                    icon_url=icon_url or _row_get(row, "icon_url"),
-                    image_url=image_url or _row_get(row, "image_url"),
-                )
-                row = self.bot.db.get_play_suggestion(suggestion_id)
-                if row is None:
-                    return
-        # Refresh UA Steam price so sale tags stay current.
         price_text = await fetch_steam_ua_price(
             _row_get(row, "steam_url"),
             game_name=str(row["game_name"]),
         )
-        if price_text != (_row_get(row, "price_text") or ""):
-            self.bot.db.update_play_suggestion(
-                suggestion_id, price_text=price_text or None
-            )
-            row = self.bot.db.get_play_suggestion(suggestion_id)
-            if row is None:
-                return
+        self.bot.db.update_play_suggestion(
+            suggestion_id,
+            icon_url=icon_url,
+            image_url=image_url,
+            price_text=price_text or None,
+        )
+        row = self.bot.db.get_play_suggestion(suggestion_id)
+        if row is None:
+            return
         channel = guild.get_channel(int(row["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             return

@@ -35,6 +35,7 @@ from ai import AICog
 from voice_ai import VoiceAICog
 from play_together import (
     PlayExpandInButton,
+    PlayExpandMaybeButton,
     PlayExpandNopeButton,
     PlayRsvpView,
     PlayTogetherCog,
@@ -70,7 +71,9 @@ class DreamTeamBot(commands.Bot):
         self.add_view(OwLegacyHeroHistoryHubView())
         self.add_view(OnboardingView())
         self.add_view(PlayRsvpView())
-        self.add_dynamic_items(PlayExpandInButton, PlayExpandNopeButton)
+        self.add_dynamic_items(
+            PlayExpandInButton, PlayExpandMaybeButton, PlayExpandNopeButton
+        )
         await self.add_cog(WelcomeCog(self))
         await self.add_cog(BirthdayCog(self))
         await self.add_cog(AnniversaryCog(self))

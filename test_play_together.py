@@ -157,6 +157,62 @@ def test_activity_session_and_detection():
         assert any(r["game_name"] == "Minecraft" for r in recent)
 
 
+def test_suggestion_values_maybe_and_event_desc():
+    from play_together import build_event_description, suggestion_values
+
+    values = suggestion_values(
+        None,
+        None,
+        game_name="PEAK",
+        when_line="Saturday 19:00",
+        min_players=3,
+        max_players=6,
+        confirmed_ids=[1, 2],
+        maybe_ids=[3],
+        store_url="https://store.steampowered.com/app/3527290",
+        store_note=None,
+        price_text="**79₴**",
+    )
+    assert "<@1>" in values["in"] and "<@3>" in values["maybe"]
+    assert values["link"] == ""
+    assert "3527290" in values["price"]
+
+    class _FakeRsvp:
+        def __init__(self, uid):
+            self._uid = uid
+
+        def __getitem__(self, key):
+            if key == "user_id":
+                return self._uid
+            raise KeyError(key)
+
+    class _FakeDb:
+        def list_play_rsvps(self, _sid, *, status=None):
+            if status == "in":
+                return [_FakeRsvp(1), _FakeRsvp(2)]
+            if status == "maybe":
+                return [_FakeRsvp(3)]
+            return []
+
+    class _FakeBot:
+        db = _FakeDb()
+
+    row = {
+        "id": 9,
+        "game_name": "PEAK",
+        "proposed_at": "2099-01-01T17:00:00+00:00",
+        "min_players": 3,
+        "max_players": 6,
+        "steam_url": "https://store.steampowered.com/app/3527290",
+        "store_note": "bring friends",
+    }
+    desc = build_event_description(_FakeBot(), None, row, voice=None)
+    assert "play together" in desc.lower()
+    assert "In:" in desc and "<@1>" in desc
+    assert "Maybe:" in desc and "<@3>" in desc
+    assert "bring friends" in desc
+
+
 if __name__ == "__main__":
     test_game_key()
     test_recency_weight()
@@ -168,4 +224,5 @@ if __name__ == "__main__":
     test_social_score_prefers_voice_and_this_game()
     test_activity_session_and_detection()
     test_chunked_fields_split_long_lists()
+    test_suggestion_values_maybe_and_event_desc()
     print("ok")

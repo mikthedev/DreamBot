@@ -34,6 +34,7 @@ MUTED = discord.Color.from_rgb(90, 110, 140)
 SUGGEST_COLOR = discord.Color.from_rgb(20, 184, 166)
 
 RSVP_IN_ID = "play_together:in"
+RSVP_MAYBE_ID = "play_together:maybe"
 RSVP_NOPE_ID = "play_together:nope"
 ACTIVE_STATUSES = ("published", "event")
 SATURDAY = 5
@@ -49,14 +50,19 @@ DEFAULT_PLAY_BODY = (
     "├ **Party**\n"
     "│  {count}\n"
     "│\n"
-    "╰ **In so far**\n"
-    "     {in}\n"
+    "├ **In**\n"
+    "│  {in}\n"
+    "│\n"
+    "╰ **Maybe**\n"
+    "     {maybe}\n"
     "\n"
     "{link}\n"
     "{price}\n"
     "{note}"
 )
-DEFAULT_PLAY_FOOTER = "Tap I'm in if you're interested"
+DEFAULT_PLAY_FOOTER = (
+    "Tap I'm in if you're interested · Maybe if you're not sure"
+)
 
 # Older shipped copy — treat as unset so guilds pick up the new layout.
 _LEGACY_PLAY_TITLES = {"{game}"}
@@ -87,10 +93,28 @@ _LEGACY_PLAY_BODIES = {
         "{link}\n"
         "{note}"
     ),
+    (
+        "A few people here have been in **{game}** lately — "
+        "want to make it a real night?\n"
+        "\n"
+        "╭ **When**\n"
+        "│  {when}\n"
+        "│\n"
+        "├ **Party**\n"
+        "│  {count}\n"
+        "│\n"
+        "╰ **In so far**\n"
+        "     {in}\n"
+        "\n"
+        "{link}\n"
+        "{price}\n"
+        "{note}"
+    ),
 }
 _LEGACY_PLAY_FOOTERS = {
     "I'm in = you want this session. Playing the game before is not a yes.",
     "I'm in = you're free for this · Playing it before is not a yes",
+    "Tap I'm in if you're interested",
 }
 
 
@@ -378,7 +402,9 @@ def suggestion_values(
     store_note: str | None,
     price_text: str | None = None,
     status: str = "published",
+    maybe_ids: list[int] | None = None,
 ) -> dict[str, str]:
+    maybe_ids = list(maybe_ids or [])
     n = len(confirmed_ids)
     count_line = f"**{n}** people are in · aiming for **{min_players}–{max_players}**"
     if max_players > 0:
@@ -387,6 +413,10 @@ def suggestion_values(
         )
     mentions = [f"<@{uid}>" for uid in confirmed_ids[:12]]
     in_line = join_names(mentions) if mentions else "_nobody yet — tap I'm in_"
+    maybe_mentions = [f"<@{uid}>" for uid in maybe_ids[:12]]
+    maybe_line = (
+        join_names(maybe_mentions) if maybe_mentions else "_nobody on the fence_"
+    )
     price = steam_price_markdown(price_text, store_url)
     # Price already links to Steam — skip the separate ↗ Steam line.
     link = ""
@@ -406,6 +436,7 @@ def suggestion_values(
         "when": when_line,
         "count": count_line,
         "in": in_line,
+        "maybe": maybe_line,
         "link": link,
         "price": price,
         "note": note,
@@ -413,6 +444,57 @@ def suggestion_values(
         "max": str(max_players),
         "status": status,
     }
+
+
+def _rsvp_ids(bot, suggestion_id: int, status: str) -> list[int]:
+    return [
+        int(r["user_id"])
+        for r in bot.db.list_play_rsvps(suggestion_id, status=status)
+    ]
+
+
+def build_event_description(
+    bot,
+    guild: discord.Guild,
+    row,
+    *,
+    voice: discord.VoiceChannel | None = None,
+) -> str:
+    """Richer Discord scheduled-event text; kept under Discord's 1000-char cap."""
+    game = str(row["game_name"])
+    when = parse_iso(row["proposed_at"])
+    when_line = (
+        format_play_when(when.astimezone(_tz())) if when else "time TBA"
+    )
+    ins = _rsvp_ids(bot, int(row["id"]), "in")
+    maybes = _rsvp_ids(bot, int(row["id"]), "maybe")
+    min_p = int(row["min_players"])
+    max_p = int(row["max_players"])
+    steam = (row["steam_url"] or "").strip()
+    note = (row["store_note"] or "").strip()
+
+    lines = [
+        f"Dream Team · play together · {game}",
+        f"When: {when_line}",
+    ]
+    if voice is not None:
+        lines.append(f"Voice: #{voice.name}")
+    lines.append(f"Party: {len(ins)}/{max_p} in · need {min_p} to lock it in")
+    if ins:
+        lines.append(
+            "In: " + join_names([f"<@{uid}>" for uid in ins[:12]])
+        )
+    if maybes:
+        lines.append(
+            "Maybe: " + join_names([f"<@{uid}>" for uid in maybes[:10]])
+        )
+    if steam:
+        lines.append(steam)
+    if note:
+        lines.append(note)
+    lines.append("Tap I'm in / Maybe on the channel post to update.")
+    text = "\n".join(lines)
+    return text[:1000]
 
 
 def _row_get(row, key: str) -> str | None:
@@ -542,11 +624,18 @@ def suggestion_embed(
     row,
     *,
     confirmed_ids: list[int] | None = None,
+    maybe_ids: list[int] | None = None,
     preview: bool = False,
 ) -> discord.Embed:
-    confirmed_ids = confirmed_ids if confirmed_ids is not None else [
-        int(r["user_id"]) for r in bot.db.list_play_rsvps(int(row["id"]), status="in")
-    ]
+    sid = int(row["id"])
+    confirmed_ids = (
+        confirmed_ids
+        if confirmed_ids is not None
+        else _rsvp_ids(bot, sid, "in")
+    )
+    maybe_ids = (
+        maybe_ids if maybe_ids is not None else _rsvp_ids(bot, sid, "maybe")
+    )
     when = parse_iso(row["proposed_at"])
     when_local = when.astimezone(_tz()) if when else None
     when_line = format_play_when(when_local) if when_local else "time TBA"
@@ -559,6 +648,7 @@ def suggestion_embed(
         min_players=int(row["min_players"]),
         max_players=int(row["max_players"]),
         confirmed_ids=confirmed_ids,
+        maybe_ids=maybe_ids,
         store_url=(row["steam_url"] or "").strip() or None,
         store_note=(row["store_note"] or "").strip() or None,
         price_text=_row_get(row, "price_text"),
@@ -571,10 +661,14 @@ def suggestion_embed(
     if "{price}" not in copy["body"] and body_values.get("price"):
         # Custom templates without {price} still get the linked amount.
         body_values["_price_append"] = body_values["price"]
+    if "{maybe}" not in copy["body"] and maybe_ids:
+        body_values["_maybe_append"] = f"**Maybe**\n{body_values['maybe']}"
     title = _fill_play_template(copy["title"], body_values)[:256] or str(row["game_name"])
     body = _fill_play_template(copy["body"], body_values)
     if body_values.get("_price_append"):
         body = (body.rstrip() + "\n\n" + body_values["_price_append"]).strip()
+    if body_values.get("_maybe_append"):
+        body = (body.rstrip() + "\n\n" + body_values["_maybe_append"]).strip()
     footer = _fill_play_template(copy["footer"], body_values)
     if status == "event":
         footer = "Discord event is up · same voice channel as always"
@@ -653,6 +747,7 @@ def preview_suggestion_embed(
         min_players=min_p,
         max_players=max_p,
         confirmed_ids=[],
+        maybe_ids=[],
         store_url=store_url,
         store_note=store_note,
         price_text=price_text,
@@ -686,7 +781,7 @@ def preview_suggestion_embed(
     return embed
 
 class PlayRsvpView(discord.ui.View):
-    """Public I'm in / Nope — survives restarts."""
+    """Public I'm in / Maybe / Nope — survives restarts."""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -700,6 +795,16 @@ class PlayRsvpView(discord.ui.View):
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
         await _handle_rsvp(interaction, "in")
+
+    @discord.ui.button(
+        label="Maybe",
+        style=discord.ButtonStyle.primary,
+        custom_id=RSVP_MAYBE_ID,
+    )
+    async def maybe(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        await _handle_rsvp(interaction, "maybe")
 
     @discord.ui.button(
         label="Nope",
@@ -740,6 +845,34 @@ class PlayExpandInButton(
         await _handle_rsvp(interaction, "in", suggestion_id=self.suggestion_id)
 
 
+class PlayExpandMaybeButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"play_exp:maybe:(?P<sid>[0-9]+)",
+):
+    def __init__(self, suggestion_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Maybe",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"play_exp:maybe:{suggestion_id}",
+            )
+        )
+        self.suggestion_id = suggestion_id
+
+    @classmethod
+    async def from_custom_id(
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+        /,
+    ):
+        return cls(int(match["sid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _handle_rsvp(interaction, "maybe", suggestion_id=self.suggestion_id)
+
+
 class PlayExpandNopeButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"play_exp:nope:(?P<sid>[0-9]+)",
@@ -772,6 +905,7 @@ class PlayExpandView(discord.ui.View):
     def __init__(self, suggestion_id: int) -> None:
         super().__init__(timeout=None)
         self.add_item(PlayExpandInButton(suggestion_id))
+        self.add_item(PlayExpandMaybeButton(suggestion_id))
         self.add_item(PlayExpandNopeButton(suggestion_id))
 
 
@@ -781,11 +915,15 @@ async def _handle_rsvp(
     *,
     suggestion_id: int | None = None,
 ) -> None:
+    # Ack immediately — Steam refresh / event sync can exceed Discord's 3s window.
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
     bot = interaction.client
     db = bot.db
     if suggestion_id is None:
         if interaction.message is None or interaction.channel is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Couldn't find that session.", ephemeral=True
             )
             return
@@ -795,42 +933,35 @@ async def _handle_rsvp(
     else:
         row = db.get_play_suggestion(suggestion_id)
     if row is None:
-        await interaction.response.send_message(
-            "That session is gone.", ephemeral=True
-        )
+        await interaction.followup.send("That session is gone.", ephemeral=True)
         return
     if str(row["status"]) not in ACTIVE_STATUSES:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "This session isn't open anymore.", ephemeral=True
         )
         return
 
     sid = int(row["id"])
     user_id = interaction.user.id
-    confirmed = [int(r["user_id"]) for r in db.list_play_rsvps(sid, status="in")]
+    confirmed = _rsvp_ids(bot, sid, "in")
     if status == "in" and user_id not in confirmed:
         max_p = int(row["max_players"])
         if max_p > 0 and len(confirmed) >= max_p:
-            await interaction.response.send_message(
-                "This session is full.", ephemeral=True
-            )
+            await interaction.followup.send("This session is full.", ephemeral=True)
             return
 
-    db.set_play_rsvp(
-        sid, user_id, status, "self", _now_utc().isoformat()
-    )
+    db.set_play_rsvp(sid, user_id, status, "self", _now_utc().isoformat())
     cog = bot.get_cog("PlayTogetherCog")
     if cog is not None:
         await cog.after_rsvp_change(sid)
 
     if status == "in":
         msg = "You're in."
+    elif status == "maybe":
+        msg = "Marked as maybe — hop to I'm in when you're sure."
     else:
         msg = "Okay — I won't count you for this one."
-    if interaction.response.is_done():
-        await interaction.followup.send(msg, ephemeral=True)
-    else:
-        await interaction.response.send_message(msg, ephemeral=True)
+    await interaction.followup.send(msg, ephemeral=True)
 
 
 def live_playing(guild: discord.Guild) -> list[tuple[discord.Member, str]]:
@@ -950,9 +1081,9 @@ def hub_play_embed(guild: discord.Guild, bot) -> discord.Embed:
     embed = discord.Embed(
         title="Play together",
         description=(
-            "Activity is a hint — **I'm in** is the real yes.\n"
-            "Create a session from a game in **Games**, or open **Setup** to "
-            "preview / edit the suggestion message."
+            "**I'm in** = yes · **Maybe** = not sure yet.\n"
+            "Overview → pick a game to host · **Games** to allow titles · "
+            "**Review** for open sessions · **Setup** for channels."
         ),
         color=ACCENT,
     )
@@ -1023,8 +1154,8 @@ def hub_play_setup_embed(guild: discord.Guild, bot) -> discord.Embed:
         name="Suggestion message",
         value=(
             f"**Title** `{copy['title'][:80]}`\n"
-            "Placeholders: `{game}` `{when}` `{count}` `{in}` `{link}` `{price}` "
-            "`{note}` `{min}` `{max}`\n"
+            "Placeholders: `{game}` `{when}` `{count}` `{in}` `{maybe}` `{link}` "
+            "`{price}` `{note}` `{min}` `{max}`\n"
             "Use **Preview message** / **Edit message** below."
         ),
         inline=False,
@@ -1333,6 +1464,7 @@ class EditPlayModal(discord.ui.Modal, title="Edit session"):
                 ephemeral=True,
             )
             return
+        await interaction.response.defer()
         lo, hi = parse_party_size(str(self.party.value), 3, 6)
         self.hub.bot.db.update_play_suggestion(
             self.suggestion_id,
@@ -1348,7 +1480,7 @@ class EditPlayModal(discord.ui.Modal, title="Edit session"):
         self.hub.page = "play_manage"
         self.hub.play_suggestion_id = self.suggestion_id
         self.hub._rebuild()
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=manage_embed(interaction.guild, self.hub.bot, self.suggestion_id),
             view=self.hub,
         )
@@ -1667,6 +1799,7 @@ def manage_embed(guild: discord.Guild, bot, suggestion_id: int) -> discord.Embed
         return discord.Embed(title="Session gone", color=MUTED)
     embed = suggestion_embed(bot, guild, row)
     ins = bot.db.list_play_rsvps(suggestion_id, status="in")
+    maybes = bot.db.list_play_rsvps(suggestion_id, status="maybe")
     nopes = bot.db.list_play_rsvps(suggestion_id, status="nope")
     in_lines = []
     for r in ins:
@@ -1679,6 +1812,15 @@ def manage_embed(guild: discord.Guild, bot, suggestion_id: int) -> discord.Embed
         value="\n".join(in_lines) if in_lines else "_none_",
         inline=False,
     )
+    if maybes:
+        embed.add_field(
+            name="Maybe",
+            value="\n".join(
+                f"{person_label(bot, guild, int(r['user_id']))} · {r['source']}"
+                for r in maybes
+            ),
+            inline=False,
+        )
     if nopes:
         embed.add_field(
             name="Nope",
@@ -1728,31 +1870,31 @@ def _play_nav_select(hub) -> discord.ui.Select:
         discord.SelectOption(
             label="Overview",
             value="play",
-            description="Status, allowed games, overlap",
+            description="Host a session from the catalog",
             default=current == "play",
         ),
         discord.SelectOption(
             label="Games",
             value="play_games",
-            description="Allow / block / add from search",
+            description="Allow, block, add, refresh banners",
             default=current in ("play_games", "play_game_search"),
         ),
         discord.SelectOption(
             label="Activity",
             value="play_activity",
-            description="Who is playing and stored history",
+            description="Who played recently",
             default=current == "play_activity",
         ),
         discord.SelectOption(
             label="Review",
             value="play_review",
-            description="Overlaps and open sessions",
+            description="Overlap + manage open sessions",
             default=current in ("play_review", "play_manage"),
         ),
         discord.SelectOption(
             label="Setup",
             value="play_setup",
-            description="Channels, toggles, weights",
+            description="Channels, toggles, message template",
             default=current == "play_setup",
         ),
         discord.SelectOption(
@@ -1762,7 +1904,7 @@ def _play_nav_select(hub) -> discord.ui.Select:
         ),
     ]
     select = discord.ui.Select(
-        placeholder="Play together…",
+        placeholder="Go to…",
         options=options,
         row=0,
     )
@@ -1771,10 +1913,13 @@ def _play_nav_select(hub) -> discord.ui.Select:
         if not await hub._admin_ok(interaction):
             return
         choice = select.values[0]
+        # Defer before any scan / embed rebuild so Discord doesn't time out.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         if choice == "home":
             hub.page = "home"
             hub._rebuild()
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=hub.embed_for(interaction.guild),
                 view=hub,
             )
@@ -1786,7 +1931,7 @@ def _play_nav_select(hub) -> discord.ui.Select:
             hub.play_games_page = 0
         hub.page = choice
         hub._rebuild()
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=hub.embed_for(interaction.guild),
             view=hub,
         )
@@ -2007,10 +2152,11 @@ def _add_activity_controls(hub) -> None:
                 ephemeral=True,
             )
             return
+        await i.response.defer()
         seen = snapshot_guild_games(hub.bot, i.guild)
         hub.page = "play_activity"
         hub._rebuild()
-        await i.response.edit_message(
+        await i.edit_original_response(
             embed=activity_embed(i.guild, hub.bot), view=hub
         )
         await i.followup.send(
@@ -2323,7 +2469,9 @@ def _add_games_controls(hub) -> None:
                     icon_url=icon,
                     image_url=image,
                 )
-                await cog.refresh_suggestion_message(int(row["id"]))
+                await cog.refresh_suggestion_message(
+                    int(row["id"]), refresh_store=True
+                )
                 refreshed += 1
         extra = ""
         if failed:
@@ -2604,140 +2752,164 @@ def _add_review_controls(hub) -> None:
 
 def _add_manage_controls(hub) -> None:
     sid = getattr(hub, "play_suggestion_id", None)
-    add = discord.ui.UserSelect(
-        placeholder="Add / confirm someone…", min_values=1, max_values=1, row=1
+    add_in = discord.ui.UserSelect(
+        placeholder="Add as I'm in…", min_values=1, max_values=1, row=1
+    )
+    add_maybe = discord.ui.UserSelect(
+        placeholder="Add as maybe…", min_values=1, max_values=1, row=2
     )
     remove = discord.ui.UserSelect(
-        placeholder="Remove someone…", min_values=1, max_values=1, row=2
+        placeholder="Remove someone…", min_values=1, max_values=1, row=3
+    )
+    actions = discord.ui.Select(
+        placeholder="Session actions…",
+        min_values=1,
+        max_values=1,
+        row=4,
+        options=[
+            discord.SelectOption(
+                label="Edit time / party / link",
+                value="edit",
+                description="Change when, size, Steam URL, note",
+            ),
+            discord.SelectOption(
+                label="Create / refresh Discord event",
+                value="event",
+                description="Post or update the scheduled event",
+            ),
+            discord.SelectOption(
+                label="Invite more people",
+                value="invite",
+                description="DM likely friends of the group",
+            ),
+            discord.SelectOption(
+                label="Toggle auto Discord event",
+                value="toggle_auto",
+                description="Allow or skip auto-creating the event",
+            ),
+            discord.SelectOption(
+                label="Cancel session",
+                value="cancel",
+                description="Delete the post and Discord event",
+            ),
+        ],
     )
 
-    async def on_add(i: discord.Interaction) -> None:
+    async def _after_admin_rsvp(i: discord.Interaction) -> None:
+        cog = hub.bot.get_cog("PlayTogetherCog")
+        if cog is not None and sid:
+            await cog.after_rsvp_change(sid)
+        hub._rebuild()
+        await i.edit_original_response(
+            embed=manage_embed(i.guild, hub.bot, sid), view=hub
+        )
+
+    async def on_add_in(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i) or not sid:
             return
-        user = add.values[0]
+        user = add_in.values[0]
         if getattr(user, "bot", False):
             await i.response.send_message("That's a bot.", ephemeral=True)
             return
+        await i.response.defer()
         hub.bot.db.set_play_rsvp(
             sid, user.id, "in", "admin", _now_utc().isoformat()
         )
-        cog = hub.bot.get_cog("PlayTogetherCog")
-        if cog is not None:
-            await cog.after_rsvp_change(sid)
-        hub._rebuild()
-        await i.response.edit_message(
-            embed=manage_embed(i.guild, hub.bot, sid), view=hub
+        await _after_admin_rsvp(i)
+
+    async def on_add_maybe(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or not sid:
+            return
+        user = add_maybe.values[0]
+        if getattr(user, "bot", False):
+            await i.response.send_message("That's a bot.", ephemeral=True)
+            return
+        await i.response.defer()
+        hub.bot.db.set_play_rsvp(
+            sid, user.id, "maybe", "admin", _now_utc().isoformat()
         )
+        await _after_admin_rsvp(i)
 
     async def on_remove(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i) or not sid:
             return
         user = remove.values[0]
+        await i.response.defer()
         hub.bot.db.set_play_rsvp(
             sid, user.id, "nope", "admin", _now_utc().isoformat()
         )
-        cog = hub.bot.get_cog("PlayTogetherCog")
-        if cog is not None:
-            await cog.after_rsvp_change(sid)
-        hub._rebuild()
-        await i.response.edit_message(
-            embed=manage_embed(i.guild, hub.bot, sid), view=hub
-        )
+        await _after_admin_rsvp(i)
 
-    add.callback = on_add
+    async def on_action(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or not sid:
+            return
+        choice = actions.values[0]
+        if choice == "edit":
+            row = hub.bot.db.get_play_suggestion(sid)
+            if row is None:
+                await i.response.send_message("Gone.", ephemeral=True)
+                return
+            await i.response.send_modal(EditPlayModal(hub, row))
+            return
+
+        await i.response.defer()
+        cog = hub.bot.get_cog("PlayTogetherCog")
+        if choice == "event":
+            if cog is None:
+                return
+            try:
+                await cog.create_discord_event(sid, force=True)
+                await cog.sync_discord_event(sid)
+            except PlayPublishError as exc:
+                await i.followup.send(str(exc), ephemeral=True)
+                return
+            hub._rebuild()
+            await i.edit_original_response(
+                embed=manage_embed(i.guild, hub.bot, sid), view=hub
+            )
+            return
+        if choice == "invite":
+            sent = 0
+            if cog is not None:
+                sent = await cog.run_social_expansion(sid, force=True)
+            hub._rebuild()
+            await i.edit_original_response(
+                embed=manage_embed(i.guild, hub.bot, sid), view=hub
+            )
+            await i.followup.send(
+                f"Sent **{sent}** personal invite(s).", ephemeral=True
+            )
+            return
+        if choice == "toggle_auto":
+            row = hub.bot.db.get_play_suggestion(sid)
+            if row is None:
+                return
+            hub.bot.db.update_play_suggestion(
+                sid, auto_event=0 if row["auto_event"] else 1
+            )
+            hub._rebuild()
+            await i.edit_original_response(
+                embed=manage_embed(i.guild, hub.bot, sid), view=hub
+            )
+            return
+        if choice == "cancel":
+            if cog is not None:
+                await cog.cancel_suggestion(sid)
+            hub.page = "play"
+            hub.play_suggestion_id = None
+            hub._rebuild()
+            await i.edit_original_response(
+                embed=hub_play_embed(i.guild, hub.bot), view=hub
+            )
+
+    add_in.callback = on_add_in
+    add_maybe.callback = on_add_maybe
     remove.callback = on_remove
-    hub.add_item(add)
+    actions.callback = on_action
+    hub.add_item(add_in)
+    hub.add_item(add_maybe)
     hub.add_item(remove)
-
-    edit = discord.ui.Button(label="Edit", style=discord.ButtonStyle.primary, row=3)
-    event_btn = discord.ui.Button(
-        label="Create event", style=discord.ButtonStyle.success, row=3
-    )
-    cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, row=3)
-    invite = discord.ui.Button(
-        label="Invite more", style=discord.ButtonStyle.secondary, row=4
-    )
-    skip_event = discord.ui.Button(
-        label="No auto event", style=discord.ButtonStyle.secondary, row=4
-    )
-
-    async def on_edit(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i) or not sid:
-            return
-        row = hub.bot.db.get_play_suggestion(sid)
-        if row is None:
-            await i.response.send_message("Gone.", ephemeral=True)
-            return
-        await i.response.send_modal(EditPlayModal(hub, row))
-
-    async def on_event(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i) or not sid:
-            return
-        await i.response.defer()
-        cog = hub.bot.get_cog("PlayTogetherCog")
-        if cog is None:
-            return
-        try:
-            await cog.create_discord_event(sid, force=True)
-        except PlayPublishError as exc:
-            await i.followup.send(str(exc), ephemeral=True)
-            return
-        hub._rebuild()
-        await i.edit_original_response(
-            embed=manage_embed(i.guild, hub.bot, sid), view=hub
-        )
-
-    async def on_cancel(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i) or not sid:
-            return
-        await i.response.defer()
-        cog = hub.bot.get_cog("PlayTogetherCog")
-        if cog is not None:
-            await cog.cancel_suggestion(sid)
-        hub.page = "play"
-        hub._rebuild()
-        await i.edit_original_response(
-            embed=hub_play_embed(i.guild, hub.bot), view=hub
-        )
-
-    async def on_invite(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i) or not sid:
-            return
-        await i.response.defer()
-        cog = hub.bot.get_cog("PlayTogetherCog")
-        sent = 0
-        if cog is not None:
-            sent = await cog.run_social_expansion(sid, force=True)
-        hub._rebuild()
-        await i.edit_original_response(
-            embed=manage_embed(i.guild, hub.bot, sid), view=hub
-        )
-        await i.followup.send(f"Sent **{sent}** personal invite(s).", ephemeral=True)
-
-    async def on_skip(i: discord.Interaction) -> None:
-        if not await hub._admin_ok(i) or not sid:
-            return
-        row = hub.bot.db.get_play_suggestion(sid)
-        if row is None:
-            return
-        hub.bot.db.update_play_suggestion(
-            sid, auto_event=0 if row["auto_event"] else 1
-        )
-        hub._rebuild()
-        await i.response.edit_message(
-            embed=manage_embed(i.guild, hub.bot, sid), view=hub
-        )
-
-    edit.callback = on_edit
-    event_btn.callback = on_event
-    cancel.callback = on_cancel
-    invite.callback = on_invite
-    skip_event.callback = on_skip
-    hub.add_item(edit)
-    hub.add_item(event_btn)
-    hub.add_item(cancel)
-    hub.add_item(invite)
-    hub.add_item(skip_event)
+    hub.add_item(actions)
 
 
 class PlayPublishError(RuntimeError):
@@ -2987,36 +3159,48 @@ class PlayTogetherCog(commands.Cog):
         )
         return self.bot.db.get_play_suggestion(sid)
 
-    async def refresh_suggestion_message(self, suggestion_id: int) -> None:
+    async def refresh_suggestion_message(
+        self, suggestion_id: int, *, refresh_store: bool = False
+    ) -> None:
         row = self.bot.db.get_play_suggestion(suggestion_id)
         if row is None or not row["channel_id"] or not row["message_id"]:
             return
         guild = self.bot.get_guild(int(row["guild_id"]))
         if guild is None:
             return
-        # Always refresh art + UA price so open cards pick up vertical posters
-        # and sale tags even if they were posted before those fields existed.
-        icon_url, image_url = await ensure_game_art(
-            self.bot,
-            int(row["guild_id"]),
-            game_key=str(row["game_key"]),
-            game_name=str(row["game_name"]),
-            store_url=_row_get(row, "steam_url"),
-            force=True,
+        # Only hit Steam when asked (Refresh banners) or when art/price is missing.
+        # RSVP clicks must stay fast — Discord times out after ~3s otherwise.
+        need_art = refresh_store or not (
+            _row_get(row, "icon_url") or _row_get(row, "image_url")
         )
-        price_text = await fetch_steam_ua_price(
-            _row_get(row, "steam_url"),
-            game_name=str(row["game_name"]),
-        )
-        self.bot.db.update_play_suggestion(
-            suggestion_id,
-            icon_url=icon_url,
-            image_url=image_url,
-            price_text=price_text or None,
-        )
-        row = self.bot.db.get_play_suggestion(suggestion_id)
-        if row is None:
-            return
+        need_price = refresh_store or not _row_get(row, "price_text")
+        if need_art or need_price:
+            icon_url = _row_get(row, "icon_url")
+            image_url = _row_get(row, "image_url")
+            price_text = _row_get(row, "price_text")
+            if need_art:
+                icon_url, image_url = await ensure_game_art(
+                    self.bot,
+                    int(row["guild_id"]),
+                    game_key=str(row["game_key"]),
+                    game_name=str(row["game_name"]),
+                    store_url=_row_get(row, "steam_url"),
+                    force=refresh_store,
+                )
+            if need_price:
+                price_text = await fetch_steam_ua_price(
+                    _row_get(row, "steam_url"),
+                    game_name=str(row["game_name"]),
+                ) or None
+            self.bot.db.update_play_suggestion(
+                suggestion_id,
+                icon_url=icon_url,
+                image_url=image_url,
+                price_text=price_text,
+            )
+            row = self.bot.db.get_play_suggestion(suggestion_id)
+            if row is None:
+                return
         channel = guild.get_channel(int(row["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             return
@@ -3039,6 +3223,9 @@ class PlayTogetherCog(commands.Cog):
         row = self.bot.db.get_play_suggestion(suggestion_id)
         if row is None or str(row["status"]) not in ACTIVE_STATUSES:
             return
+        # Keep the Discord event roster fresh while people still gather.
+        if row["discord_event_id"]:
+            await self.sync_discord_event(suggestion_id)
         confirmed = self.bot.db.list_play_rsvps(suggestion_id, status="in")
         min_p = int(row["min_players"])
         settings = self.bot.db.get_play_settings(int(row["guild_id"]))
@@ -3186,6 +3373,7 @@ class PlayTogetherCog(commands.Cog):
                         int(row["discord_event_id"])
                     )
                 if existing is not None:
+                    await self.sync_discord_event(suggestion_id)
                     return existing
             except (discord.NotFound, discord.HTTPException):
                 pass
@@ -3201,22 +3389,13 @@ class PlayTogetherCog(commands.Cog):
             raise PlayPublishError("Session has no time.")
         if start <= _now_utc():
             raise PlayPublishError("That time is already in the past.")
-        confirmed = [
-            f"<@{int(r['user_id'])}>"
-            for r in self.bot.db.list_play_rsvps(suggestion_id, status="in")
-        ]
-        steam = (row["steam_url"] or "").strip()
-        desc = f"Let's play {row['game_name']}."
-        if steam:
-            desc += f"\n{steam}"
-        if confirmed:
-            desc += f"\nIn: {join_names(confirmed[:15])}"
+        desc = build_event_description(self.bot, guild, row, voice=voice)
         try:
             event = await guild.create_scheduled_event(
-                name=str(row["game_name"])[:100],
+                name=f"Play · {row['game_name']}"[:100],
                 start_time=start,
                 end_time=start + timedelta(hours=3),
-                description=desc[:1000],
+                description=desc,
                 channel=voice,
                 privacy_level=discord.PrivacyLevel.guild_only,
             )
@@ -3240,12 +3419,24 @@ class PlayTogetherCog(commands.Cog):
         start = parse_iso(row["proposed_at"])
         if start is None:
             return
+        # Stop rewriting once the session has started.
+        if start <= _now_utc():
+            return
+        settings = self.bot.db.get_play_settings(guild.id)
+        voice = None
+        voice_id = settings["play_voice_channel_id"]
+        if voice_id:
+            ch = guild.get_channel(int(voice_id))
+            if isinstance(ch, discord.VoiceChannel):
+                voice = ch
+        desc = build_event_description(self.bot, guild, row, voice=voice)
         try:
             event = await guild.fetch_scheduled_event(int(row["discord_event_id"]))
             await event.edit(
-                name=str(row["game_name"])[:100],
+                name=f"Play · {row['game_name']}"[:100],
                 start_time=start,
                 end_time=start + timedelta(hours=3),
+                description=desc,
             )
         except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
             log.warning("Could not sync event %s: %s", suggestion_id, exc)
@@ -3255,17 +3446,32 @@ class PlayTogetherCog(commands.Cog):
         if row is None:
             return
         self.bot.db.update_play_suggestion(suggestion_id, status="cancelled")
-        if row["discord_event_id"]:
-            guild = self.bot.get_guild(int(row["guild_id"]))
-            if guild is not None:
+        guild = self.bot.get_guild(int(row["guild_id"]))
+        if row["discord_event_id"] and guild is not None:
+            try:
+                event = await guild.fetch_scheduled_event(
+                    int(row["discord_event_id"])
+                )
+                await event.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        # Remove the public post so cancelled sessions don't linger.
+        deleted = False
+        if guild is not None and row["channel_id"] and row["message_id"]:
+            channel = guild.get_channel(int(row["channel_id"]))
+            if isinstance(channel, discord.TextChannel):
                 try:
-                    event = await guild.fetch_scheduled_event(
-                        int(row["discord_event_id"])
-                    )
-                    await event.delete()
+                    message = await channel.fetch_message(int(row["message_id"]))
+                    await message.delete()
+                    deleted = True
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
-        await self.refresh_suggestion_message(suggestion_id)
+                    deleted = False
+        if deleted:
+            self.bot.db.update_play_suggestion(
+                suggestion_id, channel_id=None, message_id=None
+            )
+        else:
+            await self.refresh_suggestion_message(suggestion_id)
 
     async def send_reminder(self, suggestion_id: int) -> None:
         row = self.bot.db.get_play_suggestion(suggestion_id)

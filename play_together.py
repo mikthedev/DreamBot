@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import aiohttp
 import discord
 from discord.ext import commands, tasks
 
@@ -1476,7 +1477,10 @@ class EditPlayModal(discord.ui.Modal, title="Edit session"):
         )
         if cog is not None:
             await cog.after_rsvp_change(self.suggestion_id)
-            await cog.sync_discord_event(self.suggestion_id)
+            try:
+                await cog.sync_discord_event(self.suggestion_id, force=True)
+            except PlayPublishError as exc:
+                log.info("Event sync after edit skipped: %s", exc)
         self.hub.page = "play_manage"
         self.hub.play_suggestion_id = self.suggestion_id
         self.hub._rebuild()
@@ -1837,6 +1841,23 @@ def manage_embed(guild: discord.Guild, bot, suggestion_id: int) -> discord.Embed
         ),
         inline=False,
     )
+    event_id = row["discord_event_id"]
+    if event_id:
+        embed.add_field(
+            name="Discord event",
+            value=(
+                f"[Open event](https://discord.com/events/{guild.id}/{int(event_id)})"
+                f" · `{event_id}`\n"
+                "Use **Sync Discord event** after RSVP changes."
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Discord event",
+            value="_none yet — tap **Sync Discord event** to create or link one_",
+            inline=False,
+        )
     return embed
 
 
@@ -2761,38 +2782,19 @@ def _add_manage_controls(hub) -> None:
     remove = discord.ui.UserSelect(
         placeholder="Remove someone…", min_values=1, max_values=1, row=3
     )
-    actions = discord.ui.Select(
-        placeholder="Session actions…",
-        min_values=1,
-        max_values=1,
+    sync_btn = discord.ui.Button(
+        label="Sync Discord event",
+        style=discord.ButtonStyle.success,
         row=4,
-        options=[
-            discord.SelectOption(
-                label="Edit time / party / link",
-                value="edit",
-                description="Change when, size, Steam URL, note",
-            ),
-            discord.SelectOption(
-                label="Create / refresh Discord event",
-                value="event",
-                description="Post or update the scheduled event",
-            ),
-            discord.SelectOption(
-                label="Invite more people",
-                value="invite",
-                description="DM likely friends of the group",
-            ),
-            discord.SelectOption(
-                label="Toggle auto Discord event",
-                value="toggle_auto",
-                description="Allow or skip auto-creating the event",
-            ),
-            discord.SelectOption(
-                label="Cancel session",
-                value="cancel",
-                description="Delete the post and Discord event",
-            ),
-        ],
+    )
+    edit_btn = discord.ui.Button(
+        label="Edit", style=discord.ButtonStyle.primary, row=4
+    )
+    invite_btn = discord.ui.Button(
+        label="Invite", style=discord.ButtonStyle.secondary, row=4
+    )
+    cancel_btn = discord.ui.Button(
+        label="Cancel", style=discord.ButtonStyle.danger, row=4
     )
 
     async def _after_admin_rsvp(i: discord.Interaction) -> None:
@@ -2840,76 +2842,76 @@ def _add_manage_controls(hub) -> None:
         )
         await _after_admin_rsvp(i)
 
-    async def on_action(i: discord.Interaction) -> None:
+    async def on_sync(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i) or not sid:
             return
-        choice = actions.values[0]
-        if choice == "edit":
-            row = hub.bot.db.get_play_suggestion(sid)
-            if row is None:
-                await i.response.send_message("Gone.", ephemeral=True)
-                return
-            await i.response.send_modal(EditPlayModal(hub, row))
+        await i.response.defer(ephemeral=True)
+        cog = hub.bot.get_cog("PlayTogetherCog")
+        if cog is None:
+            await i.followup.send("Play together cog is offline.", ephemeral=True)
             return
+        try:
+            message = await cog.sync_discord_event(sid, force=True)
+        except PlayPublishError as exc:
+            await i.followup.send(str(exc), ephemeral=True)
+            return
+        hub._rebuild()
+        await i.edit_original_response(
+            embed=manage_embed(i.guild, hub.bot, sid), view=hub
+        )
+        await i.followup.send(message, ephemeral=True)
 
+    async def on_edit(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or not sid:
+            return
+        row = hub.bot.db.get_play_suggestion(sid)
+        if row is None:
+            await i.response.send_message("Gone.", ephemeral=True)
+            return
+        await i.response.send_modal(EditPlayModal(hub, row))
+
+    async def on_invite(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or not sid:
+            return
         await i.response.defer()
         cog = hub.bot.get_cog("PlayTogetherCog")
-        if choice == "event":
-            if cog is None:
-                return
-            try:
-                await cog.create_discord_event(sid, force=True)
-                await cog.sync_discord_event(sid)
-            except PlayPublishError as exc:
-                await i.followup.send(str(exc), ephemeral=True)
-                return
-            hub._rebuild()
-            await i.edit_original_response(
-                embed=manage_embed(i.guild, hub.bot, sid), view=hub
-            )
+        sent = 0
+        if cog is not None:
+            sent = await cog.run_social_expansion(sid, force=True)
+        hub._rebuild()
+        await i.edit_original_response(
+            embed=manage_embed(i.guild, hub.bot, sid), view=hub
+        )
+        await i.followup.send(f"Sent **{sent}** personal invite(s).", ephemeral=True)
+
+    async def on_cancel(i: discord.Interaction) -> None:
+        if not await hub._admin_ok(i) or not sid:
             return
-        if choice == "invite":
-            sent = 0
-            if cog is not None:
-                sent = await cog.run_social_expansion(sid, force=True)
-            hub._rebuild()
-            await i.edit_original_response(
-                embed=manage_embed(i.guild, hub.bot, sid), view=hub
-            )
-            await i.followup.send(
-                f"Sent **{sent}** personal invite(s).", ephemeral=True
-            )
-            return
-        if choice == "toggle_auto":
-            row = hub.bot.db.get_play_suggestion(sid)
-            if row is None:
-                return
-            hub.bot.db.update_play_suggestion(
-                sid, auto_event=0 if row["auto_event"] else 1
-            )
-            hub._rebuild()
-            await i.edit_original_response(
-                embed=manage_embed(i.guild, hub.bot, sid), view=hub
-            )
-            return
-        if choice == "cancel":
-            if cog is not None:
-                await cog.cancel_suggestion(sid)
-            hub.page = "play"
-            hub.play_suggestion_id = None
-            hub._rebuild()
-            await i.edit_original_response(
-                embed=hub_play_embed(i.guild, hub.bot), view=hub
-            )
+        await i.response.defer()
+        cog = hub.bot.get_cog("PlayTogetherCog")
+        if cog is not None:
+            await cog.cancel_suggestion(sid)
+        hub.page = "play"
+        hub.play_suggestion_id = None
+        hub._rebuild()
+        await i.edit_original_response(
+            embed=hub_play_embed(i.guild, hub.bot), view=hub
+        )
 
     add_in.callback = on_add_in
     add_maybe.callback = on_add_maybe
     remove.callback = on_remove
-    actions.callback = on_action
+    sync_btn.callback = on_sync
+    edit_btn.callback = on_edit
+    invite_btn.callback = on_invite
+    cancel_btn.callback = on_cancel
     hub.add_item(add_in)
     hub.add_item(add_maybe)
     hub.add_item(remove)
-    hub.add_item(actions)
+    hub.add_item(sync_btn)
+    hub.add_item(edit_btn)
+    hub.add_item(invite_btn)
+    hub.add_item(cancel_btn)
 
 
 class PlayPublishError(RuntimeError):
@@ -3261,7 +3263,10 @@ class PlayTogetherCog(commands.Cog):
             return
         # Keep the Discord event roster fresh while people still gather.
         if row["discord_event_id"]:
-            await self.sync_discord_event(suggestion_id)
+            try:
+                await self.sync_discord_event(suggestion_id)
+            except PlayPublishError as exc:
+                log.info("Event sync after RSVP skipped: %s", exc)
         confirmed = self.bot.db.list_play_rsvps(suggestion_id, status="in")
         min_p = int(row["min_players"])
         settings = self.bot.db.get_play_settings(int(row["guild_id"]))
@@ -3393,7 +3398,7 @@ class PlayTogetherCog(commands.Cog):
         return sent
 
     async def create_discord_event(
-        self, suggestion_id: int, *, force: bool = False
+        self, suggestion_id: int, *, force: bool = False, _from_sync: bool = False
     ) -> discord.ScheduledEvent:
         row = self.bot.db.get_play_suggestion(suggestion_id)
         if row is None:
@@ -3401,18 +3406,16 @@ class PlayTogetherCog(commands.Cog):
         guild = self.bot.get_guild(int(row["guild_id"]))
         if guild is None:
             raise PlayPublishError("Guild unavailable.")
-        if row["discord_event_id"]:
-            try:
-                existing = guild.get_scheduled_event(int(row["discord_event_id"]))
-                if existing is None:
-                    existing = await guild.fetch_scheduled_event(
-                        int(row["discord_event_id"])
-                    )
-                if existing is not None:
-                    await self.sync_discord_event(suggestion_id)
-                    return existing
-            except (discord.NotFound, discord.HTTPException):
-                pass
+        existing = await self._resolve_discord_event(guild, row, link=True)
+        if existing is not None:
+            if not _from_sync:
+                await self.sync_discord_event(suggestion_id, force=force)
+            row = self.bot.db.get_play_suggestion(suggestion_id)
+            if row and row["discord_event_id"]:
+                refreshed = guild.get_scheduled_event(int(row["discord_event_id"]))
+                if refreshed is not None:
+                    return refreshed
+            return existing
         settings = self.bot.db.get_play_settings(guild.id)
         voice_id = settings["play_voice_channel_id"]
         if not voice_id:
@@ -3426,8 +3429,9 @@ class PlayTogetherCog(commands.Cog):
         if start <= _now_utc():
             raise PlayPublishError("That time is already in the past.")
         desc = build_event_description(self.bot, guild, row, voice=voice)
+        cover = await self._event_cover_bytes(row)
         try:
-            event = await guild.create_scheduled_event(
+            kwargs = dict(
                 name=f"Play · {row['game_name']}"[:100],
                 start_time=start,
                 end_time=start + timedelta(hours=3),
@@ -3435,6 +3439,9 @@ class PlayTogetherCog(commands.Cog):
                 channel=voice,
                 privacy_level=discord.PrivacyLevel.guild_only,
             )
+            if cover is not None:
+                kwargs["image"] = cover
+            event = await guild.create_scheduled_event(**kwargs)
         except discord.HTTPException as exc:
             raise PlayPublishError(f"Could not create Discord event: {exc}") from exc
         self.bot.db.update_play_suggestion(
@@ -3445,19 +3452,127 @@ class PlayTogetherCog(commands.Cog):
         await self.refresh_suggestion_message(suggestion_id)
         return event
 
-    async def sync_discord_event(self, suggestion_id: int) -> None:
+    async def _event_cover_bytes(self, row) -> bytes | None:
+        url = _row_get(row, "image_url") or _row_get(row, "icon_url")
+        if not url:
+            app_id = steam_app_id_from_url(_row_get(row, "steam_url"))
+            if app_id is not None:
+                url = (
+                    f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
+                )
+        if not url:
+            return None
+        try:
+            timeout = aiohttp.ClientTimeout(total=12)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status >= 400:
+                        return None
+                    data = await resp.read()
+            if not data or len(data) > 8_000_000:
+                return None
+            return data
+        except Exception:
+            log.debug("Event cover fetch failed for %s", url, exc_info=True)
+            return None
+
+    @staticmethod
+    def _event_name_key(name: str) -> str:
+        text = (name or "").casefold().strip()
+        if text.startswith("play ·"):
+            text = text[6:].strip()
+        elif text.startswith("play -"):
+            text = text[6:].strip()
+        return text
+
+    async def _resolve_discord_event(
+        self,
+        guild: discord.Guild,
+        row,
+        *,
+        link: bool = True,
+    ) -> discord.ScheduledEvent | None:
+        """Fetch the linked event, or match an existing guild event by name/time."""
+        eid = row["discord_event_id"]
+        if eid:
+            try:
+                event = guild.get_scheduled_event(int(eid))
+                if event is None:
+                    event = await guild.fetch_scheduled_event(int(eid))
+                if event is not None:
+                    return event
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+        game = self._event_name_key(str(row["game_name"] or ""))
+        start = parse_iso(row["proposed_at"])
+        try:
+            events = await guild.fetch_scheduled_events()
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.warning("Could not list scheduled events in %s: %s", guild.id, exc)
+            return None
+
+        best: discord.ScheduledEvent | None = None
+        best_delta: float | None = None
+        for ev in events:
+            if ev.status in (
+                discord.EventStatus.completed,
+                discord.EventStatus.canceled,
+            ):
+                continue
+            ev_key = self._event_name_key(ev.name or "")
+            if game and ev_key != game and game not in (ev.name or "").casefold():
+                continue
+            if start is not None and ev.start_time is not None:
+                delta = abs((ev.start_time - start).total_seconds())
+                if delta > 6 * 3600:
+                    continue
+                if best is None or best_delta is None or delta < best_delta:
+                    best = ev
+                    best_delta = delta
+            elif best is None:
+                best = ev
+
+        if best is not None and link:
+            self.bot.db.update_play_suggestion(
+                int(row["id"]),
+                discord_event_id=best.id,
+                status="event",
+            )
+            log.info(
+                "Linked suggestion %s to Discord event %s (%s)",
+                row["id"],
+                best.id,
+                best.name,
+            )
+        return best
+
+    async def sync_discord_event(
+        self, suggestion_id: int, *, force: bool = False
+    ) -> str:
+        """Push In/Maybe roster (and cover) to the Discord scheduled event."""
         row = self.bot.db.get_play_suggestion(suggestion_id)
-        if row is None or not row["discord_event_id"]:
-            return
+        if row is None:
+            raise PlayPublishError("Session is gone.")
         guild = self.bot.get_guild(int(row["guild_id"]))
         if guild is None:
-            return
+            raise PlayPublishError("Guild unavailable.")
+
+        event = await self._resolve_discord_event(guild, row, link=True)
+        if event is None:
+            if force:
+                event = await self.create_discord_event(
+                    suggestion_id, force=True, _from_sync=True
+                )
+                url = f"https://discord.com/events/{guild.id}/{event.id}"
+                return f"Created Discord event and filled the roster.\n{url}"
+            raise PlayPublishError(
+                "No Discord event linked to this session yet. "
+                "Tap **Sync Discord event** to create or link one."
+            )
+
+        row = self.bot.db.get_play_suggestion(suggestion_id) or row
         start = parse_iso(row["proposed_at"])
-        if start is None:
-            return
-        # Stop rewriting once the session has started.
-        if start <= _now_utc():
-            return
         settings = self.bot.db.get_play_settings(guild.id)
         voice = None
         voice_id = settings["play_voice_channel_id"]
@@ -3466,16 +3581,30 @@ class PlayTogetherCog(commands.Cog):
             if isinstance(ch, discord.VoiceChannel):
                 voice = ch
         desc = build_event_description(self.bot, guild, row, voice=voice)
+        cover = await self._event_cover_bytes(row)
+
+        edit_kwargs: dict = {
+            "name": f"Play · {row['game_name']}"[:100],
+            "description": desc,
+        }
+        # Time changes only while still scheduled; Active events keep description/cover.
+        if event.status == discord.EventStatus.scheduled and start is not None:
+            if force or start > _now_utc():
+                edit_kwargs["start_time"] = start
+                edit_kwargs["end_time"] = start + timedelta(hours=3)
+        if cover is not None:
+            edit_kwargs["image"] = cover
+
         try:
-            event = await guild.fetch_scheduled_event(int(row["discord_event_id"]))
-            await event.edit(
-                name=f"Play · {row['game_name']}"[:100],
-                start_time=start,
-                end_time=start + timedelta(hours=3),
-                description=desc,
-            )
+            await event.edit(**edit_kwargs)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
             log.warning("Could not sync event %s: %s", suggestion_id, exc)
+            raise PlayPublishError(f"Could not update Discord event: {exc}") from exc
+
+        if str(row["status"]) != "event":
+            self.bot.db.update_play_suggestion(suggestion_id, status="event")
+        url = f"https://discord.com/events/{guild.id}/{event.id}"
+        return f"Discord event updated with the current In / Maybe list.\n{url}"
 
     async def cancel_suggestion(self, suggestion_id: int) -> None:
         row = self.bot.db.get_play_suggestion(suggestion_id)

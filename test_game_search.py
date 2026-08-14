@@ -81,6 +81,36 @@ def test_store_link_label():
     assert "Steam" in store_link_markdown("https://store.steampowered.com/app/730")
 
 
+def test_format_steam_ua_price():
+    from game_search import format_steam_ua_price
+
+    assert format_steam_ua_price({"is_free": True}) == "**Free** on Steam"
+    assert format_steam_ua_price(None) == ""
+    assert format_steam_ua_price({"price_overview": {"currency": "USD", "final_formatted": "$1"}}) == ""
+    sale = format_steam_ua_price(
+        {
+            "price_overview": {
+                "currency": "UAH",
+                "final_formatted": "79₴",
+                "initial_formatted": "159₴",
+                "discount_percent": 50,
+            }
+        }
+    )
+    assert "79₴" in sale and "159₴" in sale and "50%" in sale
+    plain = format_steam_ua_price(
+        {
+            "price_overview": {
+                "currency": "UAH",
+                "final_formatted": "449₴",
+                "initial_formatted": "449₴",
+                "discount_percent": 0,
+            }
+        }
+    )
+    assert plain == "**449₴** on Steam (UA)"
+
+
 def test_steam_cdn_art():
     from game_search import steam_app_id_from_url, steam_cdn_art, steam_cdn_candidates
 
@@ -90,6 +120,7 @@ def test_steam_cdn_art():
     assert art.image_url and "header.jpg" in art.image_url
     portraits, banners = steam_cdn_candidates(3527290)
     assert any("library_hero.jpg" in u for u in banners)
+    assert all("capsule_231" not in u for u in portraits)
 
 
 def test_known_official_fallback():
@@ -140,6 +171,7 @@ if __name__ == "__main__":
     test_merge_steam_wins_same_title()
     test_drop_steam_addons_keeps_sequels()
     test_store_link_label()
+    test_format_steam_ua_price()
     test_steam_cdn_art()
     test_known_official_fallback()
     test_steam_title_matches()

@@ -16,6 +16,7 @@ import config
 from nicknames import display_base
 from game_search import (
     GameHit,
+    fetch_steam_ua_price,
     hit_from_dict,
     resolve_game_art,
     resolve_game_link,
@@ -50,6 +51,7 @@ DEFAULT_PLAY_BODY = (
     "     {in}\n"
     "\n"
     "{link}\n"
+    "{price}\n"
     "{note}"
 )
 DEFAULT_PLAY_FOOTER = (
@@ -68,6 +70,22 @@ _LEGACY_PLAY_BODIES = {
         "{link}\n"
         "{note}\n"
         "Everyone's welcome."
+    ),
+    (
+        "A few people here have been in **{game}** lately — "
+        "want to make it a real night?\n"
+        "\n"
+        "╭ **When**\n"
+        "│  {when}\n"
+        "│\n"
+        "├ **Party**\n"
+        "│  {count}\n"
+        "│\n"
+        "╰ **In so far**\n"
+        "     {in}\n"
+        "\n"
+        "{link}\n"
+        "{note}"
     ),
 }
 _LEGACY_PLAY_FOOTERS = {
@@ -332,7 +350,7 @@ def _fill_play_template(template: str, values: dict[str, str]) -> str:
     for key, value in values.items():
         out = out.replace("{" + key + "}", value)
     lines = [line.rstrip() for line in out.splitlines()]
-    # Drop lines that became empty because {link}/{note} had no value.
+    # Drop lines that became empty because {link}/{note}/{price} had no value.
     compact: list[str] = []
     blank_pending = False
     for line in lines:
@@ -357,6 +375,7 @@ def suggestion_values(
     confirmed_ids: list[int],
     store_url: str | None,
     store_note: str | None,
+    price_text: str | None = None,
     status: str = "published",
 ) -> dict[str, str]:
     n = len(confirmed_ids)
@@ -370,6 +389,7 @@ def suggestion_values(
     link = store_link_markdown(store_url)
     if link:
         link = f"↗ {link}"
+    price = (price_text or "").strip()
     note = (store_note or "").strip()
     if note:
         note = f"_{note}_"
@@ -379,6 +399,7 @@ def suggestion_values(
         "count": count_line,
         "in": in_line,
         "link": link,
+        "price": price,
         "note": note,
         "min": str(min_players),
         "max": str(max_players),
@@ -425,12 +446,18 @@ async def ensure_game_art(
     game = bot.db.get_play_game(guild_id, game_key)
     icon = _row_get(game, "icon_url") if game else None
     image = _row_get(game, "image_url") if game else None
+    # Drop wide images that were wrongly stored as the vertical thumbnail.
+    if icon and _looks_wide_art_url(icon):
+        icon = None
+        force = True
     if icon and image and not force:
         return icon, image
     store = store_url or (_row_get(game, "steam_url") if game else None)
     art = await resolve_game_art(game_name, store_url=store)
     icon = art.icon_url or (None if force else icon)
     image = art.image_url or (None if force else image)
+    if icon and _looks_wide_art_url(icon):
+        icon = None
     if icon or image:
         bot.db.upsert_play_game(
             guild_id,
@@ -442,6 +469,22 @@ async def ensure_game_art(
             set_image=True,
         )
     return icon, image
+
+
+def _looks_wide_art_url(url: str | None) -> bool:
+    low = (url or "").lower()
+    return any(
+        token in low
+        for token in (
+            "capsule_231",
+            "capsule_184",
+            "capsule_616",
+            "/header",
+            "header_alt",
+            "library_hero",
+            "page_bg",
+        )
+    )
 
 
 def suggestion_embed(
@@ -469,6 +512,7 @@ def suggestion_embed(
         confirmed_ids=confirmed_ids,
         store_url=(row["steam_url"] or "").strip() or None,
         store_note=(row["store_note"] or "").strip() or None,
+        price_text=_row_get(row, "price_text"),
         status=status,
     )
     guild_id = int(row["guild_id"]) if row["guild_id"] else (guild.id if guild else 0)
@@ -490,11 +534,13 @@ def suggestion_embed(
 
     icon_url = _row_get(row, "icon_url")
     image_url = _row_get(row, "image_url")
-    if guild_id and (not icon_url or not image_url):
+    if guild_id and (not icon_url or not image_url or _looks_wide_art_url(icon_url)):
         game = bot.db.get_play_game(guild_id, str(row["game_key"]))
         if game:
             icon_url = icon_url or _row_get(game, "icon_url")
             image_url = image_url or _row_get(game, "image_url")
+    if _looks_wide_art_url(icon_url):
+        icon_url = None
 
     author_icon = None
     if getattr(bot, "user", None) is not None:
@@ -510,7 +556,9 @@ def suggestion_embed(
     return embed
 
 
-def preview_suggestion_embed(bot, guild: discord.Guild) -> discord.Embed:
+def preview_suggestion_embed(
+    bot, guild: discord.Guild, *, price_text: str | None = None
+) -> discord.Embed:
     settings = bot.db.get_play_settings(guild.id)
     hour = int(settings["play_default_hour"] or 19)
     when = next_saturday_evening(_now_local(), hour=hour)
@@ -519,7 +567,7 @@ def preview_suggestion_embed(bot, guild: discord.Guild) -> discord.Embed:
     sample = allowed[0] if allowed else (games[0] if games else None)
     game_name = str(sample["game_name"]) if sample else "The Big Walk"
     store_url = (sample["steam_url"] if sample else None) or None
-    store_note = (sample["store_note"] if sample else None) or "Optional note / price"
+    store_note = (sample["store_note"] if sample else None) or None
     icon_url = _row_get(sample, "icon_url") if sample else None
     image_url = _row_get(sample, "image_url") if sample else None
     min_p = int(
@@ -542,6 +590,7 @@ def preview_suggestion_embed(bot, guild: discord.Guild) -> discord.Embed:
         confirmed_ids=[],
         store_url=store_url,
         store_note=store_note,
+        price_text=price_text,
         status="published",
     )
     copy = load_play_suggest_copy(bot, guild.id)
@@ -899,8 +948,8 @@ def hub_play_setup_embed(guild: discord.Guild, bot) -> discord.Embed:
         name="Suggestion message",
         value=(
             f"**Title** `{copy['title'][:80]}`\n"
-            "Placeholders: `{game}` `{when}` `{count}` `{in}` `{link}` `{note}` "
-            "`{min}` `{max}`\n"
+            "Placeholders: `{game}` `{when}` `{count}` `{in}` `{link}` `{price}` "
+            "`{note}` `{min}` `{max}`\n"
             "Use **Preview message** / **Edit message** below."
         ),
         inline=False,
@@ -1026,10 +1075,10 @@ class CreateCatalogSessionModal(discord.ui.Modal, title="Create a play session")
         placeholder="3-6",
     )
     note = discord.ui.TextInput(
-        label="Note / price (optional)",
+        label="Note (optional)",
         max_length=120,
         required=False,
-        placeholder="Currently 300 UAH",
+        placeholder="Extra context — price comes from Steam automatically",
     )
 
     def __init__(self, hub, game) -> None:
@@ -1183,9 +1232,10 @@ class EditPlayModal(discord.ui.Modal, title="Edit session"):
         required=False,
     )
     note = discord.ui.TextInput(
-        label="Note / price",
+        label="Note (optional)",
         max_length=120,
         required=False,
+        placeholder="Extra context — Steam price is automatic",
     )
 
     def __init__(self, hub, row) -> None:
@@ -1237,7 +1287,12 @@ class EditGameModal(discord.ui.Modal, title="Edit game"):
         required=False,
         placeholder="Use Add game to search instead of guessing",
     )
-    note = discord.ui.TextInput(label="Note / price", max_length=120, required=False)
+    note = discord.ui.TextInput(
+        label="Note (optional)",
+        max_length=120,
+        required=False,
+        placeholder="Extra context — Steam price is automatic",
+    )
     party = discord.ui.TextInput(
         label="Party size for this game",
         max_length=7,
@@ -1839,11 +1894,16 @@ def _add_setup_controls(hub) -> None:
                 game_key=str(sample["game_key"]),
                 game_name=str(sample["game_name"]),
                 store_url=(sample["steam_url"] or None),
+                force=True,
             )
-        await i.followup.send(
-            embed=preview_suggestion_embed(hub.bot, i.guild),
-            ephemeral=True,
-        )
+            price = await fetch_steam_ua_price(
+                sample["steam_url"] or None,
+                game_name=str(sample["game_name"]),
+            )
+        else:
+            price = None
+        embed = preview_suggestion_embed(hub.bot, i.guild, price_text=price)
+        await i.followup.send(embed=embed, ephemeral=True)
 
     async def on_edit_msg(i: discord.Interaction) -> None:
         if not await hub._admin_ok(i):
@@ -2819,6 +2879,7 @@ class PlayTogetherCog(commands.Cog):
             store_url=steam_url,
             force=True,
         )
+        price_text = await fetch_steam_ua_price(steam_url, game_name=game_name) or None
         sid = self.bot.db.create_play_suggestion(
             guild.id,
             game_key=game_key,
@@ -2833,6 +2894,7 @@ class PlayTogetherCog(commands.Cog):
             auto_event=1 if settings["play_auto_event"] else 0,
             icon_url=icon_url,
             image_url=image_url,
+            price_text=price_text,
         )
         row = self.bot.db.get_play_suggestion(sid)
         assert row is not None
@@ -2857,13 +2919,19 @@ class PlayTogetherCog(commands.Cog):
         guild = self.bot.get_guild(int(row["guild_id"]))
         if guild is None:
             return
-        if not _row_get(row, "icon_url") or not _row_get(row, "image_url"):
+        need_art = (
+            not _row_get(row, "icon_url")
+            or not _row_get(row, "image_url")
+            or _looks_wide_art_url(_row_get(row, "icon_url"))
+        )
+        if need_art:
             icon_url, image_url = await ensure_game_art(
                 self.bot,
                 int(row["guild_id"]),
                 game_key=str(row["game_key"]),
                 game_name=str(row["game_name"]),
                 store_url=_row_get(row, "steam_url"),
+                force=_looks_wide_art_url(_row_get(row, "icon_url")),
             )
             if icon_url or image_url:
                 self.bot.db.update_play_suggestion(
@@ -2874,6 +2942,18 @@ class PlayTogetherCog(commands.Cog):
                 row = self.bot.db.get_play_suggestion(suggestion_id)
                 if row is None:
                     return
+        # Refresh UA Steam price so sale tags stay current.
+        price_text = await fetch_steam_ua_price(
+            _row_get(row, "steam_url"),
+            game_name=str(row["game_name"]),
+        )
+        if price_text != (_row_get(row, "price_text") or ""):
+            self.bot.db.update_play_suggestion(
+                suggestion_id, price_text=price_text or None
+            )
+            row = self.bot.db.get_play_suggestion(suggestion_id)
+            if row is None:
+                return
         channel = guild.get_channel(int(row["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             return

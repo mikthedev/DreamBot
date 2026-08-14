@@ -299,6 +299,7 @@ class Database:
             ("play_games", "image_url", "TEXT"),
             ("play_suggestions", "icon_url", "TEXT"),
             ("play_suggestions", "image_url", "TEXT"),
+            ("play_suggestions", "price_text", "TEXT"),
         ):
             self._ensure_column(conn, table, column, col_type)
 
@@ -1813,6 +1814,7 @@ class Database:
         auto_event: int = 1,
         icon_url: str | None = None,
         image_url: str | None = None,
+        price_text: str | None = None,
     ) -> int:
         stamped = datetime.now(timezone.utc).isoformat()
         with self.connect() as conn:
@@ -1821,9 +1823,10 @@ class Database:
                 INSERT INTO play_suggestions (
                     guild_id, game_key, game_name, status, proposed_at,
                     min_players, max_players, steam_url, store_note,
-                    created_by, created_at, auto_event, icon_url, image_url
+                    created_by, created_at, auto_event, icon_url, image_url,
+                    price_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     guild_id,
@@ -1840,6 +1843,7 @@ class Database:
                     auto_event,
                     icon_url,
                     image_url,
+                    price_text,
                 ),
             )
             return int(cur.lastrowid)
@@ -1876,6 +1880,7 @@ class Database:
             "store_note",
             "icon_url",
             "image_url",
+            "price_text",
             "reminder_sent",
             "expansion_sent",
             "auto_event",

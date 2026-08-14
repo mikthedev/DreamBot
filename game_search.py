@@ -121,24 +121,62 @@ def steam_app_id_from_url(url: str | None) -> int | None:
 
 
 def steam_cdn_candidates(app_id: int) -> tuple[list[str], list[str]]:
-    """Possible portrait (icon) and banner (image) URLs on the classic CDN."""
-    base = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{int(app_id)}"
-    alt = f"https://steamcdn-a.akamaihd.net/steam/apps/{int(app_id)}"
-    portraits = [
-        f"{base}/library_600x900.jpg",
-        f"{alt}/library_600x900.jpg",
-        f"{base}/capsule_231x87.jpg",
-        f"{alt}/capsule_231x87.jpg",
+    """Portrait (vertical) candidates vs wide banner candidates."""
+    app_id = int(app_id)
+    bases = [
+        f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}",
+        f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}",
+        f"https://steamcdn-a.akamaihd.net/steam/apps/{app_id}",
     ]
-    banners = [
-        f"{base}/header.jpg",
-        f"{alt}/header.jpg",
-        f"{base}/library_hero.jpg",
-        f"{alt}/library_hero.jpg",
-        f"{base}/capsule_616x353.jpg",
-        f"{alt}/capsule_616x353.jpg",
-    ]
+    portraits: list[str] = []
+    banners: list[str] = []
+    for base in bases:
+        portraits.extend(
+            [
+                f"{base}/library_600x900.jpg",
+                f"{base}/library_600x900_2x.jpg",
+            ]
+        )
+        banners.extend(
+            [
+                f"{base}/header.jpg",
+                f"{base}/library_hero.jpg",
+                f"{base}/capsule_616x353.jpg",
+            ]
+        )
     return portraits, banners
+
+
+def _hashed_asset_urls(app_id: int, hashes: list[str], filenames: list[str]) -> list[str]:
+    out: list[str] = []
+    hosts = (
+        "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps",
+        "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps",
+    )
+    for host in hosts:
+        for digest in hashes:
+            if not digest:
+                continue
+            for name in filenames:
+                out.append(f"{host}/{int(app_id)}/{digest}/{name}")
+    return out
+
+
+def _hashes_from_steam_urls(*urls: str | None) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if not url:
+            continue
+        match = re.search(r"/apps/\d+/([a-f0-9]{40})/", url)
+        if not match:
+            continue
+        digest = match.group(1)
+        if digest in seen:
+            continue
+        seen.add(digest)
+        found.append(digest)
+    return found
 
 
 def steam_cdn_art(app_id: int) -> GameArt:
@@ -186,35 +224,113 @@ def _prefer_raster(url: str | None) -> str | None:
     return url
 
 
-async def _steam_appdetails_art(
-    session: aiohttp.ClientSession, app_id: int
-) -> GameArt:
+async def _steam_appdetails(
+    session: aiohttp.ClientSession, app_id: int, *, cc: str = "ua"
+) -> dict | None:
     try:
         async with session.get(
             "https://store.steampowered.com/api/appdetails",
-            params={"appids": int(app_id), "l": "english"},
+            params={"appids": int(app_id), "cc": cc, "l": "english"},
             ssl=_SSL_CTX,
         ) as resp:
             if resp.status >= 400:
-                return GameArt()
+                return None
             data = await resp.json(content_type=None)
     except Exception:
-        log.debug("Steam appdetails failed for %s", app_id, exc_info=True)
-        return GameArt()
+        log.debug("Steam appdetails failed for %s cc=%s", app_id, cc, exc_info=True)
+        return None
     entry = (data or {}).get(str(app_id)) or {}
     if not entry.get("success"):
+        return None
+    payload = entry.get("data")
+    return payload if isinstance(payload, dict) else None
+
+
+def format_steam_ua_price(payload: dict | None) -> str:
+    """Human line for Ukrainian Steam pricing (sales included)."""
+    if not payload:
+        return ""
+    if payload.get("is_free"):
+        return "**Free** on Steam"
+    overview = payload.get("price_overview")
+    if not isinstance(overview, dict):
+        return ""
+    currency = str(overview.get("currency") or "").upper()
+    if currency and currency != "UAH":
+        # Caller asked for UA storefront only.
+        return ""
+    final = str(overview.get("final_formatted") or "").strip()
+    initial = str(overview.get("initial_formatted") or "").strip()
+    try:
+        discount = int(overview.get("discount_percent") or 0)
+    except (TypeError, ValueError):
+        discount = 0
+    if not final:
+        return ""
+    if discount > 0 and initial and initial != final:
+        return f"**{final}** ~~{initial}~~ · −{discount}% on Steam (UA)"
+    return f"**{final}** on Steam (UA)"
+
+
+async def fetch_steam_ua_price(
+    store_url: str | None = None, *, game_name: str | None = None
+) -> str:
+    """Current Ukrainian Steam price line, or empty if unavailable."""
+    app_id = steam_app_id_from_url(store_url)
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
+        if app_id is None and game_name:
+            hit = await _best_steam_match(session, game_name)
+            app_id = hit.app_id if hit else None
+        if app_id is None:
+            return ""
+        payload = await _steam_appdetails(session, app_id, cc="ua")
+        return format_steam_ua_price(payload)
+
+
+async def _steam_appdetails_art(
+    session: aiohttp.ClientSession, app_id: int
+) -> GameArt:
+    payload = await _steam_appdetails(session, app_id, cc="ua")
+    if not payload:
         return GameArt()
-    payload = entry.get("data") or {}
     header = str(payload.get("header_image") or "").strip() or None
     capsule = str(payload.get("capsule_image") or "").strip() or None
     screens = payload.get("screenshots") or []
     screen = None
     if isinstance(screens, list) and screens:
         first = screens[0] if isinstance(screens[0], dict) else {}
-        screen = str(first.get("path_full") or first.get("path_thumbnail") or "").strip() or None
+        screen = (
+            str(first.get("path_full") or first.get("path_thumbnail") or "").strip()
+            or None
+        )
+    hashes = _hashes_from_steam_urls(header, capsule)
     portraits, banners = steam_cdn_candidates(app_id)
-    icon = await _first_live_image(session, [capsule, *portraits])
-    image = await _first_live_image(session, [header, *banners, screen])
+    # Vertical-only candidates for the Discord thumbnail / top slot.
+    vertical = [
+        *portraits,
+        *_hashed_asset_urls(
+            app_id,
+            hashes,
+            [
+                "library_600x900.jpg",
+                "library_600x900_2x.jpg",
+                "library_capsule.jpg",
+                "library_capsule_2x.jpg",
+                "hero_capsule.jpg",
+                "hero_capsule_2x.jpg",
+            ],
+        ),
+    ]
+    # Wide banner for the large embed image — never used as the top thumbnail.
+    wide = [
+        header,
+        *banners,
+        capsule,
+        screen,
+    ]
+    icon = await _first_live_image(session, vertical)
+    image = await _first_live_image(session, wide)
     return GameArt(icon_url=icon, image_url=image)
 
 
@@ -651,13 +767,12 @@ async def resolve_game_art(
                 art = await _steam_appdetails_art(session, steam_hit.app_id)
                 if art.icon_url or art.image_url:
                     return art
-                # Fall back to store-search capsule + classic CDN probe.
+                # Fall back: vertical library art only for thumbnail; wide for banner.
                 portraits, banners = steam_cdn_candidates(steam_hit.app_id)
-                icon = await _first_live_image(
-                    session, [steam_hit.icon_url, *portraits]
-                )
+                icon = await _first_live_image(session, portraits)
                 image = await _first_live_image(
-                    session, [steam_hit.image_url, *banners]
+                    session,
+                    [steam_hit.image_url, steam_hit.icon_url, *banners],
                 )
                 if icon or image:
                     return GameArt(icon_url=icon, image_url=image)
@@ -669,15 +784,14 @@ async def resolve_game_art(
                     or steam_title_matches(q, hit.name)
                 ):
                     continue
-                icon = _prefer_raster(hit.icon_url)
-                image = _prefer_raster(hit.image_url) or icon
-                if icon or image:
-                    return GameArt(icon_url=icon, image_url=image)
+                image = _prefer_raster(hit.image_url) or _prefer_raster(hit.icon_url)
+                if image:
+                    # Wikipedia art is often a logo/header — use as wide banner only.
+                    return GameArt(icon_url=None, image_url=image)
             for hit in wiki:
-                icon = _prefer_raster(hit.icon_url)
-                image = _prefer_raster(hit.image_url) or icon
-                if icon or image:
-                    return GameArt(icon_url=icon, image_url=image)
+                image = _prefer_raster(hit.image_url) or _prefer_raster(hit.icon_url)
+                if image:
+                    return GameArt(icon_url=None, image_url=image)
     return GameArt()
 
 

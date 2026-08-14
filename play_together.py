@@ -461,41 +461,22 @@ def build_event_description(
     *,
     voice: discord.VoiceChannel | None = None,
 ) -> str:
-    """Richer Discord scheduled-event text; kept under Discord's 1000-char cap."""
-    game = str(row["game_name"])
-    when = parse_iso(row["proposed_at"])
-    when_line = (
-        format_play_when(when.astimezone(_tz())) if when else "time TBA"
-    )
+    """Minimal Ukrainian roster for the Discord scheduled event."""
+    del guild, voice  # kept for call-site compatibility
     ins = _rsvp_ids(bot, int(row["id"]), "in")
     maybes = _rsvp_ids(bot, int(row["id"]), "maybe")
-    min_p = int(row["min_players"])
-    max_p = int(row["max_players"])
-    steam = (row["steam_url"] or "").strip()
-    note = (row["store_note"] or "").strip()
-
-    lines = [
-        f"Dream Team · play together · {game}",
-        f"When: {when_line}",
-    ]
-    if voice is not None:
-        lines.append(f"Voice: #{voice.name}")
-    lines.append(f"Party: {len(ins)}/{max_p} in · need {min_p} to lock it in")
+    lines: list[str] = []
     if ins:
         lines.append(
-            "In: " + join_names([f"<@{uid}>" for uid in ins[:12]])
+            "Буде: " + join_names([f"<@{uid}>" for uid in ins[:20]])
         )
     if maybes:
         lines.append(
-            "Maybe: " + join_names([f"<@{uid}>" for uid in maybes[:10]])
+            "Можливо буде: " + join_names([f"<@{uid}>" for uid in maybes[:20]])
         )
-    if steam:
-        lines.append(steam)
-    if note:
-        lines.append(note)
-    lines.append("Tap I'm in / Maybe on the channel post to update.")
-    text = "\n".join(lines)
-    return text[:1000]
+    if not lines:
+        return "Буде: поки нікого"
+    return "\n".join(lines)[:1000]
 
 
 def _row_get(row, key: str) -> str | None:
@@ -3432,7 +3413,7 @@ class PlayTogetherCog(commands.Cog):
         cover = await self._event_cover_bytes(row)
         try:
             kwargs = dict(
-                name=f"Play · {row['game_name']}"[:100],
+                name=f"{row['game_name']}"[:100],
                 start_time=start,
                 end_time=start + timedelta(hours=3),
                 description=desc,
@@ -3584,7 +3565,7 @@ class PlayTogetherCog(commands.Cog):
         cover = await self._event_cover_bytes(row)
 
         edit_kwargs: dict = {
-            "name": f"Play · {row['game_name']}"[:100],
+            "name": f"{row['game_name']}"[:100],
             "description": desc,
         }
         # Time changes only while still scheduled; Active events keep description/cover.

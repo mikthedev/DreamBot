@@ -207,10 +207,12 @@ def test_suggestion_values_maybe_and_event_desc():
         "store_note": "bring friends",
     }
     desc = build_event_description(_FakeBot(), None, row, voice=None)
-    assert "play together" in desc.lower()
-    assert "In:" in desc and "<@1>" in desc
-    assert "Maybe:" in desc and "<@3>" in desc
-    assert "bring friends" in desc
+    assert desc.startswith("Буде:")
+    assert "<@1>" in desc and "<@2>" in desc
+    assert "Можливо буде:" in desc and "<@3>" in desc
+    assert "bring friends" not in desc
+    assert "Steam" not in desc
+    assert "play together" not in desc.lower()
 
 
 if __name__ == "__main__":

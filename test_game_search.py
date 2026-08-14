@@ -82,9 +82,9 @@ def test_store_link_label():
 
 
 def test_format_steam_ua_price():
-    from game_search import format_steam_ua_price
+    from game_search import format_steam_ua_price, steam_price_markdown
 
-    assert format_steam_ua_price({"is_free": True}) == "**Free** on Steam"
+    assert format_steam_ua_price({"is_free": True}) == "**Free**"
     assert format_steam_ua_price(None) == ""
     assert format_steam_ua_price({"price_overview": {"currency": "USD", "final_formatted": "$1"}}) == ""
     sale = format_steam_ua_price(
@@ -98,6 +98,7 @@ def test_format_steam_ua_price():
         }
     )
     assert "79₴" in sale and "159₴" in sale and "50%" in sale
+    assert "on Steam" not in sale
     plain = format_steam_ua_price(
         {
             "price_overview": {
@@ -108,7 +109,13 @@ def test_format_steam_ua_price():
             }
         }
     )
-    assert plain == "**449₴** on Steam (UA)"
+    assert plain == "**449₴**"
+    linked = steam_price_markdown(
+        "**194₴** on Steam (UA)",
+        "https://store.steampowered.com/app/730",
+    )
+    assert linked == "[**194₴**](https://store.steampowered.com/app/730)"
+    assert steam_price_markdown("**Free**", None) == "**Free**"
 
 
 def test_steam_cdn_art():

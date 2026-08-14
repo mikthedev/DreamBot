@@ -21,6 +21,8 @@ from game_search import (
     resolve_game_art,
     resolve_game_link,
     search_catalog_games,
+    steam_app_id_from_url,
+    steam_price_markdown,
     store_link_label,
     store_link_markdown,
 )
@@ -54,9 +56,7 @@ DEFAULT_PLAY_BODY = (
     "{price}\n"
     "{note}"
 )
-DEFAULT_PLAY_FOOTER = (
-    "I'm in = you're free for this · Playing it before is not a yes"
-)
+DEFAULT_PLAY_FOOTER = "Tap I'm in if you're interested"
 
 # Older shipped copy — treat as unset so guilds pick up the new layout.
 _LEGACY_PLAY_TITLES = {"{game}"}
@@ -90,6 +90,7 @@ _LEGACY_PLAY_BODIES = {
 }
 _LEGACY_PLAY_FOOTERS = {
     "I'm in = you want this session. Playing the game before is not a yes.",
+    "I'm in = you're free for this · Playing it before is not a yes",
 }
 
 
@@ -386,10 +387,17 @@ def suggestion_values(
         )
     mentions = [f"<@{uid}>" for uid in confirmed_ids[:12]]
     in_line = join_names(mentions) if mentions else "_nobody yet — tap I'm in_"
-    link = store_link_markdown(store_url)
-    if link:
-        link = f"↗ {link}"
-    price = (price_text or "").strip()
+    price = steam_price_markdown(price_text, store_url)
+    # Price already links to Steam — skip the separate ↗ Steam line.
+    link = ""
+    if store_url and steam_app_id_from_url(store_url) is None:
+        md = store_link_markdown(store_url)
+        if md:
+            link = f"↗ {md}"
+    elif store_url and not price:
+        md = store_link_markdown(store_url)
+        if md:
+            link = f"↗ {md}"
     note = (store_note or "").strip()
     if note:
         note = f"_{note}_"
@@ -487,6 +495,47 @@ def _looks_wide_art_url(url: str | None) -> bool:
     )
 
 
+def _looks_portrait_art_url(url: str | None) -> bool:
+    low = (url or "").lower()
+    return any(
+        token in low
+        for token in (
+            "library_600x900",
+            "library_capsule",
+            "hero_capsule",
+            "portrait",
+        )
+    )
+
+
+def _steam_header_url(store_url: str | None) -> str | None:
+    app_id = steam_app_id_from_url(store_url)
+    if app_id is None:
+        return None
+    return f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
+
+
+def _pick_suggestion_art(
+    *,
+    icon_url: str | None,
+    image_url: str | None,
+    store_url: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Vertical cover for thumbnail; wide store header for the large banner."""
+    if icon_url and _looks_wide_art_url(icon_url):
+        icon_url = None
+    # Never put a tall poster in the large image slot.
+    if image_url and _looks_portrait_art_url(image_url) and not _looks_wide_art_url(
+        image_url
+    ):
+        image_url = None
+    if not image_url or _looks_portrait_art_url(image_url):
+        header = _steam_header_url(store_url)
+        if header:
+            image_url = header
+    return icon_url, image_url
+
+
 def suggestion_embed(
     bot,
     guild: discord.Guild | None,
@@ -517,13 +566,15 @@ def suggestion_embed(
     )
     guild_id = int(row["guild_id"]) if row["guild_id"] else (guild.id if guild else 0)
     copy = load_play_suggest_copy(bot, guild_id)
-    # Price is always rendered as its own embed field so custom templates
-    # without {price} still show the UA Steam amount.
-    price_value = values.get("price") or ""
+    # Keep price in the body as a single Steam link (no separate field / ↗ Steam).
     body_values = dict(values)
-    body_values["price"] = ""
+    if "{price}" not in copy["body"] and body_values.get("price"):
+        # Custom templates without {price} still get the linked amount.
+        body_values["_price_append"] = body_values["price"]
     title = _fill_play_template(copy["title"], body_values)[:256] or str(row["game_name"])
     body = _fill_play_template(copy["body"], body_values)
+    if body_values.get("_price_append"):
+        body = (body.rstrip() + "\n\n" + body_values["_price_append"]).strip()
     footer = _fill_play_template(copy["footer"], body_values)
     if status == "event":
         footer = "Discord event is up · same voice channel as always"
@@ -536,9 +587,8 @@ def suggestion_embed(
 
     color = SUGGEST_COLOR if status in ACTIVE_STATUSES or preview else MUTED
     embed = discord.Embed(title=title, description=body[:4096], color=color)
-    if price_value:
-        embed.add_field(name="Steam price · UA", value=price_value, inline=False)
 
+    store_url = (row["steam_url"] or "").strip() or None
     icon_url = _row_get(row, "icon_url")
     image_url = _row_get(row, "image_url")
     if guild_id:
@@ -546,19 +596,16 @@ def suggestion_embed(
         if game:
             if not icon_url or _looks_wide_art_url(icon_url):
                 icon_url = _row_get(game, "icon_url") or icon_url
-            if not image_url or _looks_wide_art_url(image_url):
-                # Prefer catalog vertical poster over a leftover wide header.
-                game_icon = _row_get(game, "icon_url")
-                game_image = _row_get(game, "image_url")
-                if game_icon and not _looks_wide_art_url(game_icon):
-                    image_url = game_icon
-                elif game_image:
+            game_image = _row_get(game, "image_url")
+            if not image_url or _looks_portrait_art_url(image_url):
+                if game_image and (
+                    _looks_wide_art_url(game_image)
+                    or not _looks_portrait_art_url(game_image)
+                ):
                     image_url = game_image
-    if _looks_wide_art_url(icon_url):
-        icon_url = None
-    # If we have a vertical cover, use it as the large banner too.
-    if icon_url and (not image_url or _looks_wide_art_url(image_url)):
-        image_url = icon_url
+    icon_url, image_url = _pick_suggestion_art(
+        icon_url=icon_url, image_url=image_url, store_url=store_url
+    )
 
     author_icon = None
     if getattr(bot, "user", None) is not None:
@@ -612,20 +659,20 @@ def preview_suggestion_embed(
         status="published",
     )
     copy = load_play_suggest_copy(bot, guild.id)
-    price_value = values.get("price") or ""
     body_values = dict(values)
-    body_values["price"] = ""
+    if "{price}" not in copy["body"] and body_values.get("price"):
+        body_values["_price_append"] = body_values["price"]
+    body = _fill_play_template(copy["body"], body_values)
+    if body_values.get("_price_append"):
+        body = (body.rstrip() + "\n\n" + body_values["_price_append"]).strip()
     embed = discord.Embed(
         title=_fill_play_template(copy["title"], body_values)[:256],
-        description=_fill_play_template(copy["body"], body_values)[:4096],
+        description=body[:4096],
         color=SUGGEST_COLOR,
     )
-    if price_value:
-        embed.add_field(name="Steam price · UA", value=price_value, inline=False)
-    if _looks_wide_art_url(icon_url):
-        icon_url = None
-    if icon_url and (not image_url or _looks_wide_art_url(image_url)):
-        image_url = icon_url
+    icon_url, image_url = _pick_suggestion_art(
+        icon_url=icon_url, image_url=image_url, store_url=store_url
+    )
     author_icon = bot.user.display_avatar.url if bot.user else None
     _apply_suggestion_art(
         embed,

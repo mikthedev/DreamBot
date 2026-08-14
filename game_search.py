@@ -247,11 +247,11 @@ async def _steam_appdetails(
 
 
 def format_steam_ua_price(payload: dict | None) -> str:
-    """Human line for Ukrainian Steam pricing (sales included)."""
+    """Compact UA Steam price (sales included). Link wrapping is done by the embed."""
     if not payload:
         return ""
     if payload.get("is_free"):
-        return "**Free** on Steam"
+        return "**Free**"
     overview = payload.get("price_overview")
     if not isinstance(overview, dict):
         return ""
@@ -268,8 +268,28 @@ def format_steam_ua_price(payload: dict | None) -> str:
     if not final:
         return ""
     if discount > 0 and initial and initial != final:
-        return f"**{final}** ~~{initial}~~ · −{discount}% on Steam (UA)"
-    return f"**{final}** on Steam (UA)"
+        return f"**{final}** ~~{initial}~~ · −{discount}%"
+    return f"**{final}**"
+
+
+def steam_price_markdown(price_text: str | None, store_url: str | None) -> str:
+    """Price as a Steam markdown link when possible; strips legacy suffixes."""
+    price = (price_text or "").strip()
+    if not price:
+        return ""
+    for suffix in (
+        " on Steam (UA)",
+        " on Steam",
+    ):
+        if price.endswith(suffix):
+            price = price[: -len(suffix)].rstrip()
+    url = (store_url or "").strip()
+    if url and steam_app_id_from_url(url) is not None:
+        # Avoid nesting if already a markdown link.
+        if price.startswith("[") and "](" in price:
+            return price
+        return f"[{price}]({url})"
+    return price
 
 
 async def fetch_steam_ua_price(
@@ -339,9 +359,9 @@ async def _steam_appdetails_art(
     portrait = await _first_live_image(session, vertical)
     wide_banner = await _first_live_image(session, wide)
     return GameArt(
+        # Thumbnail: vertical cover. Large embed image: wide store header.
         icon_url=portrait,
-        # Prefer the vertical poster as the main banner when Steam has one.
-        image_url=portrait or wide_banner,
+        image_url=wide_banner or portrait,
     )
 
 
@@ -788,7 +808,7 @@ async def resolve_game_art(
                 if portrait or wide_banner:
                     return GameArt(
                         icon_url=portrait,
-                        image_url=portrait or wide_banner,
+                        image_url=wide_banner or portrait,
                     )
 
             wiki = await _safe_wiki(session, q)

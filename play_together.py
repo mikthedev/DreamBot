@@ -2920,6 +2920,7 @@ class PlayTogetherCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._last_voice_sample = 0.0
+        self._open_rsvp_views_synced = False
         self.sample_voice.start()
         self.scan_presence.start()
         self.detect_loop.start()
@@ -2954,8 +2955,43 @@ class PlayTogetherCog(commands.Cog):
     ) -> None:
         self.record_member_games(after)
 
+    async def sync_open_rsvp_views(self) -> int:
+        """Re-attach I'm in / Maybe / Nope on already published session posts."""
+        updated = 0
+        for guild in self.bot.guilds:
+            rows = self.bot.db.list_play_suggestions(
+                guild.id, statuses=ACTIVE_STATUSES, limit=50
+            )
+            for row in rows:
+                if not row["channel_id"] or not row["message_id"]:
+                    continue
+                try:
+                    await self.refresh_suggestion_message(int(row["id"]))
+                    updated += 1
+                except Exception as exc:
+                    log.warning(
+                        "Could not sync RSVP buttons on suggestion %s: %s",
+                        row["id"],
+                        exc,
+                    )
+        return updated
+
     @commands.Cog.listener()
     async def on_ready(self) -> None:
+        # Old posts only have I'm in / Nope until the message is edited with
+        # the current PlayRsvpView — do that once per process on startup.
+        if not self._open_rsvp_views_synced:
+            self._open_rsvp_views_synced = True
+            try:
+                n = await self.sync_open_rsvp_views()
+                if n:
+                    log.info(
+                        "Attached Maybe RSVP buttons on %s open play-together post(s)",
+                        n,
+                    )
+            except Exception as exc:
+                log.warning("Open RSVP view sync failed: %s", exc)
+
         if not self.bot.intents.presences:
             log.warning(
                 "Play together: Presence Intent is off — game history will stay empty"

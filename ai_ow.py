@@ -124,6 +124,13 @@ HERO_ALIASES: dict[str, str] = {
     "сиерра": "sierra",
     "шион": "shion",
     "вендетта": "vendetta",
+    "анран": "anran",
+    "домина": "domina",
+    "эмре": "emre",
+    "емре": "emre",
+    "мизуки": "mizuki",
+    "вуянг": "wuyang",
+    "уян": "wuyang",
     "мауга": "mauga",
     "думфист": "doomfist",
     "дум": "doomfist",
@@ -152,6 +159,9 @@ HERO_ALIASES: dict[str, str] = {
     "jq": "junker queen",
     "df": "doomfist",
     "dee va": "d.va",
+    "jetpack": "jetpack cat",
+    "jetpackcat": "jetpack cat",
+    "fika": "jetpack cat",
 }
 
 

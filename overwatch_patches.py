@@ -486,13 +486,38 @@ def _tone_label(tone: str) -> str:
     return "·"
 
 
-def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
+def _ability_heading(
+    hero: str,
+    ability: str,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
+    """Ability title with optional Blizzard utility icon as an app emoji."""
+    label = ability
+    if emoji_map and hero and ability:
+        try:
+            from overwatch_tierlist import emoji_name_for_ability
+
+            em = emoji_map.get(emoji_name_for_ability(hero, ability))
+            if em is not None:
+                return f"{em} **{label}**"
+        except Exception:
+            pass
+    return f"**{label}**"
+
+
+def _format_ability_block(
+    ability: str,
+    lines: list[ChangeLine],
+    *,
+    hero: str = "",
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
     """Ability name, then each buff/nerf on its own indented line."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
 
-    rows: list[str] = [ability]
+    rows: list[str] = [_ability_heading(hero, ability, emoji_map)]
     for c in shared:
         rows.append(f"{_tone_label(_resolved_tone(ability, c))}  {c.text}")
 
@@ -519,7 +544,10 @@ def _format_ability_block(ability: str, lines: list[ChangeLine]) -> str:
 
 
 def _hero_changes_compact(
-    hero: HeroChange, *, max_lines: int | None = None
+    hero: HeroChange,
+    *,
+    max_lines: int | None = None,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> str:
     """One line per tweak — glyph only; buff/nerf words live in the card legend."""
     changes = hero.changes if max_lines is None else hero.changes[:max_lines]
@@ -533,7 +561,8 @@ def _hero_changes_compact(
         else:
             mark = ""
         mode = f" · {ch.mode}" if ch.mode else ""
-        rows.append(f"{mark}{ch.ability}{mode} · {ch.text}")
+        ability = _ability_heading(hero.name, ch.ability, emoji_map)
+        rows.append(f"{mark}{ability}{mode} · {ch.text}")
     if max_lines is not None:
         extra = len(hero.changes) - max_lines
         if extra > 0:
@@ -541,26 +570,40 @@ def _hero_changes_compact(
     return "\n".join(rows) if rows else "_No detail lines_"
 
 
-def _hero_changes_text(hero: HeroChange) -> str:
+def _hero_changes_text(
+    hero: HeroChange,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
     """Ability blocks with a blank line between them for breathing room."""
     by_ability: dict[str, list[ChangeLine]] = {}
     for ch in hero.changes:
         by_ability.setdefault(ch.ability, []).append(ch)
     return "\n\n".join(
-        _format_ability_block(ability, lines)
+        _format_ability_block(
+            ability, lines, hero=hero.name, emoji_map=emoji_map
+        )
         for ability, lines in by_ability.items()
     )
 
 
-def _hero_card_text(hero: HeroChange) -> str:
+def _hero_card_text(
+    hero: HeroChange,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
     """Single card block: bold name + plain compact changes."""
-    changes = _hero_changes_text(hero)
+    changes = _hero_changes_text(hero, emoji_map=emoji_map)
     return f"**{hero.name}**\n{changes}" if changes else f"**{hero.name}**"
 
 
-def _hero_section_text(hero: HeroChange) -> str:
+def _hero_section_text(
+    hero: HeroChange,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
     """Fallback embeds use the same card text."""
-    return _hero_card_text(hero)
+    return _hero_card_text(hero, emoji_map=emoji_map)
 
 
 def _is_fun_mode_section(title: str) -> bool:
@@ -977,6 +1020,7 @@ def summary_to_payload(summary: PatchSummary) -> str:
                             "text": c.text,
                             "mode": c.mode,
                             "tone": c.tone,
+                            "icon_url": c.icon_url,
                         }
                         for c in h.changes
                     ],
@@ -1000,6 +1044,7 @@ def summary_from_payload(raw: str) -> PatchSummary | None:
                 text=c.get("text") or "",
                 mode=c.get("mode"),
                 tone=c.get("tone") or "•",
+                icon_url=c.get("icon_url") or None,
             )
             for c in (h.get("changes") or [])
             if (c.get("text") or "").strip()
@@ -1037,14 +1082,25 @@ async def send_summary_ephemeral(
     *,
     archive: bool = False,
 ) -> None:
+    emoji_map: dict[str, discord.Emoji] = {}
+    tier_cog = interaction.client.get_cog("OverwatchTierCog")
+    if tier_cog is not None:
+        try:
+            emoji_map = await tier_cog.ensure_ability_emojis_for_patch(summary)
+        except Exception as exc:
+            log.warning("Archive ability emoji sync failed: %s", exc)
     try:
-        layouts = build_patch_layouts(summary, preview=False, archive=archive)
+        layouts = build_patch_layouts(
+            summary, preview=False, archive=archive, emoji_map=emoji_map
+        )
         await interaction.followup.send(view=layouts[0], ephemeral=True)
         for layout in layouts[1:]:
             await interaction.followup.send(view=layout, ephemeral=True)
     except Exception as exc:
         log.warning("OW ephemeral layout failed: %s", exc)
-        embeds = build_patch_embeds(summary, preview=archive)
+        embeds = build_patch_embeds(
+            summary, preview=archive, emoji_map=emoji_map
+        )
         if archive:
             embeds[0].title = f"Archive · {summary.date or summary.title}"
         await interaction.followup.send(embeds=embeds, ephemeral=True)
@@ -1205,6 +1261,7 @@ def build_patch_layouts(
     *,
     preview: bool = False,
     archive: bool = False,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> list[discord.ui.LayoutView]:
     """
     One colour-accented container per role; each hero is a compact portrait card.
@@ -1270,7 +1327,7 @@ def build_patch_layouts(
             if view._total_children + HERO_COST > BUDGET:
                 container = open_role_container(continued=True)
 
-            card = _hero_card_text(hero)
+            card = _hero_card_text(hero, emoji_map=emoji_map)
             if hero.icon_url:
                 container.add_item(
                     discord.ui.Section(
@@ -1297,7 +1354,12 @@ def build_patch_layouts(
     return views
 
 
-def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[discord.Embed]:
+def build_patch_embeds(
+    summary: PatchSummary,
+    *,
+    preview: bool = False,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> list[discord.Embed]:
     """Fallback embeds if Components V2 layout is unavailable."""
     if is_fun_mode_patch(summary):
         event = (summary.fun_label or "Community Crafted").strip() or "Fun Mode"
@@ -1334,7 +1396,9 @@ def build_patch_embeds(summary: PatchSummary, *, preview: bool = False) -> list[
             continue
         emb = discord.Embed(color=ROLE_COLOR.get(role, color))
         emb.set_author(name=ROLE_HEADER.get(role, role))
-        emb.description = "\n\n".join(_hero_section_text(h) for h in heroes)[:4096]
+        emb.description = "\n\n".join(
+            _hero_section_text(h, emoji_map=emoji_map) for h in heroes
+        )[:4096]
         embeds.append(emb)
     return embeds
 
@@ -1386,6 +1450,19 @@ class OverwatchPatchCog(commands.Cog):
         except Exception as exc:
             log.warning("Patch Blizzard icon enrich failed: %s", exc)
 
+    async def ensure_ability_emojis(
+        self, summary: PatchSummary
+    ) -> dict[str, discord.Emoji]:
+        """Sync Blizzard utility icons as app emojis for this patch's ability lines."""
+        tier_cog = self.bot.get_cog("OverwatchTierCog")
+        if tier_cog is None:
+            return {}
+        try:
+            return await tier_cog.ensure_ability_emojis_for_patch(summary)
+        except Exception as exc:
+            log.warning("Ability emoji sync failed: %s", exc)
+            return {}
+
     async def refresh_app_hero_emojis(self) -> None:
         """Pull new/changed hero portraits into Discord app emojis."""
         tier_cog = self.bot.get_cog("OverwatchTierCog")
@@ -1406,7 +1483,10 @@ class OverwatchPatchCog(commands.Cog):
         existing_thread_id: int | None = None,
     ) -> tuple[list[discord.Message], int | None]:
         await self.enrich_hero_icons(summary)
-        layouts = build_patch_layouts(summary, preview=preview)
+        emoji_map = await self.ensure_ability_emojis(summary)
+        layouts = build_patch_layouts(
+            summary, preview=preview, emoji_map=emoji_map
+        )
         return await post_ow_announcement(
             channel,
             thread_name=patch_thread_title(
@@ -1416,7 +1496,9 @@ class OverwatchPatchCog(commands.Cog):
                 fun_label=summary.fun_label or None,
             ),
             layouts=layouts,
-            embeds_fallback=lambda: build_patch_embeds(summary, preview=preview),
+            embeds_fallback=lambda: build_patch_embeds(
+                summary, preview=preview, emoji_map=emoji_map
+            ),
             tag_names=OW_PATCH_TAG_NAMES,
             trailing_content=(
                 "Earlier notes · hero history:" if with_history else None
@@ -1491,15 +1573,20 @@ class OverwatchPatchCog(commands.Cog):
             )
             return
         await self.enrich_hero_icons(summary)
+        emoji_map = await self.ensure_ability_emojis(summary)
         try:
-            layouts = build_patch_layouts(summary, preview=True)
+            layouts = build_patch_layouts(
+                summary, preview=True, emoji_map=emoji_map
+            )
             await interaction.followup.send(view=layouts[0], ephemeral=True)
             for layout in layouts[1:]:
                 await interaction.followup.send(view=layout, ephemeral=True)
         except Exception as exc:
             log.warning("OW layout preview failed: %s", exc)
             await interaction.followup.send(
-                embeds=build_patch_embeds(summary, preview=True),
+                embeds=build_patch_embeds(
+                    summary, preview=True, emoji_map=emoji_map
+                ),
                 ephemeral=True,
             )
 

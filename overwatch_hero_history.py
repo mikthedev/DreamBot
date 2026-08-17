@@ -176,19 +176,58 @@ def _hit_role_colour(hit: HeroPatchHit) -> discord.Color:
     return OW_ORANGE
 
 
-def _history_hit_body(hit: HeroPatchHit) -> str:
+def _history_hit_body(
+    hit: HeroPatchHit,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
     """Every change line for this patch — no '+N more' truncation."""
     if hit.hero is not None:
-        return _hero_changes_compact(hit.hero, max_lines=None)
+        return _hero_changes_compact(
+            hit.hero, max_lines=None, emoji_map=emoji_map
+        )
     rows = [f"· {ln}" for ln in hit.lines]
     return "\n".join(rows) or "_No detail lines_"
 
 
-def _history_hit_block(hit: HeroPatchHit) -> str:
+def _history_hit_block(
+    hit: HeroPatchHit,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> str:
     date_label = hit.patch_date or "Patch"
     url = hit.patch_url or PATCH_URL
     mark = _hit_kind_mark(hit)
-    return f"**[{date_label}]({url})** · {mark}\n{_history_hit_body(hit)}"
+    return (
+        f"**[{date_label}]({url})** · {mark}\n"
+        f"{_history_hit_body(hit, emoji_map=emoji_map)}"
+    )
+
+
+async def _ability_emoji_map_for_hits(
+    bot, hits: list[HeroPatchHit]
+) -> dict[str, discord.Emoji]:
+    """Ensure utility icons exist as app emojis for these history hits."""
+    tier_cog = bot.get_cog("OverwatchTierCog")
+    if tier_cog is None:
+        return {}
+    pairs: list[tuple[str, str, str | None]] = []
+    for hit in hits:
+        if hit.hero is None:
+            continue
+        for ch in hit.hero.changes:
+            pairs.append((hit.hero.name, ch.ability, ch.icon_url))
+            if not ch.icon_url:
+                filled = tier_cog.ability_icon_url(hit.hero.name, ch.ability)
+                if filled:
+                    ch.icon_url = filled
+    if not pairs:
+        return {}
+    try:
+        return await tier_cog.ensure_ability_emojis(pairs)
+    except Exception as exc:
+        log.warning("Hero-history ability emoji sync failed: %s", exc)
+        return {}
 
 
 def _hit_line_count(hit: HeroPatchHit) -> int:
@@ -205,10 +244,15 @@ def _slice_hit(hit: HeroPatchHit, start: int, end: int) -> HeroPatchHit:
     return replace(hit, lines=hit.lines[start:end])
 
 
-def _split_hit_to_fit(hit: HeroPatchHit, budget: int) -> list[HeroPatchHit]:
+def _split_hit_to_fit(
+    hit: HeroPatchHit,
+    budget: int,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> list[HeroPatchHit]:
     """Keep a patch on one page when it fits; otherwise split its lines."""
     n = _hit_line_count(hit)
-    if n <= 1 or len(_history_hit_block(hit)) <= budget:
+    if n <= 1 or len(_history_hit_block(hit, emoji_map=emoji_map)) <= budget:
         return [hit]
     parts: list[HeroPatchHit] = []
     start = 0
@@ -218,7 +262,7 @@ def _split_hit_to_fit(hit: HeroPatchHit, budget: int) -> list[HeroPatchHit]:
         while lo <= hi:
             mid = (lo + hi) // 2
             piece = _slice_hit(hit, start, mid)
-            if len(_history_hit_block(piece)) <= budget:
+            if len(_history_hit_block(piece, emoji_map=emoji_map)) <= budget:
                 best = mid
                 lo = mid + 1
             else:
@@ -228,18 +272,24 @@ def _split_hit_to_fit(hit: HeroPatchHit, budget: int) -> list[HeroPatchHit]:
     return parts
 
 
-def _history_pages(hits: list[HeroPatchHit]) -> list[list[HeroPatchHit]]:
+def _history_pages(
+    hits: list[HeroPatchHit],
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> list[list[HeroPatchHit]]:
     """Pack full patch text onto pages; overflow continues on the next page."""
     if not hits:
         return [[]]
     pieces: list[HeroPatchHit] = []
     for hit in hits:
-        pieces.extend(_split_hit_to_fit(hit, HISTORY_PAGE_CHAR_BUDGET))
+        pieces.extend(
+            _split_hit_to_fit(hit, HISTORY_PAGE_CHAR_BUDGET, emoji_map=emoji_map)
+        )
     pages: list[list[HeroPatchHit]] = []
     current: list[HeroPatchHit] = []
     used = 0
     for piece in pieces:
-        size = len(_history_hit_block(piece)) + 8
+        size = len(_history_hit_block(piece, emoji_map=emoji_map)) + 8
         overflow = current and (
             len(current) >= HISTORY_PER_PAGE or used + size > HISTORY_PAGE_CHAR_BUDGET
         )
@@ -276,6 +326,7 @@ def _history_nav_widgets(
     total_pages: int,
     *,
     use_rows: bool,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> tuple[discord.ui.Button, discord.ui.Button, discord.ui.Select]:
     """Newer / Older + jump select. Clicks edit the same message."""
     prev_kw: dict = {
@@ -292,7 +343,7 @@ def _history_nav_widgets(
         "placeholder": f"Jump to patch… ({page + 1}/{total_pages})",
         "min_values": 1,
         "max_values": 1,
-        "options": _jump_options(hits, page),
+        "options": _jump_options(hits, page, emoji_map=emoji_map),
     }
     if use_rows:
         prev_kw["row"] = 0
@@ -304,12 +355,20 @@ def _history_nav_widgets(
 
     async def on_prev(interaction: discord.Interaction) -> None:
         await _replace_hero_history(
-            interaction, hits, hero_label, max(0, page - 1)
+            interaction,
+            hits,
+            hero_label,
+            max(0, page - 1),
+            emoji_map=emoji_map,
         )
 
     async def on_next(interaction: discord.Interaction) -> None:
         await _replace_hero_history(
-            interaction, hits, hero_label, min(total_pages - 1, page + 1)
+            interaction,
+            hits,
+            hero_label,
+            min(total_pages - 1, page + 1),
+            emoji_map=emoji_map,
         )
 
     async def on_jump(interaction: discord.Interaction) -> None:
@@ -317,12 +376,13 @@ def _history_nav_widgets(
             idx = int(jump.values[0])
         except ValueError:
             idx = 0
-        pages = _history_pages(hits)
+        pages = _history_pages(hits, emoji_map=emoji_map)
         await _replace_hero_history(
             interaction,
             hits,
             hero_label,
             _page_index_for_hit(pages, hits, idx),
+            emoji_map=emoji_map,
         )
 
     prev_btn.callback = on_prev
@@ -337,10 +397,17 @@ def _attach_history_nav(
     hero_label: str,
     page: int,
     total_pages: int,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> None:
     """Keep results above the nav bar, in the same message."""
     prev_btn, next_btn, jump = _history_nav_widgets(
-        hits, hero_label, page, total_pages, use_rows=False
+        hits,
+        hero_label,
+        page,
+        total_pages,
+        use_rows=False,
+        emoji_map=emoji_map,
     )
     btn_row = discord.ui.ActionRow()
     btn_row.add_item(prev_btn)
@@ -359,6 +426,7 @@ def _make_alert_button(
     *,
     alert_on: bool,
     row: int | None = None,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> discord.ui.Button:
     kw: dict = {
         "label": "Stop alerts" if alert_on else "Notify me",
@@ -385,7 +453,12 @@ def _make_alert_button(
             guild.id, interaction.user.id, hero_alert_key(hero_label)
         )
         await _replace_hero_history(
-            interaction, hits, hero_label, page, alert_on=on
+            interaction,
+            hits,
+            hero_label,
+            page,
+            alert_on=on,
+            emoji_map=emoji_map,
         )
         note = (
             f"Private alerts for **{hero_label}** are on. I’ll DM you when "
@@ -413,13 +486,22 @@ def _attach_history_actions(
     *,
     alert_on: bool,
     show_alert: bool,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> None:
     if total_pages > 1:
-        _attach_history_nav(view, hits, hero_label, page, total_pages)
+        _attach_history_nav(
+            view, hits, hero_label, page, total_pages, emoji_map=emoji_map
+        )
     if show_alert:
         row = discord.ui.ActionRow()
         row.add_item(
-            _make_alert_button(hits, hero_label, page, alert_on=alert_on)
+            _make_alert_button(
+                hits,
+                hero_label,
+                page,
+                alert_on=alert_on,
+                emoji_map=emoji_map,
+            )
         )
         view.add_item(row)
 
@@ -432,12 +514,13 @@ def build_hero_history_layouts(
     per_page: int = HISTORY_PER_PAGE,
     alert_on: bool = False,
     show_alert: bool = True,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> tuple[list[discord.ui.LayoutView], int]:
     """
     Compact timeline — few patches per page, full text (overflow → next page).
     Returns (layouts_for_this_page, total_pages).
     """
-    pages = _history_pages(hits)
+    pages = _history_pages(hits, emoji_map=emoji_map)
     total = max(1, len(pages))
     page = max(0, min(page, total - 1))
     need_actions = (total > 1) or show_alert
@@ -461,6 +544,7 @@ def build_hero_history_layouts(
             total,
             alert_on=alert_on,
             show_alert=show_alert,
+            emoji_map=emoji_map,
         )
         return [view], 1
 
@@ -506,7 +590,11 @@ def build_hero_history_layouts(
                 spacing=discord.SeparatorSpacing.small,
             )
         )
-        container.add_item(discord.ui.TextDisplay(_history_hit_block(hit)))
+        container.add_item(
+            discord.ui.TextDisplay(
+                _history_hit_block(hit, emoji_map=emoji_map)
+            )
+        )
 
     _attach_history_actions(
         view,
@@ -516,6 +604,7 @@ def build_hero_history_layouts(
         total,
         alert_on=alert_on,
         show_alert=show_alert,
+        emoji_map=emoji_map,
     )
 
     return [view], total
@@ -527,8 +616,9 @@ def build_hero_history_embeds(
     hero_label: str,
     page: int = 0,
     per_page: int = HISTORY_PER_PAGE,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> tuple[list[discord.Embed], int]:
-    pages = _history_pages(hits)
+    pages = _history_pages(hits, emoji_map=emoji_map)
     total = max(1, len(pages))
     page = max(0, min(page, total - 1))
     colour = _hit_role_colour(hits[0]) if hits else OW_ORANGE
@@ -554,7 +644,9 @@ def build_hero_history_embeds(
     if icon:
         head.set_thumbnail(url=icon)
 
-    body = "\n\n".join(_history_hit_block(h) for h in chunk)
+    body = "\n\n".join(
+        _history_hit_block(h, emoji_map=emoji_map) for h in chunk
+    )
     head.description = f"{head.description}\n\n{body}"[:4096]
     return [head], total
 
@@ -566,13 +658,18 @@ async def _replace_hero_history(
     page: int,
     *,
     alert_on: bool | None = None,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> None:
     """Swap the current history message to another page — never send a new one."""
     if alert_on is None:
         alert_on = _alert_on_for(interaction, hero_label)
     try:
         layouts, _ = build_hero_history_layouts(
-            hits, hero_label=hero_label, page=page, alert_on=alert_on
+            hits,
+            hero_label=hero_label,
+            page=page,
+            alert_on=alert_on,
+            emoji_map=emoji_map,
         )
         await interaction.response.edit_message(**_v2_edit_kwargs(layouts[0]))
         return
@@ -580,7 +677,7 @@ async def _replace_hero_history(
         log.warning("Hero history layout edit failed: %s", exc)
 
     embeds, total = build_hero_history_embeds(
-        hits, hero_label=hero_label, page=page
+        hits, hero_label=hero_label, page=page, emoji_map=emoji_map
     )
     nav = HeroHistoryNavView(
         hits=hits,
@@ -588,6 +685,7 @@ async def _replace_hero_history(
         page=page,
         total_pages=total,
         alert_on=alert_on,
+        emoji_map=emoji_map,
     )
     try:
         if interaction.response.is_done():
@@ -614,9 +712,14 @@ async def send_hero_history(
 ) -> None:
     """One ephemeral history message (results above nav); optionally replace “Searching…”."""
     alert_on = _alert_on_for(interaction, hero_label)
+    emoji_map = await _ability_emoji_map_for_hits(interaction.client, hits)
     try:
         layouts, _ = build_hero_history_layouts(
-            hits, hero_label=hero_label, page=page, alert_on=alert_on
+            hits,
+            hero_label=hero_label,
+            page=page,
+            alert_on=alert_on,
+            emoji_map=emoji_map,
         )
         if edit_searching:
             try:
@@ -632,7 +735,7 @@ async def send_hero_history(
         log.warning("Hero history layout failed: %s", exc)
 
     embeds, total = build_hero_history_embeds(
-        hits, hero_label=hero_label, page=page
+        hits, hero_label=hero_label, page=page, emoji_map=emoji_map
     )
     nav = HeroHistoryNavView(
         hits=hits,
@@ -640,6 +743,7 @@ async def send_hero_history(
         page=page,
         total_pages=total,
         alert_on=alert_on,
+        emoji_map=emoji_map,
     )
     if edit_searching:
         try:
@@ -664,6 +768,7 @@ class HeroHistoryNavView(discord.ui.View):
         total_pages: int,
         alert_on: bool = False,
         show_alert: bool = True,
+        emoji_map: dict[str, discord.Emoji] | None = None,
     ) -> None:
         super().__init__(timeout=HISTORY_NAV_TIMEOUT)
         self.hits = hits
@@ -672,7 +777,12 @@ class HeroHistoryNavView(discord.ui.View):
         self.total_pages = max(1, total_pages)
         if self.total_pages > 1:
             prev_btn, next_btn, jump = _history_nav_widgets(
-                hits, hero_label, page, self.total_pages, use_rows=True
+                hits,
+                hero_label,
+                page,
+                self.total_pages,
+                use_rows=True,
+                emoji_map=emoji_map,
             )
             self.add_item(prev_btn)
             self.add_item(next_btn)
@@ -686,14 +796,18 @@ class HeroHistoryNavView(discord.ui.View):
                     page,
                     alert_on=alert_on,
                     row=2,
+                    emoji_map=emoji_map,
                 )
             )
 
 
 def _jump_options(
-    hits: list[HeroPatchHit], current_page: int
+    hits: list[HeroPatchHit],
+    current_page: int,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> list[discord.SelectOption]:
-    pages = _history_pages(hits)
+    pages = _history_pages(hits, emoji_map=emoji_map)
     first_key = None
     if pages and 0 <= current_page < len(pages) and pages[current_page]:
         first = pages[current_page][0]
@@ -1067,11 +1181,16 @@ async def _send_hero_alert_dm(
     hit: HeroPatchHit,
     label: str,
     guild: discord.Guild,
+    *,
+    bot=None,
 ) -> bool:
     header = (
         f"**{label}** was patched — private alert from **{guild.name}**.\n"
         "_Not posted in Search Hero Changes, so the forum stays quiet._"
     )
+    emoji_map: dict[str, discord.Emoji] = {}
+    if bot is not None:
+        emoji_map = await _ability_emoji_map_for_hits(bot, [hit])
     try:
         layouts, _ = build_hero_history_layouts(
             [hit],
@@ -1079,6 +1198,7 @@ async def _send_hero_alert_dm(
             page=0,
             alert_on=True,
             show_alert=False,
+            emoji_map=emoji_map,
         )
         await user.send(content=header, view=layouts[0])
         return True
@@ -1087,7 +1207,9 @@ async def _send_hero_alert_dm(
         return False
     except Exception:
         try:
-            embeds, _ = build_hero_history_embeds([hit], hero_label=label)
+            embeds, _ = build_hero_history_embeds(
+                [hit], hero_label=label, emoji_map=emoji_map
+            )
             await user.send(content=header, embeds=embeds)
             return True
         except Exception as exc:
@@ -1125,7 +1247,7 @@ async def notify_hero_alert_subscribers(bot, guild: discord.Guild, summary) -> i
                     user = await bot.fetch_user(uid)
                 except discord.HTTPException:
                     continue
-            ok = await _send_hero_alert_dm(user, hit, label, guild)
+            ok = await _send_hero_alert_dm(user, hit, label, guild, bot=bot)
             if ok:
                 bot.db.mark_hero_alert_sent(guild.id, uid, key, patch_id)
                 sent += 1

@@ -192,6 +192,13 @@ def emoji_name_for_hero(hero: TierHero) -> str:
     return f"ows_{_hero_emoji_key(hero)}"[:32]
 
 
+def emoji_name_for_ability(hero: str, ability: str) -> str:
+    """Stable app-emoji name for a hero ability (≤32 chars)."""
+    key = f"{_normalize_hero_token(hero)}|{_normalize_hero_token(ability)}"
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+    return f"owa_{digest}"
+
+
 def _normalize_hero_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
 
@@ -201,6 +208,92 @@ class BlizzardHeroIcon:
     hero_id: str
     name: str
     icon_url: str
+
+
+@dataclass
+class BlizzardAbilityIcon:
+    hero_id: str
+    hero_name: str
+    ability: str
+    icon_url: str
+
+
+def parse_blizzard_ability_icons(
+    html: str, *, hero_id: str, hero_name: str
+) -> list[BlizzardAbilityIcon]:
+    """Ability name + icon from an official Blizzard hero page."""
+    pairs = re.findall(
+        r'<span class="ability-name[^"]*">([^<]+)</span>\s*'
+        r'<blz-image[^>]*src="'
+        r'(https://d15f34w2p8l1cc\.cloudfront\.net/overwatch/[^"]+)"',
+        html,
+        re.I,
+    )
+    out: list[BlizzardAbilityIcon] = []
+    seen: set[str] = set()
+    for raw_name, icon_url in pairs:
+        name = unescape(raw_name).strip()
+        if not name:
+            continue
+        token = _normalize_hero_token(name)
+        if not token or token in seen:
+            continue
+        if token in ("general", "hero", "passive"):
+            continue
+        seen.add(token)
+        out.append(
+            BlizzardAbilityIcon(
+                hero_id=hero_id,
+                hero_name=hero_name,
+                ability=name,
+                icon_url=icon_url.strip(),
+            )
+        )
+    return out
+
+
+async def fetch_blizzard_ability_icons(
+    session: aiohttp.ClientSession,
+    heroes: list[BlizzardHeroIcon],
+    *,
+    concurrency: int = 6,
+) -> list[BlizzardAbilityIcon]:
+    """Pull ability icons for every hero on the official roster."""
+    sem = asyncio.Semaphore(concurrency)
+    out: list[BlizzardAbilityIcon] = []
+
+    async def one(hero: BlizzardHeroIcon) -> list[BlizzardAbilityIcon]:
+        url = f"{BLIZZARD_HEROES_URL}{hero.hero_id}/"
+        async with sem:
+            try:
+                async with session.get(
+                    url,
+                    ssl=_SSL_CTX,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
+                ) as resp:
+                    if resp.status != 200:
+                        log.warning(
+                            "Ability page %s → %s", hero.hero_id, resp.status
+                        )
+                        return []
+                    html = await resp.text()
+            except Exception as exc:
+                log.warning("Ability page %s failed: %s", hero.hero_id, exc)
+                return []
+        return parse_blizzard_ability_icons(
+            html, hero_id=hero.hero_id, hero_name=hero.name
+        )
+
+    results = await asyncio.gather(*(one(h) for h in heroes))
+    for batch in results:
+        out.extend(batch)
+    log.info(
+        "Blizzard ability icons: %s abilities across %s heroes",
+        len(out),
+        len(heroes),
+    )
+    return out
 
 
 def parse_blizzard_hero_icons(html: str) -> list[BlizzardHeroIcon]:
@@ -474,6 +567,9 @@ class OverwatchTierCog(commands.Cog):
         self.bot = bot
         self._session: aiohttp.ClientSession | None = None
         self._emoji_cache: dict[str, discord.Emoji] | None = None
+        self._ability_emoji_cache: dict[str, discord.Emoji] | None = None
+        # (hero_token, ability_token) -> icon_url
+        self._ability_icon_index: dict[tuple[str, str], str] = {}
         self.check_tier_list.start()
         self.sync_hero_icons.start()
 
@@ -613,11 +709,198 @@ class OverwatchTierCog(commands.Cog):
         self._emoji_cache = existing
         return existing
 
+    async def _sync_emoji_from_url(
+        self,
+        *,
+        name: str,
+        url: str,
+        session: aiohttp.ClientSession,
+        existing: dict[str, discord.Emoji],
+    ) -> tuple[str, int, int]:
+        """Create/update one app emoji. Returns (status, created_delta, updated_delta)."""
+        stored = self.bot.db.get_hero_emoji_icon(name)
+        if (
+            name in existing
+            and stored is not None
+            and stored["icon_url"] == url
+        ):
+            return "skip", 0, 0
+        try:
+            async with session.get(
+                url, ssl=_SSL_CTX, timeout=aiohttp.ClientTimeout(total=20)
+            ) as resp:
+                if resp.status != 200:
+                    log.warning("Emoji icon fetch %s → %s", name, resp.status)
+                    return "fail", 0, 0
+                raw = await resp.read()
+            png = _to_emoji_png(raw)
+            sha = hashlib.sha256(png).hexdigest()
+            if (
+                name in existing
+                and stored is not None
+                and stored["sha256"] == sha
+            ):
+                self.bot.db.set_hero_emoji_icon(name, url, sha)
+                return "skip", 0, 0
+            if name in existing:
+                emoji = existing[name]
+                try:
+                    owned = emoji.is_application_owned()
+                except Exception:
+                    owned = True
+                if not owned:
+                    return "skip", 0, 0
+                await emoji.delete()
+                emoji = await self.bot.create_application_emoji(
+                    name=name, image=png
+                )
+                existing[name] = emoji
+                self.bot.db.set_hero_emoji_icon(name, url, sha)
+                await asyncio.sleep(0.7)
+                return "updated", 0, 1
+            emoji = await self.bot.create_application_emoji(name=name, image=png)
+            existing[name] = emoji
+            self.bot.db.set_hero_emoji_icon(name, url, sha)
+            await asyncio.sleep(0.7)
+            return "created", 1, 0
+        except discord.HTTPException as exc:
+            log.warning("Could not sync emoji %s: %s", name, exc)
+            return "fail", 0, 0
+        except Exception as exc:
+            log.warning("Emoji sync failed for %s: %s", name, exc)
+            return "fail", 0, 0
+
+    def ability_icon_url(self, hero: str, ability: str) -> str | None:
+        key = (_normalize_hero_token(hero), _normalize_hero_token(ability))
+        return self._ability_icon_index.get(key)
+
+    async def refresh_ability_icon_index(self) -> dict[tuple[str, str], str]:
+        """Load ability icons from Blizzard hero pages into memory."""
+        session = await self._get_session()
+        heroes = await fetch_blizzard_hero_icons(session)
+        abilities = await fetch_blizzard_ability_icons(session, heroes)
+        index: dict[tuple[str, str], str] = {}
+        for ab in abilities:
+            h = _normalize_hero_token(ab.hero_name)
+            a = _normalize_hero_token(ab.ability)
+            if h and a and ab.icon_url:
+                index[(h, a)] = ab.icon_url
+                # also index by hero_id slug
+                hid = _normalize_hero_token(ab.hero_id)
+                if hid:
+                    index[(hid, a)] = ab.icon_url
+        self._ability_icon_index = index
+        return index
+
+    async def ensure_ability_emojis(
+        self,
+        pairs: list[tuple[str, str, str | None]],
+        *,
+        refresh_roster: bool = False,
+    ) -> dict[str, discord.Emoji]:
+        """
+        Sync app emojis for (hero, ability, icon_url?) tuples.
+        Missing URLs are filled from the Blizzard hero-page catalog.
+        """
+        if refresh_roster or not self._ability_icon_index:
+            try:
+                await self.refresh_ability_icon_index()
+            except Exception as exc:
+                log.warning("Ability roster refresh failed: %s", exc)
+
+        work: dict[str, tuple[str, str, str]] = {}
+        for hero, ability, icon_url in pairs:
+            ability = (ability or "").strip()
+            hero = (hero or "").strip()
+            if not hero or not ability:
+                continue
+            if _normalize_hero_token(ability) in ("general", "hero", ""):
+                continue
+            url = (icon_url or "").strip() or (
+                self.ability_icon_url(hero, ability) or ""
+            )
+            if not url:
+                continue
+            name = emoji_name_for_ability(hero, ability)
+            work[name] = (hero, ability, url)
+
+        existing = {
+            e.name: e for e in await self.bot.fetch_application_emojis()
+        }
+        if not work:
+            self._ability_emoji_cache = {
+                k: v for k, v in existing.items() if k.startswith("owa_")
+            }
+            # Still return full map so callers can resolve names
+            if self._emoji_cache is not None:
+                existing.update(self._emoji_cache)
+            return existing
+
+        session = await self._get_session()
+        created = updated = 0
+        for name, (_hero, _ability, url) in work.items():
+            status, c, u = await self._sync_emoji_from_url(
+                name=name, url=url, session=session, existing=existing
+            )
+            created += c
+            updated += u
+            if status == "fail":
+                continue
+
+        if created or updated:
+            log.info(
+                "Ability emoji sync: created=%s updated=%s needed=%s",
+                created,
+                updated,
+                len(work),
+            )
+        self._ability_emoji_cache = {
+            k: v for k, v in existing.items() if k.startswith("owa_")
+        }
+        if self._emoji_cache is not None:
+            existing.update(self._emoji_cache)
+        return existing
+
+    async def ensure_ability_emojis_for_patch(
+        self, summary
+    ) -> dict[str, discord.Emoji]:
+        """Sync ability icons referenced by a patch summary."""
+        pairs: list[tuple[str, str, str | None]] = []
+        for hero in getattr(summary, "heroes", None) or []:
+            for ch in hero.changes:
+                pairs.append((hero.name, ch.ability, ch.icon_url))
+                # Fill missing icon_url on the change for payload persistence
+                if not ch.icon_url:
+                    filled = self.ability_icon_url(hero.name, ch.ability)
+                    if filled:
+                        ch.icon_url = filled
+        return await self.ensure_ability_emojis(pairs)
+
     async def sync_blizzard_hero_emojis(self) -> dict[str, discord.Emoji]:
-        """Force a full roster emoji sync (new heroes / refreshed icons)."""
+        """Force a full roster emoji sync (new heroes / refreshed icons + abilities)."""
         self._emoji_cache = None
         empty = TierListSummary(season="", updated="")
-        return await self.ensure_hero_emojis(empty)
+        heroes = await self.ensure_hero_emojis(empty)
+        try:
+            session = await self._get_session()
+            roster = await fetch_blizzard_hero_icons(session)
+            abilities = await fetch_blizzard_ability_icons(session, roster)
+            index: dict[tuple[str, str], str] = {}
+            named_pairs: list[tuple[str, str, str | None]] = []
+            for ab in abilities:
+                h = _normalize_hero_token(ab.hero_name)
+                a = _normalize_hero_token(ab.ability)
+                if h and a and ab.icon_url:
+                    index[(h, a)] = ab.icon_url
+                    hid = _normalize_hero_token(ab.hero_id)
+                    if hid:
+                        index[(hid, a)] = ab.icon_url
+                named_pairs.append((ab.hero_name, ab.ability, ab.icon_url))
+            self._ability_icon_index = index
+            await self.ensure_ability_emojis(named_pairs)
+        except Exception as exc:
+            log.warning("Ability emoji roster sync failed: %s", exc)
+        return heroes
 
     async def post_to_channel(
         self,
@@ -766,7 +1049,10 @@ class OverwatchTierCog(commands.Cog):
         """Daily: pick up new heroes and refreshed Blizzard CDN portraits."""
         try:
             result = await self.sync_blizzard_hero_emojis()
-            log.info("Daily hero icon sync done (%s emojis)", len(result))
+            log.info(
+                "Daily hero/ability icon sync done (%s emojis)",
+                len(result),
+            )
         except Exception as exc:
             log.warning("Daily hero icon sync failed: %s", exc)
 

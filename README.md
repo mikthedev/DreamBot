@@ -56,7 +56,7 @@ Patch cards include **Hero Updates** as well as classic Tank / Damage / Support 
 
 **Hero history** — `/hero` (autocomplete), the **Hero history** button under live patch posts, or **Hero history** in `/panel` → Overwatch (creates an unlocked **Patch Notes** hub titled **Search Hero Changes**). **Browse heroes** opens one private message (pick a role, then a hero — edits in place). **Notify me** sends a private DM when that hero is patched — nothing extra is posted in the hub, so forum followers aren’t pinged. Data comes from live Blizzard notes plus the guild’s saved patch archive.
 
-**Hero icons** come from the official [Blizzard roster](https://overwatch.blizzard.com/en-us/heroes/) (Counterwatch as fallback). Application emojis are created and updated when a new hero ships or a CDN portrait changes — daily sync, plus an extra refresh after a new patch posts — so tier, META, and patch posts stay current.
+**Hero icons** come from the official [Blizzard roster](https://overwatch.blizzard.com/en-us/heroes/) (Counterwatch as fallback). **Ability / ultimate icons** are pulled from the same Blizzard hero pages (and patch-note CDN art) and stored as application emojis so buff/nerf lines show which utility changed. Application emojis refresh daily and after a new patch posts.
 
 ---
 

@@ -104,6 +104,9 @@ def has_hero_balance(summary: PatchSummary | None) -> bool:
     return any(h.changes for h in summary.heroes)
 
 
+PATCH_LAYOUT_VERSION = 2  # bump when card layout changes (ability icon thumbnails)
+
+
 def _balance_fingerprint(summary: PatchSummary) -> str:
     """Compare hero balance content without icon URLs (those may be enriched)."""
     if is_fun_mode_patch(summary):
@@ -490,10 +493,12 @@ def _ability_heading(
     hero: str,
     ability: str,
     emoji_map: dict[str, discord.Emoji] | None = None,
+    *,
+    show_emoji: bool = True,
 ) -> str:
     """Ability title with optional Blizzard utility icon as an app emoji."""
     label = ability
-    if emoji_map and hero and ability:
+    if show_emoji and emoji_map and hero and ability:
         try:
             from overwatch_tierlist import emoji_name_for_ability
 
@@ -511,13 +516,16 @@ def _format_ability_block(
     *,
     hero: str = "",
     emoji_map: dict[str, discord.Emoji] | None = None,
+    show_emoji: bool = True,
 ) -> str:
     """Ability name, then each buff/nerf on its own indented line."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
 
-    rows: list[str] = [_ability_heading(hero, ability, emoji_map)]
+    rows: list[str] = [
+        _ability_heading(hero, ability, emoji_map, show_emoji=show_emoji)
+    ]
     for c in shared:
         rows.append(f"{_tone_label(_resolved_tone(ability, c))}  {c.text}")
 
@@ -587,14 +595,89 @@ def _hero_changes_text(
     )
 
 
+def _ability_icon_url(hero: HeroChange, ability: str) -> str | None:
+    """Blizzard CDN icon for one ability (from patch notes or roster catalog)."""
+    for ch in hero.changes:
+        if ch.ability == ability and ch.icon_url:
+            return ch.icon_url
+    return None
+
+
+def _iter_hero_ability_blocks(
+    hero: HeroChange,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> list[tuple[str, str | None]]:
+    """One (markdown block, icon url) per ability for Section + Thumbnail cards."""
+    by_ability: dict[str, list[ChangeLine]] = {}
+    for ch in hero.changes:
+        by_ability.setdefault(ch.ability, []).append(ch)
+    blocks: list[tuple[str, str | None]] = []
+    for ability, lines in by_ability.items():
+        icon = _ability_icon_url(hero, ability)
+        text = _format_ability_block(
+            ability,
+            lines,
+            hero=hero.name,
+            emoji_map=emoji_map,
+            show_emoji=not icon,
+        )
+        blocks.append((text, icon))
+    return blocks
+
+
+def _hero_layout_component_cost(hero: HeroChange) -> int:
+    """Section header + one Section per ability (each costs 3 components)."""
+    abilities = len({ch.ability for ch in hero.changes}) or 1
+    return 3 + abilities * 3
+
+
+def _payload_needs_layout_refresh(raw: str | None) -> bool:
+    """True when the live post predates ability-icon thumbnail layout."""
+    if not raw:
+        return True
+    return '"layout_version"' not in raw
+
+
 def _hero_card_text(
     hero: HeroChange,
     *,
     emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> str:
-    """Single card block: bold name + plain compact changes."""
+    """Single card block: bold name + plain compact changes (embed fallback)."""
     changes = _hero_changes_text(hero, emoji_map=emoji_map)
     return f"**{hero.name}**\n{changes}" if changes else f"**{hero.name}**"
+
+
+def _add_hero_to_container(
+    container: discord.ui.Container,
+    hero: HeroChange,
+    *,
+    emoji_map: dict[str, discord.Emoji] | None = None,
+) -> None:
+    """Hero portrait + one thumbnail Section per ability (CDN icons from patch notes)."""
+    if hero.icon_url:
+        container.add_item(
+            discord.ui.Section(
+                f"**{hero.name}**",
+                accessory=discord.ui.Thumbnail(hero.icon_url),
+            )
+        )
+    else:
+        container.add_item(discord.ui.TextDisplay(f"**{hero.name}**"))
+
+    for ability_text, ability_icon in _iter_hero_ability_blocks(
+        hero, emoji_map=emoji_map
+    ):
+        if ability_icon:
+            container.add_item(
+                discord.ui.Section(
+                    ability_text,
+                    accessory=discord.ui.Thumbnail(ability_icon),
+                )
+            )
+        else:
+            container.add_item(discord.ui.TextDisplay(ability_text))
 
 
 def _hero_section_text(
@@ -1009,6 +1092,7 @@ def summary_to_payload(summary: PatchSummary) -> str:
             "fun_mode": bool(summary.fun_mode or is_fun_mode_patch(summary)),
             "fun_label": summary.fun_label,
             "fun_note": summary.fun_note,
+            "layout_version": PATCH_LAYOUT_VERSION,
             "heroes": [
                 {
                     "name": h.name,
@@ -1285,8 +1369,7 @@ def build_patch_layouts(
         return [view]
 
     BUDGET = 38
-    # Section with 1 text child + thumbnail accessory counts as 3
-    HERO_COST = 3
+    SECTION_COST = 3
     views: list[discord.ui.LayoutView] = []
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(header))
@@ -1312,8 +1395,8 @@ def build_patch_layouts(
         label = ROLE_HEADER.get(role, f"✨  {role.upper()}")
 
         def open_role_container(*, continued: bool = False) -> discord.ui.Container:
-            # Container(1) + title TextDisplay(1) + at least one hero(3)
-            if view._total_children + 1 + 1 + HERO_COST > BUDGET:
+            hero_cost = SECTION_COST * 2  # title + at least one section
+            if view._total_children + 1 + 1 + hero_cost > BUDGET:
                 flush()
             title = f"**{label}**" + (" · cont." if continued else "")
             container = discord.ui.Container(accent_colour=colour)
@@ -1324,31 +1407,26 @@ def build_patch_layouts(
         container = open_role_container()
 
         for i, hero in enumerate(heroes):
-            if view._total_children + HERO_COST > BUDGET:
+            hero_cost = _hero_layout_component_cost(hero)
+            if view._total_children + hero_cost > BUDGET:
                 container = open_role_container(continued=True)
 
-            card = _hero_card_text(hero, emoji_map=emoji_map)
-            if hero.icon_url:
-                container.add_item(
-                    discord.ui.Section(
-                        card,
-                        accessory=discord.ui.Thumbnail(hero.icon_url),
-                    )
-                )
-            else:
-                # TextDisplay alone counts as 1; still fine under budget checks
-                if view._total_children + 1 > BUDGET:
-                    container = open_role_container(continued=True)
-                container.add_item(discord.ui.TextDisplay(card))
+            _add_hero_to_container(container, hero, emoji_map=emoji_map)
 
-            # Tight hairline between heroes inside the role card
-            if i < len(heroes) - 1 and view._total_children + 1 + HERO_COST <= BUDGET:
-                container.add_item(
-                    discord.ui.Separator(
-                        visible=True,
-                        spacing=discord.SeparatorSpacing.small,
-                    )
+            if i < len(heroes) - 1:
+                sep_cost = 1
+                next_cost = (
+                    _hero_layout_component_cost(heroes[i + 1])
+                    if i + 1 < len(heroes)
+                    else 0
                 )
+                if view._total_children + sep_cost + next_cost <= BUDGET:
+                    container.add_item(
+                        discord.ui.Separator(
+                            visible=True,
+                            spacing=discord.SeparatorSpacing.small,
+                        )
+                    )
 
     views.append(view)
     return views
@@ -1620,7 +1698,8 @@ class OverwatchPatchCog(commands.Cog):
                 and _balance_fingerprint(old) == _balance_fingerprint(summary)
             )
             stale_tones = old is not None and _payload_tones_stale(old)
-            if same_lines and not stale_tones:
+            stale_layout = _payload_needs_layout_refresh(old_raw)
+            if same_lines and not stale_tones and not stale_layout:
                 return False, f"Already posted `{summary.fingerprint}`."
             messages = await self.publish_live(channel, summary)
             if not messages:

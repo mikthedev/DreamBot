@@ -104,7 +104,7 @@ def has_hero_balance(summary: PatchSummary | None) -> bool:
     return any(h.changes for h in summary.heroes)
 
 
-PATCH_LAYOUT_VERSION = 3  # bump when card layout changes (ability icon thumbnails)
+PATCH_LAYOUT_VERSION = 4  # character portrait thumbnails; ability icons as inline emojis
 
 
 def _balance_fingerprint(summary: PatchSummary) -> str:
@@ -595,40 +595,9 @@ def _hero_changes_text(
     )
 
 
-def _ability_icon_url(hero: HeroChange, ability: str) -> str | None:
-    """Blizzard CDN icon for one ability (from patch notes or roster catalog)."""
-    for ch in hero.changes:
-        if ch.ability == ability and ch.icon_url:
-            return ch.icon_url
-    return None
-
-
-def _iter_hero_ability_blocks(
-    hero: HeroChange,
-    *,
-    emoji_map: dict[str, discord.Emoji] | None = None,
-) -> list[tuple[str, str | None]]:
-    """One (markdown block, icon url) per ability for Section + Thumbnail cards."""
-    by_ability: dict[str, list[ChangeLine]] = {}
-    for ch in hero.changes:
-        by_ability.setdefault(ch.ability, []).append(ch)
-    blocks: list[tuple[str, str | None]] = []
-    for ability, lines in by_ability.items():
-        icon = _ability_icon_url(hero, ability)
-        text = _format_ability_block(
-            ability,
-            lines,
-            hero=hero.name,
-            emoji_map=emoji_map,
-        )
-        blocks.append((text, icon))
-    return blocks
-
-
 def _hero_layout_component_cost(hero: HeroChange) -> int:
-    """Section header + one Section per ability (each costs 3 components)."""
-    abilities = len({ch.ability for ch in hero.changes}) or 1
-    return 3 + abilities * 3
+    """One portrait Section per hero (name + ability lines with inline emojis)."""
+    return 3
 
 
 def _payload_needs_layout_refresh(raw: str | None) -> bool:
@@ -658,29 +627,17 @@ def _add_hero_to_container(
     *,
     emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> None:
-    """Hero portrait + one thumbnail Section per ability (CDN icons from patch notes)."""
+    """Character portrait on the right; utility icons as emojis beside ability names."""
+    card = _hero_card_text(hero, emoji_map=emoji_map)
     if hero.icon_url:
         container.add_item(
             discord.ui.Section(
-                f"**{hero.name}**",
+                card,
                 accessory=discord.ui.Thumbnail(hero.icon_url),
             )
         )
     else:
-        container.add_item(discord.ui.TextDisplay(f"**{hero.name}**"))
-
-    for ability_text, ability_icon in _iter_hero_ability_blocks(
-        hero, emoji_map=emoji_map
-    ):
-        if ability_icon:
-            container.add_item(
-                discord.ui.Section(
-                    ability_text,
-                    accessory=discord.ui.Thumbnail(ability_icon),
-                )
-            )
-        else:
-            container.add_item(discord.ui.TextDisplay(ability_text))
+        container.add_item(discord.ui.TextDisplay(card))
 
 
 def _hero_section_text(

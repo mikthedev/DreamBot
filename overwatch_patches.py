@@ -104,7 +104,7 @@ def has_hero_balance(summary: PatchSummary | None) -> bool:
     return any(h.changes for h in summary.heroes)
 
 
-PATCH_LAYOUT_VERSION = 7  # inline small-caps tone chips; restore code-block change lines
+PATCH_LAYOUT_VERSION = 8  # restore > block quotes around tweak lines
 
 
 def _balance_fingerprint(summary: PatchSummary) -> str:
@@ -503,7 +503,7 @@ def _change_line(
 ) -> str:
     chip = _tone_chip(_resolved_tone(ability, change))
     prefix = f"{extra}  " if extra else ""
-    return f"{chip}  {prefix}{change.text}"
+    return f"> {chip}  {prefix}{change.text}"
 
 
 def _ability_heading(

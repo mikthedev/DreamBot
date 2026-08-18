@@ -104,7 +104,7 @@ def has_hero_balance(summary: PatchSummary | None) -> bool:
     return any(h.changes for h in summary.heroes)
 
 
-PATCH_LAYOUT_VERSION = 4  # character portrait thumbnails; ability icons as inline emojis
+PATCH_LAYOUT_VERSION = 5  # heading names, italic abilities, quoted buff/nerf lines
 
 
 def _balance_fingerprint(summary: PatchSummary) -> str:
@@ -489,6 +489,15 @@ def _tone_label(tone: str) -> str:
     return "·"
 
 
+def _quote_change_line(
+    ability: str, change: ChangeLine, *, extra: str = ""
+) -> str:
+    """Block-quoted tweak; tone stays italic so it doesn't compete with the values."""
+    mark = _tone_label(_resolved_tone(ability, change))
+    prefix = f"{extra}  " if extra else ""
+    return f"> *{mark}*  {prefix}{change.text}"
+
+
 def _ability_heading(
     hero: str,
     ability: str,
@@ -496,7 +505,7 @@ def _ability_heading(
     *,
     show_emoji: bool = True,
 ) -> str:
-    """Ability title with optional Blizzard utility icon as an app emoji."""
+    """Ability title in italics so it doesn't match the hero heading."""
     label = ability
     if show_emoji and emoji_map and hero and ability:
         try:
@@ -504,10 +513,10 @@ def _ability_heading(
 
             em = emoji_map.get(emoji_name_for_ability(hero, ability))
             if em is not None:
-                return f"{em} **{label}**"
+                return f"{em} *{label}*"
         except Exception:
             pass
-    return f"**{label}**"
+    return f"*{label}*"
 
 
 def _format_ability_block(
@@ -518,7 +527,7 @@ def _format_ability_block(
     emoji_map: dict[str, discord.Emoji] | None = None,
     show_emoji: bool = True,
 ) -> str:
-    """Ability name, then each buff/nerf on its own indented line."""
+    """Ability name, then each buff/nerf as a Discord block quote."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
@@ -527,26 +536,18 @@ def _format_ability_block(
         _ability_heading(hero, ability, emoji_map, show_emoji=show_emoji)
     ]
     for c in shared:
-        rows.append(f"{_tone_label(_resolved_tone(ability, c))}  {c.text}")
+        rows.append(_quote_change_line(ability, c))
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                rows.append(
-                    f"{_tone_label(_resolved_tone(ability, a))}  5v5  {a.text}"
-                )
-                rows.append(
-                    f"{_tone_label(_resolved_tone(ability, b))}  6v6  {b.text}"
-                )
+                rows.append(_quote_change_line(ability, a, extra="5v5"))
+                rows.append(_quote_change_line(ability, b, extra="6v6"))
         else:
             for c in v5:
-                rows.append(
-                    f"{_tone_label(_resolved_tone(ability, c))}  5v5  {c.text}"
-                )
+                rows.append(_quote_change_line(ability, c, extra="5v5"))
             for c in v6:
-                rows.append(
-                    f"{_tone_label(_resolved_tone(ability, c))}  6v6  {c.text}"
-                )
+                rows.append(_quote_change_line(ability, c, extra="6v6"))
 
     return "\n".join(rows)
 
@@ -570,7 +571,8 @@ def _hero_changes_compact(
             mark = ""
         mode = f" · {ch.mode}" if ch.mode else ""
         ability = _ability_heading(hero.name, ch.ability, emoji_map)
-        rows.append(f"{mark}{ability}{mode} · {ch.text}")
+        glyph = f"*{mark.strip()}* " if mark else ""
+        rows.append(f"{glyph}{ability}{mode} · {ch.text}")
     if max_lines is not None:
         extra = len(hero.changes) - max_lines
         if extra > 0:
@@ -616,9 +618,10 @@ def _hero_card_text(
     *,
     emoji_map: dict[str, discord.Emoji] | None = None,
 ) -> str:
-    """Single card block: bold name + plain compact changes (embed fallback)."""
+    """Hero heading + ability blocks (italic names, quoted tweaks)."""
     changes = _hero_changes_text(hero, emoji_map=emoji_map)
-    return f"**{hero.name}**\n{changes}" if changes else f"**{hero.name}**"
+    name = f"### {hero.name}"
+    return f"{name}\n{changes}" if changes else name
 
 
 def _add_hero_to_container(

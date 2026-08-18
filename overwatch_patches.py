@@ -104,7 +104,7 @@ def has_hero_balance(summary: PatchSummary | None) -> bool:
     return any(h.changes for h in summary.heroes)
 
 
-PATCH_LAYOUT_VERSION = 8  # restore > block quotes around tweak lines
+PATCH_LAYOUT_VERSION = 9  # tone legend in header; triangles on ability names only
 
 
 def _balance_fingerprint(summary: PatchSummary) -> str:
@@ -489,21 +489,37 @@ def _tone_label(tone: str) -> str:
     return "·"
 
 
-def _tone_chip(tone: str) -> str:
-    """Compact inline tag; unicode small-caps stay smaller than the change text."""
-    if tone == "▲":
-        return "▲ ᵇᵘᶠᶠ"
-    if tone == "▼":
-        return "▼ ⁿᵉʳᶠ"
-    return "·"
+TONE_LEGEND = "▲ buff · ▼ nerf"
+
+
+def _ability_tone_marks(ability: str, lines: list[ChangeLine]) -> str:
+    """Unique ▲ / ▼ for this utility, in buff-then-nerf order."""
+    seen: list[str] = []
+    for change in lines:
+        tone = _resolved_tone(ability, change)
+        if tone in ("▲", "▼") and tone not in seen:
+            seen.append(tone)
+    return " ".join(seen)
 
 
 def _change_line(
-    ability: str, change: ChangeLine, *, extra: str = ""
+    ability: str,
+    change: ChangeLine,
+    *,
+    extra: str = "",
+    show_tone: bool = False,
 ) -> str:
-    chip = _tone_chip(_resolved_tone(ability, change))
-    prefix = f"{extra}  " if extra else ""
-    return f"> {chip}  {prefix}{change.text}"
+    bits: list[str] = []
+    if show_tone:
+        tone = _resolved_tone(ability, change)
+        if tone in ("▲", "▼"):
+            bits.append(tone)
+    if extra:
+        bits.append(extra)
+    prefix = "  ".join(bits)
+    if prefix:
+        return f"> {prefix}  {change.text}"
+    return f"> {change.text}"
 
 
 def _ability_heading(
@@ -512,19 +528,23 @@ def _ability_heading(
     emoji_map: dict[str, discord.Emoji] | None = None,
     *,
     show_emoji: bool = True,
+    tone_marks: str = "",
 ) -> str:
     """Ability title in italics so it doesn't match the hero heading."""
     label = ability
+    title = f"*{label}*"
     if show_emoji and emoji_map and hero and ability:
         try:
             from overwatch_tierlist import emoji_name_for_ability
 
             em = emoji_map.get(emoji_name_for_ability(hero, ability))
             if em is not None:
-                return f"{em} *{label}*"
+                title = f"{em} *{label}*"
         except Exception:
             pass
-    return f"*{label}*"
+    if tone_marks:
+        return f"{title}  {tone_marks}"
+    return title
 
 
 def _format_ability_block(
@@ -535,27 +555,43 @@ def _format_ability_block(
     emoji_map: dict[str, discord.Emoji] | None = None,
     show_emoji: bool = True,
 ) -> str:
-    """Ability name, then one full-colour line per tweak (values stay in code)."""
+    """Ability name with ▲/▼, then quoted tweaks (legend lives in the header)."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
+    marks = _ability_tone_marks(ability, lines)
+    mixed = "▲" in marks and "▼" in marks
 
     rows: list[str] = [
-        _ability_heading(hero, ability, emoji_map, show_emoji=show_emoji)
+        _ability_heading(
+            hero,
+            ability,
+            emoji_map,
+            show_emoji=show_emoji,
+            tone_marks=marks,
+        )
     ]
     for c in shared:
-        rows.append(_change_line(ability, c))
+        rows.append(_change_line(ability, c, show_tone=mixed))
 
     if v5 or v6:
         if v5 and v6 and len(v5) == len(v6):
             for a, b in zip(v5, v6):
-                rows.append(_change_line(ability, a, extra="5v5"))
-                rows.append(_change_line(ability, b, extra="6v6"))
+                rows.append(
+                    _change_line(ability, a, extra="5v5", show_tone=mixed)
+                )
+                rows.append(
+                    _change_line(ability, b, extra="6v6", show_tone=mixed)
+                )
         else:
             for c in v5:
-                rows.append(_change_line(ability, c, extra="5v5"))
+                rows.append(
+                    _change_line(ability, c, extra="5v5", show_tone=mixed)
+                )
             for c in v6:
-                rows.append(_change_line(ability, c, extra="6v6"))
+                rows.append(
+                    _change_line(ability, c, extra="6v6", show_tone=mixed)
+                )
 
     return "\n".join(rows)
 
@@ -1275,10 +1311,12 @@ def _patch_header_line(
 ) -> str:
     date_label = summary.date or "Patch"
     if preview:
-        return f"🧪 **Preview** · **[{date_label}]({summary.url})**"
-    if archive:
-        return f"📜 **Archive** · **[{date_label}]({summary.url})**"
-    return f"**[{date_label}]({summary.url})**"
+        head = f"🧪 **Preview** · **[{date_label}]({summary.url})**"
+    elif archive:
+        head = f"📜 **Archive** · **[{date_label}]({summary.url})**"
+    else:
+        head = f"**[{date_label}]({summary.url})**"
+    return f"{head} · {TONE_LEGEND}"
 
 
 def _fun_mode_body(summary: PatchSummary) -> str:
@@ -1352,11 +1390,11 @@ def build_patch_layouts(
         views.append(view)
         view = discord.ui.LayoutView(timeout=None)
         if archive:
-            cont = f"📜 **Archive** · **[{date_label}]({summary.url})** · cont."
+            cont = f"📜 **Archive** · **[{date_label}]({summary.url})** · {TONE_LEGEND} · cont."
         elif preview:
-            cont = f"🧪 **Preview** · **[{date_label}]({summary.url})** · cont."
+            cont = f"🧪 **Preview** · **[{date_label}]({summary.url})** · {TONE_LEGEND} · cont."
         else:
-            cont = f"**[{date_label}]({summary.url})** · cont."
+            cont = f"**[{date_label}]({summary.url})** · {TONE_LEGEND} · cont."
         view.add_item(discord.ui.TextDisplay(cont))
 
     for role in _roles_for_display(summary.heroes):

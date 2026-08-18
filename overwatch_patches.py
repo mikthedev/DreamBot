@@ -104,7 +104,7 @@ def has_hero_balance(summary: PatchSummary | None) -> bool:
     return any(h.changes for h in summary.heroes)
 
 
-PATCH_LAYOUT_VERSION = 6  # small -# buff/nerf tags; change text stays full colour
+PATCH_LAYOUT_VERSION = 7  # inline small-caps tone chips; restore code-block change lines
 
 
 def _balance_fingerprint(summary: PatchSummary) -> str:
@@ -489,30 +489,21 @@ def _tone_label(tone: str) -> str:
     return "·"
 
 
-def _tone_tag(tone: str) -> str:
-    """Small Discord subtext chip; does not grey the change line below it."""
-    return f"-# {_tone_label(tone)}"
+def _tone_chip(tone: str) -> str:
+    """Compact inline tag; unicode small-caps stay smaller than the change text."""
+    if tone == "▲":
+        return "▲ ᵇᵘᶠᶠ"
+    if tone == "▼":
+        return "▼ ⁿᵉʳᶠ"
+    return "·"
 
 
-def _change_item(change: ChangeLine, *, extra: str = "") -> str:
-    prefix = f"{extra} · " if extra else ""
-    return f"- {prefix}{change.text}"
-
-
-def _append_tagged_changes(
-    rows: list[str],
-    ability: str,
-    changes: list[ChangeLine],
-    *,
-    extra: str = "",
-) -> None:
-    last_tone: str | None = None
-    for change in changes:
-        tone = _resolved_tone(ability, change)
-        if tone != last_tone:
-            rows.append(_tone_tag(tone))
-            last_tone = tone
-        rows.append(_change_item(change, extra=extra))
+def _change_line(
+    ability: str, change: ChangeLine, *, extra: str = ""
+) -> str:
+    chip = _tone_chip(_resolved_tone(ability, change))
+    prefix = f"{extra}  " if extra else ""
+    return f"{chip}  {prefix}{change.text}"
 
 
 def _ability_heading(
@@ -544,7 +535,7 @@ def _format_ability_block(
     emoji_map: dict[str, discord.Emoji] | None = None,
     show_emoji: bool = True,
 ) -> str:
-    """Ability name, a small buff/nerf tag, then full-colour change lines."""
+    """Ability name, then one full-colour line per tweak (values stay in code)."""
     shared = [c for c in lines if not c.mode]
     v5 = [c for c in lines if c.mode == "5v5"]
     v6 = [c for c in lines if c.mode == "6v6"]
@@ -552,9 +543,19 @@ def _format_ability_block(
     rows: list[str] = [
         _ability_heading(hero, ability, emoji_map, show_emoji=show_emoji)
     ]
-    _append_tagged_changes(rows, ability, shared)
-    _append_tagged_changes(rows, ability, v5, extra="5v5")
-    _append_tagged_changes(rows, ability, v6, extra="6v6")
+    for c in shared:
+        rows.append(_change_line(ability, c))
+
+    if v5 or v6:
+        if v5 and v6 and len(v5) == len(v6):
+            for a, b in zip(v5, v6):
+                rows.append(_change_line(ability, a, extra="5v5"))
+                rows.append(_change_line(ability, b, extra="6v6"))
+        else:
+            for c in v5:
+                rows.append(_change_line(ability, c, extra="5v5"))
+            for c in v6:
+                rows.append(_change_line(ability, c, extra="6v6"))
 
     return "\n".join(rows)
 

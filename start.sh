@@ -20,6 +20,10 @@ if [[ "${AUTO_UPDATE:-}" == "1" && -n "${_git_token}" && -d .git ]]; then
 fi
 unset _git_token
 
+if command -v git >/dev/null 2>&1 && [[ -d .git ]]; then
+  echo "[DreamBot] Running $(git log -1 --oneline 2>/dev/null || echo 'unknown commit')"
+fi
+
 BIN_DIR="$ROOT/.local/bin"
 DENO_BIN="$BIN_DIR/deno"
 mkdir -p "$BIN_DIR"

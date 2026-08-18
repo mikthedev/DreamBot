@@ -104,7 +104,7 @@ def has_hero_balance(summary: PatchSummary | None) -> bool:
     return any(h.changes for h in summary.heroes)
 
 
-PATCH_LAYOUT_VERSION = 2  # bump when card layout changes (ability icon thumbnails)
+PATCH_LAYOUT_VERSION = 3  # bump when card layout changes (ability icon thumbnails)
 
 
 def _balance_fingerprint(summary: PatchSummary) -> str:

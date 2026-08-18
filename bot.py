@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import subprocess
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -99,6 +100,16 @@ class DreamTeamBot(commands.Bot):
             log.info("Free Groq Llama AI enabled (model=%s)", config.GROQ_MODEL)
         else:
             log.warning("GROQ_API_KEY not set — /ask, @mention, and /join AI disabled")
+        try:
+            rev = subprocess.check_output(
+                ["git", "log", "-1", "--oneline"],
+                cwd=config.BASE_DIR,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            log.info("Running %s", rev)
+        except Exception:
+            log.info("Running from %s (git revision unknown)", config.BASE_DIR)
 
     async def on_ready(self) -> None:
         # Sync to each guild only (instant). Clear globals so Discord doesn't show duplicates.

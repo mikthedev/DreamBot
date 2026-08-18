@@ -6,19 +6,36 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-# The egg's startup `git pull` does not use GIT_ACCESS_TOKEN. Authenticate here
-# instead of rewriting the git remote. Token stays in the panel env, never in git.
-_git_token="${GIT_ACCESS_TOKEN:-${ACCESS_TOKEN:-}}"
-_git_branch="${GIT_BRANCH:-main}"
-if [[ "${AUTO_UPDATE:-}" == "1" && -n "${_git_token}" && -d .git ]]; then
-  echo "[DreamBot] Pulling ${_git_branch} with panel Git Access Token..."
-  if git -c "http.extraHeader=AUTHORIZATION: Bearer ${_git_token}" pull --ff-only origin "${_git_branch}"; then
-    echo "[DreamBot] Repo is up to date with origin/${_git_branch}"
+# Host egg env names: USERNAME + ACCESS_TOKEN (labels say Git Username / Git Access Token).
+# The egg's own `git pull` never uses the token — turn Auto Update OFF and let this script pull.
+_git_token="${ACCESS_TOKEN:-${GIT_ACCESS_TOKEN:-}}"
+_git_user="${USERNAME:-${GIT_USERNAME:-x-access-token}}"
+_git_branch="${GIT_BRANCH:-${BRANCH:-main}}"
+if [[ -d .git ]]; then
+  if [[ -n "${_git_token}" ]]; then
+    echo "[DreamBot] Pulling ${_git_branch} as ${_git_user} (token present)"
+    _pull_ok=0
+    if git -c "http.extraHeader=AUTHORIZATION: Bearer ${_git_token}" pull --ff-only origin "${_git_branch}"; then
+      _pull_ok=1
+    else
+      echo "[DreamBot] Bearer pull failed, retrying with username + token URL..."
+      _git_url="$(git remote get-url origin | sed -E 's#https://[^@]+@#https://#; s#git@github.com:#https://github.com/#')"
+      _git_url="${_git_url#https://}"
+      if git pull --ff-only "https://${_git_user}:${_git_token}@${_git_url}" "${_git_branch}"; then
+        _pull_ok=1
+      fi
+    fi
+    if [[ "${_pull_ok}" == "1" ]]; then
+      echo "[DreamBot] Repo is up to date with origin/${_git_branch}"
+    else
+      echo "[DreamBot] git pull failed — token needs Contents: Read on mikthedev/DreamBot"
+    fi
+    unset _git_url _pull_ok
   else
-    echo "[DreamBot] git pull failed — check Git Access Token (repo read) and branch"
+    echo "[DreamBot] No ACCESS_TOKEN in the environment — fill Git Access Token in Variables"
   fi
 fi
-unset _git_token
+unset _git_token _git_user _git_branch
 
 if command -v git >/dev/null 2>&1 && [[ -d .git ]]; then
   echo "[DreamBot] Running $(git log -1 --oneline 2>/dev/null || echo 'unknown commit')"

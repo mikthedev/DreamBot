@@ -6,6 +6,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
+# The egg's startup `git pull` does not use GIT_ACCESS_TOKEN. Authenticate here
+# instead of rewriting the git remote. Token stays in the panel env, never in git.
+_git_token="${GIT_ACCESS_TOKEN:-${ACCESS_TOKEN:-}}"
+_git_branch="${GIT_BRANCH:-main}"
+if [[ "${AUTO_UPDATE:-}" == "1" && -n "${_git_token}" && -d .git ]]; then
+  echo "[DreamBot] Pulling ${_git_branch} with panel Git Access Token..."
+  if git -c "http.extraHeader=AUTHORIZATION: Bearer ${_git_token}" pull --ff-only origin "${_git_branch}"; then
+    echo "[DreamBot] Repo is up to date with origin/${_git_branch}"
+  else
+    echo "[DreamBot] git pull failed — check Git Access Token (repo read) and branch"
+  fi
+fi
+unset _git_token
+
 BIN_DIR="$ROOT/.local/bin"
 DENO_BIN="$BIN_DIR/deno"
 mkdir -p "$BIN_DIR"

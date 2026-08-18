@@ -620,7 +620,6 @@ def _iter_hero_ability_blocks(
             lines,
             hero=hero.name,
             emoji_map=emoji_map,
-            show_emoji=not icon,
         )
         blocks.append((text, icon))
     return blocks
@@ -636,7 +635,11 @@ def _payload_needs_layout_refresh(raw: str | None) -> bool:
     """True when the live post predates ability-icon thumbnail layout."""
     if not raw:
         return True
-    return '"layout_version"' not in raw
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return True
+    return int(data.get("layout_version", 0)) < PATCH_LAYOUT_VERSION
 
 
 def _hero_card_text(
@@ -1082,9 +1085,10 @@ async def fetch_all_patch_summaries(
     return out
 
 
-def summary_to_payload(summary: PatchSummary) -> str:
-    return json.dumps(
-        {
+def summary_to_payload(
+    summary: PatchSummary, *, layout_applied: bool = True
+) -> str:
+    payload: dict = {
             "patch_id": summary.patch_id,
             "date": summary.date,
             "title": summary.title,
@@ -1092,7 +1096,6 @@ def summary_to_payload(summary: PatchSummary) -> str:
             "fun_mode": bool(summary.fun_mode or is_fun_mode_patch(summary)),
             "fun_label": summary.fun_label,
             "fun_note": summary.fun_note,
-            "layout_version": PATCH_LAYOUT_VERSION,
             "heroes": [
                 {
                     "name": h.name,
@@ -1112,7 +1115,9 @@ def summary_to_payload(summary: PatchSummary) -> str:
                 for h in summary.heroes
             ],
         }
-    )
+    if layout_applied:
+        payload["layout_version"] = PATCH_LAYOUT_VERSION
+    return json.dumps(payload)
 
 
 def summary_from_payload(raw: str) -> PatchSummary | None:
@@ -1559,7 +1564,7 @@ class OverwatchPatchCog(commands.Cog):
         preview: bool = False,
         with_history: bool = False,
         existing_thread_id: int | None = None,
-    ) -> tuple[list[discord.Message], int | None]:
+    ) -> tuple[list[discord.Message], int | None, bool]:
         await self.enrich_hero_icons(summary)
         emoji_map = await self.ensure_ability_emojis(summary)
         layouts = build_patch_layouts(
@@ -1617,7 +1622,7 @@ class OverwatchPatchCog(commands.Cog):
         else:
             existing_thread_id = self.bot.db.get_ow_patch_thread_id(guild_id)
 
-        messages, thread_id = await self.post_to_channel(
+        messages, thread_id, layout_applied = await self.post_to_channel(
             channel,
             summary,
             preview=False,
@@ -1631,7 +1636,7 @@ class OverwatchPatchCog(commands.Cog):
             guild_id,
             summary.fingerprint,
             [m.id for m in messages],
-            summary_to_payload(summary),
+            summary_to_payload(summary, layout_applied=layout_applied),
         )
         try:
             from overwatch_hero_history import notify_hero_alert_subscribers
@@ -1711,8 +1716,7 @@ class OverwatchPatchCog(commands.Cog):
             return False, f"Skipped `{summary.fingerprint}` — no hero balance."
         return True, summary.title
 
-    @tasks.loop(hours=config.OW_PATCH_CHECK_HOURS)
-    async def check_patches(self) -> None:
+    async def _run_patch_check(self) -> bool:
         any_posted = False
         for guild in self.bot.guilds:
             try:
@@ -1724,7 +1728,13 @@ class OverwatchPatchCog(commands.Cog):
                 log.warning("OW patch check failed for %s: %s", guild.name, exc)
         if any_posted:
             await self.refresh_app_hero_emojis()
+        return any_posted
+
+    @tasks.loop(hours=config.OW_PATCH_CHECK_HOURS)
+    async def check_patches(self) -> None:
+        await self._run_patch_check()
 
     @check_patches.before_loop
     async def before_check(self) -> None:
         await self.bot.wait_until_ready()
+        await self._run_patch_check()

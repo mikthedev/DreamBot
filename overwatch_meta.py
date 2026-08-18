@@ -580,7 +580,7 @@ class OverwatchMetaCog(commands.Cog):
         else:
             existing_thread_id = self.bot.db.get_ow_meta_thread_id(guild_id)
 
-        messages, thread_id = await self.post_to_channel(
+        messages, thread_id, _ = await self.post_to_channel(
             channel,
             summary,
             preview=False,

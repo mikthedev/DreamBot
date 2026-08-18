@@ -244,12 +244,12 @@ async def post_ow_announcement(
     trailing_content: str | None = None,
     trailing_view: discord.ui.View | None = None,
     existing_thread_id: int | None = None,
-) -> tuple[list[discord.Message], int | None]:
+) -> tuple[list[discord.Message], int | None, bool]:
     """
     Publish Components V2 layouts (embed fallback) to a text channel or forum post.
 
     Forum: edit the existing live post in place when possible (title + body + tags),
-    otherwise create one locked post. Returns (messages, forum_thread_id|None).
+    otherwise create one locked post. Returns (messages, forum_thread_id|None, layout_applied).
     """
 
     def _embeds() -> list[discord.Embed]:
@@ -258,6 +258,7 @@ async def post_ow_announcement(
         return embeds_fallback
 
     messages: list[discord.Message] = []
+    layout_applied = False
 
     if isinstance(channel, discord.ForumChannel):
         tags = await resolve_forum_tags(channel, tag_names)
@@ -291,6 +292,7 @@ async def post_ow_announcement(
                             view=layouts[0],
                             attachments=[],
                         )
+                        layout_applied = True
                     else:
                         await starter.edit(
                             content=None,
@@ -331,7 +333,7 @@ async def post_ow_announcement(
                     await unlock_thread_for_buttons(thread)
                 else:
                     await lock_thread_for_reactions_only(thread)
-                return messages, thread.id
+                return messages, thread.id, layout_applied
             except Exception as exc:
                 log.warning(
                     "OW forum in-place update failed (will create new post): %s",
@@ -347,6 +349,7 @@ async def post_ow_announcement(
                 created = await channel.create_thread(
                     name=name, view=first, **tag_kwargs
                 )
+                layout_applied = True
             else:
                 created = await channel.create_thread(
                     name=name, embeds=_embeds(), **tag_kwargs
@@ -379,12 +382,13 @@ async def post_ow_announcement(
             await unlock_thread_for_buttons(thread)
         else:
             await lock_thread_for_reactions_only(thread)
-        return messages, thread.id
+        return messages, thread.id, layout_applied
 
     # Classic text channel (kept for transition / fallback)
     try:
         for layout in layouts:
             messages.append(await channel.send(view=layout))
+        layout_applied = bool(layouts)
     except Exception as exc:
         log.warning("OW text LayoutView failed, using embeds: %s", exc)
         messages.append(await channel.send(embeds=_embeds()))
@@ -396,4 +400,4 @@ async def post_ow_announcement(
                 view=trailing_view,
             )
         )
-    return messages, None
+    return messages, None, layout_applied

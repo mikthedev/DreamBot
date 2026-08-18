@@ -1391,7 +1391,7 @@ class OverwatchHeroHistoryCog(commands.Cog):
         if isinstance(channel, discord.ForumChannel):
             existing_thread_id = self.bot.db.get_ow_hero_history_thread_id(guild_id)
 
-        messages, thread_id = await post_ow_announcement(
+        messages, thread_id, _ = await post_ow_announcement(
             channel,
             thread_name=hero_history_thread_title(),
             layouts=build_hero_history_hub_layouts(),

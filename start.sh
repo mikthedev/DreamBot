@@ -8,34 +8,31 @@ cd "$ROOT"
 
 # Host egg env names: USERNAME + ACCESS_TOKEN (labels say Git Username / Git Access Token).
 # The egg's own `git pull` never uses the token — turn Auto Update OFF and let this script pull.
-_git_token="${ACCESS_TOKEN:-${GIT_ACCESS_TOKEN:-}}"
-_git_user="${USERNAME:-${GIT_USERNAME:-x-access-token}}"
-_git_branch="${GIT_BRANCH:-${BRANCH:-main}}"
-if [[ -d .git ]]; then
+# Host file edits (e.g. a pasted start.sh) must be discarded or git merge aborts.
+if [[ "${DREAMBOT_SKIP_PULL:-}" != "1" && -d .git ]]; then
+  _git_token="${ACCESS_TOKEN:-${GIT_ACCESS_TOKEN:-}}"
+  _git_user="${USERNAME:-${GIT_USERNAME:-x-access-token}}"
+  _git_branch="${GIT_BRANCH:-${BRANCH:-main}}"
   if [[ -n "${_git_token}" ]]; then
-    echo "[DreamBot] Pulling ${_git_branch} as ${_git_user} (token present)"
-    _pull_ok=0
-    if git -c "http.extraHeader=AUTHORIZATION: Bearer ${_git_token}" pull --ff-only origin "${_git_branch}"; then
-      _pull_ok=1
+    echo "[DreamBot] Fetching ${_git_branch} as ${_git_user} (token present)"
+    _git_url="$(git remote get-url origin | sed -E 's#https://[^@]+@#https://#; s#git@github.com:#https://github.com/#')"
+    _git_url="${_git_url#https://}"
+    _auth_url="https://${_git_user}:${_git_token}@${_git_url}"
+    if git fetch --force "${_auth_url}" "${_git_branch}"; then
+      git reset --hard FETCH_HEAD
+      echo "[DreamBot] Repo reset to $(git log -1 --oneline)"
+      unset _git_token _git_user _git_branch _git_url _auth_url
+      export DREAMBOT_SKIP_PULL=1
+      exec bash "$ROOT/start.sh"
     else
-      echo "[DreamBot] Bearer pull failed, retrying with username + token URL..."
-      _git_url="$(git remote get-url origin | sed -E 's#https://[^@]+@#https://#; s#git@github.com:#https://github.com/#')"
-      _git_url="${_git_url#https://}"
-      if git pull --ff-only "https://${_git_user}:${_git_token}@${_git_url}" "${_git_branch}"; then
-        _pull_ok=1
-      fi
+      echo "[DreamBot] git fetch failed — token needs Contents: Read on mikthedev/DreamBot"
     fi
-    if [[ "${_pull_ok}" == "1" ]]; then
-      echo "[DreamBot] Repo is up to date with origin/${_git_branch}"
-    else
-      echo "[DreamBot] git pull failed — token needs Contents: Read on mikthedev/DreamBot"
-    fi
-    unset _git_url _pull_ok
+    unset _git_url _auth_url
   else
     echo "[DreamBot] No ACCESS_TOKEN in the environment — fill Git Access Token in Variables"
   fi
+  unset _git_token _git_user _git_branch
 fi
-unset _git_token _git_user _git_branch
 
 if command -v git >/dev/null 2>&1 && [[ -d .git ]]; then
   echo "[DreamBot] Running $(git log -1 --oneline 2>/dev/null || echo 'unknown commit')"

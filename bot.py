@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import socket
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -54,6 +56,7 @@ log = logging.getLogger("dream_team")
 
 _LOGIN_COOLDOWN_PATH = config.DATA_DIR / "discord_login_cooldown"
 _LOGIN_ATTEMPT_PATH = config.DATA_DIR / "discord_last_login_attempt"
+_IPV4_SWITCH_PATH = config.DATA_DIR / "discord_ipv4_preferred"
 _RESTART_DAMPEN_SECONDS = 120
 _FIRST_429_WAIT = 600  # 10 min — Cloudflare 1015 on shared IPs is sticky
 _MAX_429_WAIT = 1800  # 30 min
@@ -91,11 +94,12 @@ def _sleep_until(until: float, reason: str) -> None:
         time.sleep(min(left, 30))
 
 
-def _honor_login_gates() -> None:
+def _honor_login_gates(*, skip_saved_cooldown: bool = False) -> None:
     """Survive host crash-restarts: do not immediately hit Discord again."""
-    cooldown_until = _read_ts(_LOGIN_COOLDOWN_PATH)
-    if cooldown_until > time.time():
-        _sleep_until(cooldown_until, "Saved Discord Cloudflare cooldown still active")
+    if not skip_saved_cooldown:
+        cooldown_until = _read_ts(_LOGIN_COOLDOWN_PATH)
+        if cooldown_until > time.time():
+            _sleep_until(cooldown_until, "Saved Discord Cloudflare cooldown still active")
     last = _read_ts(_LOGIN_ATTEMPT_PATH)
     if last and time.time() - last < _RESTART_DAMPEN_SECONDS:
         _sleep_until(
@@ -103,6 +107,17 @@ def _honor_login_gates() -> None:
             "Last login attempt was seconds ago (host auto-restart)",
         )
     _write_ts(_LOGIN_ATTEMPT_PATH, time.time())
+
+
+def _discord_connector(*, ipv4_only: bool) -> aiohttp.TCPConnector:
+    """bot-hosting's shared IPv6 (2a01:4f9:…) is what Cloudflare 1015 bans."""
+    family = socket.AF_INET if ipv4_only else 0
+    return aiohttp.TCPConnector(
+        family=family,
+        ttl_dns_cache=300,
+        enable_cleanup_closed=True,
+        limit=50,
+    )
 
 
 def _mark_login_success() -> None:
@@ -129,9 +144,18 @@ def _is_discord_ip_ban(exc: BaseException) -> bool:
 def _run_with_login_backoff(db: Database, token: str) -> None:
     """Stay alive on Cloudflare 429 instead of crashing (host restart makes it worse)."""
     delay = _FIRST_429_WAIT
+    ipv4_only = True
+    # Previous bans were on IPv6. First IPv4 attempt should not sit out a 20 min wait.
+    skip_saved_cooldown = not _IPV4_SWITCH_PATH.exists()
     while True:
-        _honor_login_gates()
-        bot = DreamTeamBot(db)
+        _honor_login_gates(skip_saved_cooldown=skip_saved_cooldown)
+        skip_saved_cooldown = False
+        _write_ts(_IPV4_SWITCH_PATH, time.time())
+        log.info(
+            "Connecting to Discord over %s",
+            "IPv4 (avoids banned host IPv6)" if ipv4_only else "default IP",
+        )
+        bot = DreamTeamBot(db, ipv4_only=ipv4_only)
         try:
             bot.run(token, log_handler=None)
             return
@@ -142,16 +166,21 @@ def _run_with_login_backoff(db: Database, token: str) -> None:
             _write_ts(_LOGIN_COOLDOWN_PATH, until)
             log.warning(
                 "Discord Cloudflare blocked this host IP (HTTP 429 / error 1015). "
-                "Shared bot-hosting IPs get banned when the process crash-restarts. "
-                "Waiting %s min, then retrying.",
+                "Waiting %s min, then retrying over IPv4. Do not press Restart.",
                 max(1, delay // 60),
             )
             _sleep_until(until, "Cloudflare 1015 cooldown")
             delay = min(delay * 2, _MAX_429_WAIT)
+        except (OSError, aiohttp.ClientConnectorError) as exc:
+            if ipv4_only:
+                log.warning("IPv4 Discord connect failed (%s) — falling back to default", exc)
+                ipv4_only = False
+                continue
+            raise
 
 
 class DreamTeamBot(commands.Bot):
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, *, ipv4_only: bool = True) -> None:
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
@@ -163,6 +192,7 @@ class DreamTeamBot(commands.Bot):
             intents=intents,
             max_messages=200,
             chunk_guilds_at_startup=True,
+            connector=_discord_connector(ipv4_only=ipv4_only),
         )
         self.db = db
         self._guild_commands_synced = False

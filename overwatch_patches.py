@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -1743,4 +1744,6 @@ class OverwatchPatchCog(commands.Cog):
     @check_patches.before_loop
     async def before_check(self) -> None:
         await self.bot.wait_until_ready()
+        # Let the gateway settle before fetching Blizzard HTML + syncing icons
+        await asyncio.sleep(30)
         await self._run_patch_check()

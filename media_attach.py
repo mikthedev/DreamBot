@@ -13,7 +13,6 @@ from pathlib import Path
 
 import aiohttp
 import discord
-import yt_dlp
 
 import config
 
@@ -313,8 +312,16 @@ def _shrink_with_ffmpeg(src: Path, dest: Path, max_bytes: int) -> Path | None:
     return dest
 
 
+def _yt_dlp():
+    """Lazy import so cold start stays light on small bot-hosting plans."""
+    import yt_dlp
+
+    return yt_dlp
+
+
 def _download_with_ytdl(url: str, dest_dir: Path, max_bytes: int) -> Path | None:
     """Download Bluesky HLS / other non-YouTube streams under the Discord size cap."""
+    yt_dlp = _yt_dlp()
     outtmpl = str(dest_dir / "clip.%(ext)s")
     last_exc: Exception | None = None
 

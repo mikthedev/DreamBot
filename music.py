@@ -19,11 +19,16 @@ from rich_presence import (
     presence_now_playing,
     update_presence as apply_rich_presence,
 )
-import yt_dlp
-
 import config
 
 log = logging.getLogger("dream_team.music")
+
+
+def _yt_dlp():
+    """Lazy import — yt-dlp is ~20 MB RSS and only needed when someone /play's."""
+    import yt_dlp
+
+    return yt_dlp
 
 
 class _YTDLLogger:
@@ -116,6 +121,7 @@ def _pick_stream_url(info: dict) -> str:
 
 
 def _extract_info(query: str, *, for_stream: bool) -> dict:
+    yt_dlp = _yt_dlp()
     opts = _ytdl_opts(skip_download=True)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = _unwrap_info(ydl.extract_info(query, download=False))

@@ -58,7 +58,13 @@ class DreamTeamBot(commands.Bot):
         intents.message_content = True
         intents.presences = config.PLAY_PRESENCE_INTENT
 
-        super().__init__(command_prefix="!", intents=intents)
+        # Keep the message cache small — bot-hosting free/starter plans are often 256–512 MB.
+        super().__init__(
+            command_prefix="!",
+            intents=intents,
+            max_messages=200,
+            chunk_guilds_at_startup=True,
+        )
         self.db = db
 
     async def setup_hook(self) -> None:
@@ -679,6 +685,17 @@ def main() -> None:
         raise SystemExit(
             "Missing DISCORD_TOKEN. Copy .env.example to .env and paste your bot token."
         )
+
+    try:
+        import resource
+
+        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        log.info(
+            "Cold-start RSS ~%.0f MB (host free tier often 256 MB — keep under that)",
+            rss_mb,
+        )
+    except Exception:
+        pass
 
     db = Database(config.DATABASE_PATH)
     log.info("Database ready at %s", config.DATABASE_PATH.resolve())

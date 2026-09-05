@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import io
 import logging
@@ -256,7 +257,7 @@ async def fetch_blizzard_ability_icons(
     session: aiohttp.ClientSession,
     heroes: list[BlizzardHeroIcon],
     *,
-    concurrency: int = 6,
+    concurrency: int = 3,
 ) -> list[BlizzardAbilityIcon]:
     """Pull ability icons for every hero on the official roster."""
     sem = asyncio.Semaphore(concurrency)
@@ -387,22 +388,35 @@ def _icon_url(hero: TierHero) -> str | None:
 
 def _to_emoji_png(data: bytes) -> bytes:
     """Square PNG for app emojis — no circular mask."""
-    im = Image.open(io.BytesIO(data)).convert("RGBA")
-    w, h = im.size
-    side = min(w, h)
-    left = (w - side) // 2
-    top = (h - side) // 2
-    im = im.crop((left, top, left + side, top + side))
-    im = im.resize((128, 128), Image.Resampling.LANCZOS)
-    out = io.BytesIO()
-    im.save(out, format="PNG", optimize=True)
-    payload = out.getvalue()
-    if len(payload) > 256_000:
-        im = im.resize((96, 96), Image.Resampling.LANCZOS)
+    with Image.open(io.BytesIO(data)) as src:
+        im = src.convert("RGBA")
+    try:
+        w, h = im.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        cropped = im.crop((left, top, left + side, top + side))
+        im.close()
+        im = cropped
+        resized = im.resize((128, 128), Image.Resampling.LANCZOS)
+        im.close()
+        im = resized
         out = io.BytesIO()
         im.save(out, format="PNG", optimize=True)
         payload = out.getvalue()
-    return payload
+        if len(payload) > 256_000:
+            smaller = im.resize((96, 96), Image.Resampling.LANCZOS)
+            im.close()
+            im = smaller
+            out = io.BytesIO()
+            im.save(out, format="PNG", optimize=True)
+            payload = out.getvalue()
+        return payload
+    finally:
+        try:
+            im.close()
+        except Exception:
+            pass
 
 
 def _hero_line(
@@ -697,6 +711,8 @@ class OverwatchTierCog(commands.Cog):
                 log.warning("Could not sync emoji %s: %s", name, exc)
             except Exception as exc:
                 log.warning("Emoji sync failed for %s: %s", name, exc)
+            if (created + updated) and (created + updated) % 8 == 0:
+                gc.collect()
 
         if created or updated:
             log.info(
@@ -705,6 +721,7 @@ class OverwatchTierCog(commands.Cog):
                 updated,
                 len(existing),
             )
+            gc.collect()
 
         self._emoji_cache = existing
         return existing
@@ -846,6 +863,8 @@ class OverwatchTierCog(commands.Cog):
             updated += u
             if status == "fail":
                 continue
+            if (created + updated) % 8 == 0:
+                gc.collect()
 
         if created or updated:
             log.info(
@@ -854,6 +873,7 @@ class OverwatchTierCog(commands.Cog):
                 updated,
                 len(work),
             )
+            gc.collect()
         self._ability_emoji_cache = {
             k: v for k, v in existing.items() if k.startswith("owa_")
         }
@@ -877,29 +897,20 @@ class OverwatchTierCog(commands.Cog):
         return await self.ensure_ability_emojis(pairs)
 
     async def sync_blizzard_hero_emojis(self) -> dict[str, discord.Emoji]:
-        """Force a full roster emoji sync (new heroes / refreshed icons + abilities)."""
+        """Force a full roster emoji sync for hero portraits only.
+
+        Ability icons are synced on demand when a patch/history card needs them —
+        uploading ~270 ability PNGs at once OOMs 256–512 MB bot-hosting plans.
+        """
         self._emoji_cache = None
         empty = TierListSummary(season="", updated="")
         heroes = await self.ensure_hero_emojis(empty)
+        # Refresh URL index for later on-demand ability sync (HTML only, no PNG uploads)
         try:
-            session = await self._get_session()
-            roster = await fetch_blizzard_hero_icons(session)
-            abilities = await fetch_blizzard_ability_icons(session, roster)
-            index: dict[tuple[str, str], str] = {}
-            named_pairs: list[tuple[str, str, str | None]] = []
-            for ab in abilities:
-                h = _normalize_hero_token(ab.hero_name)
-                a = _normalize_hero_token(ab.ability)
-                if h and a and ab.icon_url:
-                    index[(h, a)] = ab.icon_url
-                    hid = _normalize_hero_token(ab.hero_id)
-                    if hid:
-                        index[(hid, a)] = ab.icon_url
-                named_pairs.append((ab.hero_name, ab.ability, ab.icon_url))
-            self._ability_icon_index = index
-            await self.ensure_ability_emojis(named_pairs)
+            await self.refresh_ability_icon_index()
         except Exception as exc:
-            log.warning("Ability emoji roster sync failed: %s", exc)
+            log.warning("Ability icon index refresh failed: %s", exc)
+        gc.collect()
         return heroes
 
     async def post_to_channel(
@@ -1050,7 +1061,7 @@ class OverwatchTierCog(commands.Cog):
         try:
             result = await self.sync_blizzard_hero_emojis()
             log.info(
-                "Daily hero/ability icon sync done (%s emojis)",
+                "Daily hero icon sync done (%s emojis)",
                 len(result),
             )
         except Exception as exc:
@@ -1059,5 +1070,5 @@ class OverwatchTierCog(commands.Cog):
     @sync_hero_icons.before_loop
     async def before_sync_hero_icons(self) -> None:
         await self.bot.wait_until_ready()
-        # Small delay so startup isn't hammering Discord + Blizzard at once
-        await asyncio.sleep(45)
+        # Wait for login + first patch check to finish before touching images
+        await asyncio.sleep(180)

@@ -3,6 +3,7 @@ import logging
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import discord
@@ -50,6 +51,103 @@ from birthday_signup import (
 )
 
 log = logging.getLogger("dream_team")
+
+_LOGIN_COOLDOWN_PATH = config.DATA_DIR / "discord_login_cooldown"
+_LOGIN_ATTEMPT_PATH = config.DATA_DIR / "discord_last_login_attempt"
+_RESTART_DAMPEN_SECONDS = 120
+_FIRST_429_WAIT = 600  # 10 min — Cloudflare 1015 on shared IPs is sticky
+_MAX_429_WAIT = 1800  # 30 min
+
+
+def _read_ts(path: Path) -> float:
+    try:
+        return float(path.read_text(encoding="utf-8").strip())
+    except Exception:
+        return 0.0
+
+
+def _write_ts(path: Path, value: float) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(value), encoding="utf-8")
+    except Exception as exc:
+        log.debug("Could not write %s: %s", path.name, exc)
+
+
+def _sleep_until(until: float, reason: str) -> None:
+    wait = int(until - time.time())
+    if wait <= 0:
+        return
+    minutes = max(1, (wait + 59) // 60)
+    log.warning(
+        "%s — waiting %s min. Leave the server running; Restart makes Discord ban last longer.",
+        reason,
+        minutes,
+    )
+    while True:
+        left = int(until - time.time())
+        if left <= 0:
+            return
+        time.sleep(min(left, 30))
+
+
+def _honor_login_gates() -> None:
+    """Survive host crash-restarts: do not immediately hit Discord again."""
+    cooldown_until = _read_ts(_LOGIN_COOLDOWN_PATH)
+    if cooldown_until > time.time():
+        _sleep_until(cooldown_until, "Saved Discord Cloudflare cooldown still active")
+    last = _read_ts(_LOGIN_ATTEMPT_PATH)
+    if last and time.time() - last < _RESTART_DAMPEN_SECONDS:
+        _sleep_until(
+            last + _RESTART_DAMPEN_SECONDS,
+            "Last login attempt was seconds ago (host auto-restart)",
+        )
+    _write_ts(_LOGIN_ATTEMPT_PATH, time.time())
+
+
+def _mark_login_success() -> None:
+    try:
+        _LOGIN_COOLDOWN_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _is_discord_ip_ban(exc: BaseException) -> bool:
+    """Cloudflare 1015 / HTTP 429 HTML page — shared host IPs get this a lot."""
+    status = getattr(exc, "status", None)
+    if status == 429:
+        return True
+    text = str(exc).lower()
+    return (
+        "error 1015" in text
+        or "you are being rate limited" in text
+        or "banned you temporarily" in text
+        or "access denied | discord.com" in text
+    )
+
+
+def _run_with_login_backoff(db: Database, token: str) -> None:
+    """Stay alive on Cloudflare 429 instead of crashing (host restart makes it worse)."""
+    delay = _FIRST_429_WAIT
+    while True:
+        _honor_login_gates()
+        bot = DreamTeamBot(db)
+        try:
+            bot.run(token, log_handler=None)
+            return
+        except (discord.HTTPException, discord.LoginFailure) as exc:
+            if not _is_discord_ip_ban(exc):
+                raise
+            until = time.time() + delay
+            _write_ts(_LOGIN_COOLDOWN_PATH, until)
+            log.warning(
+                "Discord Cloudflare blocked this host IP (HTTP 429 / error 1015). "
+                "Shared bot-hosting IPs get banned when the process crash-restarts. "
+                "Waiting %s min, then retrying.",
+                max(1, delay // 60),
+            )
+            _sleep_until(until, "Cloudflare 1015 cooldown")
+            delay = min(delay * 2, _MAX_429_WAIT)
 
 
 class DreamTeamBot(commands.Bot):
@@ -139,6 +237,7 @@ class DreamTeamBot(commands.Bot):
             except Exception as exc:
                 log.warning("Could not clear global commands: %s", exc)
             self._guild_commands_synced = True
+            _mark_login_success()
             log.info(
                 "Logged in as %s (%s) — %s guild command(s) synced",
                 self.user,
@@ -679,44 +778,6 @@ class BirthdayCog(commands.Cog):
     @check_birthdays.before_loop
     async def before_birthday_check(self) -> None:
         await self.bot.wait_until_ready()
-
-
-def _is_discord_ip_ban(exc: BaseException) -> bool:
-    """Cloudflare 1015 / HTTP 429 HTML page — shared host IPs get this a lot."""
-    status = getattr(exc, "status", None)
-    if status == 429:
-        return True
-    text = str(exc).lower()
-    return (
-        "error 1015" in text
-        or "error</span>\n        <span>1015" in text
-        or "you are being rate limited" in text
-        or "banned you temporarily" in text
-        or "access denied | discord.com" in text
-    )
-
-
-def _run_with_login_backoff(db: Database, token: str) -> None:
-    """Stay alive on Cloudflare 429 instead of crashing (host restart makes it worse)."""
-    delay = 300  # 5 minutes — they are already banned if we hit this
-    max_delay = 900  # 15 minutes
-    while True:
-        bot = DreamTeamBot(db)
-        try:
-            bot.run(token, log_handler=None)
-            return
-        except (discord.HTTPException, discord.LoginFailure) as exc:
-            if not _is_discord_ip_ban(exc):
-                raise
-            minutes = max(1, delay // 60)
-            log.warning(
-                "Discord Cloudflare blocked this host IP (HTTP 429 / error 1015). "
-                "Not a code crash — too many logins from bot-hosting's shared IP. "
-                "Waiting %s min, then retrying. Do not press Restart.",
-                minutes,
-            )
-            time.sleep(delay)
-            delay = min(delay * 2, max_delay)
 
 
 def main() -> None:

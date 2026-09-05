@@ -9,7 +9,22 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+def _first_env(*names: str) -> str:
+    """Bot-hosting panels use different token variable names."""
+    for name in names:
+        val = os.getenv(name, "").strip()
+        if val:
+            return val
+    return ""
+
+
+# Prefer DISCORD_TOKEN; also accept common host/egg aliases
+DISCORD_TOKEN = _first_env(
+    "DISCORD_TOKEN",
+    "TOKEN",
+    "BOT_TOKEN",
+    "DISCORD_BOT_TOKEN",
+)
 WELCOME_CHANNEL_ID = os.getenv("WELCOME_CHANNEL_ID", "").strip()
 DATABASE_PATH = DATA_DIR / "dream_team.db"
 

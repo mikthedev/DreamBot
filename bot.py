@@ -683,7 +683,8 @@ def main() -> None:
 
     if not config.DISCORD_TOKEN or config.DISCORD_TOKEN == "your_bot_token_here":
         raise SystemExit(
-            "Missing DISCORD_TOKEN. Copy .env.example to .env and paste your bot token."
+            "Missing bot token. Set DISCORD_TOKEN (or TOKEN / BOT_TOKEN) in the "
+            "host Variables / .env — without it the process exits with code 1."
         )
 
     try:
@@ -704,4 +705,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        # Bot-hosting console often swallows traces — force them to stderr
+        import traceback
+
+        traceback.print_exc()
+        raise SystemExit(1) from None

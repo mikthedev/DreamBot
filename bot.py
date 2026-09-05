@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import subprocess
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -680,6 +681,44 @@ class BirthdayCog(commands.Cog):
         await self.bot.wait_until_ready()
 
 
+def _is_discord_ip_ban(exc: BaseException) -> bool:
+    """Cloudflare 1015 / HTTP 429 HTML page — shared host IPs get this a lot."""
+    status = getattr(exc, "status", None)
+    if status == 429:
+        return True
+    text = str(exc).lower()
+    return (
+        "error 1015" in text
+        or "error</span>\n        <span>1015" in text
+        or "you are being rate limited" in text
+        or "banned you temporarily" in text
+        or "access denied | discord.com" in text
+    )
+
+
+def _run_with_login_backoff(db: Database, token: str) -> None:
+    """Stay alive on Cloudflare 429 instead of crashing (host restart makes it worse)."""
+    delay = 300  # 5 minutes — they are already banned if we hit this
+    max_delay = 900  # 15 minutes
+    while True:
+        bot = DreamTeamBot(db)
+        try:
+            bot.run(token, log_handler=None)
+            return
+        except (discord.HTTPException, discord.LoginFailure) as exc:
+            if not _is_discord_ip_ban(exc):
+                raise
+            minutes = max(1, delay // 60)
+            log.warning(
+                "Discord Cloudflare blocked this host IP (HTTP 429 / error 1015). "
+                "Not a code crash — too many logins from bot-hosting's shared IP. "
+                "Waiting %s min, then retrying. Do not press Restart.",
+                minutes,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, max_delay)
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -705,8 +744,7 @@ def main() -> None:
 
     db = Database(config.DATABASE_PATH)
     log.info("Database ready at %s", config.DATABASE_PATH.resolve())
-    bot = DreamTeamBot(db)
-    bot.run(config.DISCORD_TOKEN, log_handler=None)
+    _run_with_login_backoff(db, config.DISCORD_TOKEN)
 
 
 if __name__ == "__main__":

@@ -66,6 +66,7 @@ class DreamTeamBot(commands.Bot):
             chunk_guilds_at_startup=True,
         )
         self.db = db
+        self._guild_commands_synced = False
 
     async def setup_hook(self) -> None:
         # Persistent buttons (work after restarts)
@@ -119,28 +120,32 @@ class DreamTeamBot(commands.Bot):
 
     async def on_ready(self) -> None:
         # Sync to each guild only (instant). Clear globals so Discord doesn't show duplicates.
-        synced_total = 0
-        for guild in self.guilds:
+        # on_ready can fire again on reconnect — don't re-sync every time.
+        if not self._guild_commands_synced:
+            synced_total = 0
+            for guild in self.guilds:
+                try:
+                    self.tree.copy_global_to(guild=guild)
+                    synced = await self.tree.sync(guild=guild)
+                    synced_total += len(synced)
+                    log.info("Synced %s command(s) to guild %s", len(synced), guild.name)
+                except Exception as exc:
+                    log.warning("Guild sync failed for %s: %s", guild.name, exc)
             try:
-                self.tree.copy_global_to(guild=guild)
-                synced = await self.tree.sync(guild=guild)
-                synced_total += len(synced)
-                log.info("Synced %s command(s) to guild %s", len(synced), guild.name)
+                if self.application_id:
+                    await self.http.bulk_upsert_global_commands(self.application_id, [])
+                    log.info("Cleared global slash commands (avoids duplicates)")
             except Exception as exc:
-                log.warning("Guild sync failed for %s: %s", guild.name, exc)
-        try:
-            if self.application_id:
-                await self.http.bulk_upsert_global_commands(self.application_id, [])
-                log.info("Cleared global slash commands (avoids duplicates)")
-        except Exception as exc:
-            log.warning("Could not clear global commands: %s", exc)
-
-        log.info(
-            "Logged in as %s (%s) — %s guild command(s) synced",
-            self.user,
-            self.user.id,
-            synced_total,
-        )
+                log.warning("Could not clear global commands: %s", exc)
+            self._guild_commands_synced = True
+            log.info(
+                "Logged in as %s (%s) — %s guild command(s) synced",
+                self.user,
+                self.user.id,
+                synced_total,
+            )
+        else:
+            log.info("Logged in as %s (%s) — reconnect", self.user, self.user.id)
         try:
             from rich_presence import presence_idle, update_presence
 

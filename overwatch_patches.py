@@ -1680,25 +1680,27 @@ class OverwatchPatchCog(commands.Cog):
                 ephemeral=True,
             )
 
-    async def announce_if_new(self, guild: discord.Guild) -> tuple[bool, str]:
+    async def announce_if_new(
+        self, guild: discord.Guild
+    ) -> tuple[bool, str, bool]:
         channel_id = self.bot.db.get_ow_patch_channel(guild.id)
         if not channel_id:
-            return False, "No Overwatch patch channel set."
+            return False, "No Overwatch patch channel set.", False
         channel = guild.get_channel(channel_id)
         if not is_ow_destination(channel):
-            return False, "Patch channel missing (set a forum or text channel)."
+            return False, "Patch channel missing (set a forum or text channel).", False
 
         try:
             summary = await self.get_summary()
         except Exception as exc:
             log.warning("OW patch fetch failed: %s", exc)
-            return False, f"Fetch failed: {exc}"
+            return False, f"Fetch failed: {exc}", False
 
         if summary is None:
-            return False, "Could not parse patch notes page."
+            return False, "Could not parse patch notes page.", False
 
         if not has_hero_balance(summary):
-            return False, f"Skipped `{summary.fingerprint}` — no hero balance."
+            return False, f"Skipped `{summary.fingerprint}` — no hero balance.", False
 
         if self.bot.db.was_ow_patch_announced(guild.id, summary.fingerprint):
             # Re-edit the live post when Blizzard (or our parser) adds hero cards
@@ -1712,30 +1714,31 @@ class OverwatchPatchCog(commands.Cog):
             stale_tones = old is not None and _payload_tones_stale(old)
             stale_layout = _payload_needs_layout_refresh(old_raw)
             if same_lines and not stale_tones and not stale_layout:
-                return False, f"Already posted `{summary.fingerprint}`."
+                return False, f"Already posted `{summary.fingerprint}`.", False
             messages = await self.publish_live(channel, summary)
             if not messages:
-                return False, f"Skipped `{summary.fingerprint}` — no hero balance."
-            return True, f"Refreshed {summary.title}"
+                return False, f"Skipped `{summary.fingerprint}` — no hero balance.", False
+            return True, f"Refreshed {summary.title}", False
 
         messages = await self.publish_live(channel, summary)
         if not messages:
-            return False, f"Skipped `{summary.fingerprint}` — no hero balance."
-        return True, summary.title
+            return False, f"Skipped `{summary.fingerprint}` — no hero balance.", False
+        return True, summary.title, True
 
     async def _run_patch_check(self) -> bool:
-        any_posted = False
+        any_new = False
         for guild in self.bot.guilds:
             try:
-                posted, detail = await self.announce_if_new(guild)
+                posted, detail, is_new = await self.announce_if_new(guild)
                 if posted:
-                    any_posted = True
                     log.info("OW patch posted in %s: %s", guild.name, detail)
+                    if is_new:
+                        any_new = True
             except Exception as exc:
                 log.warning("OW patch check failed for %s: %s", guild.name, exc)
-        if any_posted:
+        if any_new:
             await self.refresh_app_hero_emojis()
-        return any_posted
+        return any_new
 
     @tasks.loop(hours=config.OW_PATCH_CHECK_HOURS)
     async def check_patches(self) -> None:
@@ -1744,6 +1747,3 @@ class OverwatchPatchCog(commands.Cog):
     @check_patches.before_loop
     async def before_check(self) -> None:
         await self.bot.wait_until_ready()
-        # Let the gateway settle before fetching Blizzard HTML + syncing icons
-        await asyncio.sleep(30)
-        await self._run_patch_check()

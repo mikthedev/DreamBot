@@ -584,12 +584,19 @@ class OverwatchTierCog(commands.Cog):
         self._ability_emoji_cache: dict[str, discord.Emoji] | None = None
         # (hero_token, ability_token) -> icon_url
         self._ability_icon_index: dict[tuple[str, str], str] = {}
+        self._ability_index_loaded = False
+        self._ability_scrape_lock = asyncio.Lock()
+        self._skip_startup_icon_sync = False
+        self._full_ability_catalog = False
+        self._catalog_fill_task: asyncio.Task | None = None
         self.check_tier_list.start()
         self.sync_hero_icons.start()
 
     def cog_unload(self) -> None:
         self.check_tier_list.cancel()
         self.sync_hero_icons.cancel()
+        if self._catalog_fill_task is not None:
+            self._catalog_fill_task.cancel()
         if self._session and not self._session.closed:
             self.bot.loop.create_task(self._session.close())
 
@@ -788,26 +795,72 @@ class OverwatchTierCog(commands.Cog):
             return "fail", 0, 0
 
     def ability_icon_url(self, hero: str, ability: str) -> str | None:
+        if not self._ability_icon_index:
+            self._load_ability_index_from_db()
         key = (_normalize_hero_token(hero), _normalize_hero_token(ability))
         return self._ability_icon_index.get(key)
 
-    async def refresh_ability_icon_index(self) -> dict[tuple[str, str], str]:
-        """Load ability icons from Blizzard hero pages into memory."""
-        session = await self._get_session()
-        heroes = await fetch_blizzard_hero_icons(session)
-        abilities = await fetch_blizzard_ability_icons(session, heroes)
+    def _load_ability_index_from_db(self) -> bool:
+        """Restore the (hero, ability) → CDN map from SQLite. No network."""
+        if self._ability_index_loaded and self._ability_icon_index:
+            return True
+        try:
+            rows = self.bot.db.list_ability_icons()
+        except Exception as exc:
+            log.warning("Could not load saved ability icons: %s", exc)
+            return False
         index: dict[tuple[str, str], str] = {}
+        for row in rows:
+            h = (row["hero_token"] or "").strip()
+            a = (row["ability_token"] or "").strip()
+            url = (row["icon_url"] or "").strip()
+            if h and a and url:
+                index[(h, a)] = url
+        if index:
+            self._ability_icon_index = index
+            self._ability_index_loaded = True
+            self._full_ability_catalog = len(index) >= 80
+            log.info("Loaded %s saved ability icon mappings", len(index))
+            return True
+        self._ability_index_loaded = True
+        return False
+
+    def _store_ability_scrape(self, abilities: list[BlizzardAbilityIcon]) -> None:
+        index: dict[tuple[str, str], str] = dict(self._ability_icon_index)
+        db_rows: list[tuple[str, str, str, str, str]] = []
         for ab in abilities:
             h = _normalize_hero_token(ab.hero_name)
             a = _normalize_hero_token(ab.ability)
-            if h and a and ab.icon_url:
-                index[(h, a)] = ab.icon_url
-                # also index by hero_id slug
-                hid = _normalize_hero_token(ab.hero_id)
-                if hid:
-                    index[(hid, a)] = ab.icon_url
+            url = (ab.icon_url or "").strip()
+            if not h or not a or not url:
+                continue
+            index[(h, a)] = url
+            db_rows.append((h, a, ab.hero_name, ab.ability, url))
+            hid = _normalize_hero_token(ab.hero_id)
+            if hid and hid != h:
+                index[(hid, a)] = url
+                db_rows.append((hid, a, ab.hero_name, ab.ability, url))
         self._ability_icon_index = index
-        return index
+        self._ability_index_loaded = True
+        self._full_ability_catalog = True
+        if db_rows:
+            try:
+                self.bot.db.upsert_ability_icons(db_rows)
+            except Exception as exc:
+                log.warning("Could not save ability icon catalog: %s", exc)
+
+    async def refresh_ability_icon_index(self) -> dict[tuple[str, str], str]:
+        """Scrape official hero pages — only for daily/new-hero sync, not startup."""
+        async with self._ability_scrape_lock:
+            session = await self._get_session()
+            heroes = await fetch_blizzard_hero_icons(session)
+            log.info(
+                "Scraping Blizzard ability icons for %s heroes (slow, once daily)",
+                len(heroes),
+            )
+            abilities = await fetch_blizzard_ability_icons(session, heroes)
+            self._store_ability_scrape(abilities)
+            return self._ability_icon_index
 
     async def ensure_ability_emojis(
         self,
@@ -819,13 +872,17 @@ class OverwatchTierCog(commands.Cog):
         Sync app emojis for (hero, ability, icon_url?) tuples.
         Missing URLs are filled from the Blizzard hero-page catalog.
         """
-        if refresh_roster or not self._ability_icon_index:
+        if not self._ability_icon_index:
+            self._load_ability_index_from_db()
+
+        if refresh_roster:
             try:
                 await self.refresh_ability_icon_index()
             except Exception as exc:
                 log.warning("Ability roster refresh failed: %s", exc)
 
         work: dict[str, tuple[str, str, str]] = {}
+        persist_rows: list[tuple[str, str, str, str, str]] = []
         for hero, ability, icon_url in pairs:
             ability = (ability or "").strip()
             hero = (hero or "").strip()
@@ -840,6 +897,16 @@ class OverwatchTierCog(commands.Cog):
                 continue
             name = emoji_name_for_ability(hero, ability)
             work[name] = (hero, ability, url)
+            htok = _normalize_hero_token(hero)
+            atok = _normalize_hero_token(ability)
+            if htok and atok and (htok, atok) not in self._ability_icon_index:
+                persist_rows.append((htok, atok, hero, ability, url))
+            self._ability_icon_index[(htok, atok)] = url
+        if persist_rows:
+            try:
+                self.bot.db.upsert_ability_icons(persist_rows)
+            except Exception as exc:
+                log.debug("Ability icon persist failed: %s", exc)
 
         existing = {
             e.name: e for e in await self.bot.fetch_application_emojis()
@@ -1058,6 +1125,13 @@ class OverwatchTierCog(commands.Cog):
     @tasks.loop(hours=24)
     async def sync_hero_icons(self) -> None:
         """Daily: pick up new heroes and refreshed Blizzard CDN portraits."""
+        if self._skip_startup_icon_sync:
+            self._skip_startup_icon_sync = False
+            log.info(
+                "Startup icon scrape skipped (%s saved ability mappings)",
+                len(self._ability_icon_index),
+            )
+            return
         try:
             result = await self.sync_blizzard_hero_emojis()
             log.info(
@@ -1070,5 +1144,44 @@ class OverwatchTierCog(commands.Cog):
     @sync_hero_icons.before_loop
     async def before_sync_hero_icons(self) -> None:
         await self.bot.wait_until_ready()
-        # Wait for login + first patch check to finish before touching images
+        if self._load_ability_index_from_db():
+            # Catalog already on disk — don't re-scrape 40+ hero pages at boot.
+            self._skip_startup_icon_sync = True
+            if not self._full_ability_catalog:
+                self._catalog_fill_task = asyncio.create_task(
+                    self._deferred_catalog_fill()
+                )
+            return
+        try:
+            existing = await self.bot.fetch_application_emojis()
+            ability_n = sum(1 for e in existing if e.name.startswith("owa_"))
+            hero_n = sum(1 for e in existing if e.name.startswith("ows_"))
+            if ability_n >= 10 or hero_n >= 10:
+                log.info(
+                    "App already has %s hero / %s ability emojis — skipping startup scrape",
+                    hero_n,
+                    ability_n,
+                )
+                self._emoji_cache = {e.name: e for e in existing}
+                self._skip_startup_icon_sync = True
+                return
+        except Exception as exc:
+            log.debug("Could not inspect app emojis at startup: %s", exc)
+        # First install only: wait so login + commands aren't fighting the scrape
         await asyncio.sleep(180)
+
+    async def _deferred_catalog_fill(self) -> None:
+        """Save ability URLs to SQLite after boot, without blocking startup."""
+        try:
+            await asyncio.sleep(180)
+            if self._full_ability_catalog:
+                return
+            await self.refresh_ability_icon_index()
+            log.info(
+                "Background ability catalog fill done (%s mappings)",
+                len(self._ability_icon_index),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("Background ability catalog fill failed: %s", exc)

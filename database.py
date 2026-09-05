@@ -142,6 +142,19 @@ class Database:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS ow_ability_icons (
+                    hero_token TEXT NOT NULL,
+                    ability_token TEXT NOT NULL,
+                    hero_name TEXT NOT NULL DEFAULT '',
+                    ability TEXT NOT NULL DEFAULT '',
+                    icon_url TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (hero_token, ability_token)
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS anniversary_announcements (
                     guild_id INTEGER NOT NULL,
                     year INTEGER NOT NULL,
@@ -1456,6 +1469,39 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (emoji_name, icon_url, sha256),
+            )
+
+    def list_ability_icons(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT hero_token, ability_token, hero_name, ability, icon_url
+                    FROM ow_ability_icons
+                    """
+                ).fetchall()
+            )
+
+    def upsert_ability_icons(
+        self, rows: list[tuple[str, str, str, str, str]]
+    ) -> None:
+        """rows: (hero_token, ability_token, hero_name, ability, icon_url)."""
+        if not rows:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO ow_ability_icons (
+                    hero_token, ability_token, hero_name, ability, icon_url, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(hero_token, ability_token) DO UPDATE SET
+                    hero_name = excluded.hero_name,
+                    ability = excluded.ability,
+                    icon_url = excluded.icon_url,
+                    updated_at = excluded.updated_at
+                """,
+                rows,
             )
 
     # --- Play together -------------------------------------------------

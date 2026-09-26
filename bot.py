@@ -110,12 +110,15 @@ def _honor_login_gates(*, skip_saved_cooldown: bool = False) -> None:
 
 
 def _discord_connector(*, ipv4_only: bool) -> aiohttp.TCPConnector:
-    """bot-hosting's shared IPv6 (2a01:4f9:…) is what Cloudflare 1015 bans."""
+    """bot-hosting's shared IPv6 (2a01:4f9:…) is what Cloudflare 1015 bans.
+
+    aiohttp 3.14+ binds connectors to the running loop — never construct this
+    from ``Bot.__init__`` (that runs before ``bot.run()`` starts asyncio).
+    """
     family = socket.AF_INET if ipv4_only else 0
     return aiohttp.TCPConnector(
         family=family,
         ttl_dns_cache=300,
-        enable_cleanup_closed=True,
         limit=50,
     )
 
@@ -192,10 +195,16 @@ class DreamTeamBot(commands.Bot):
             intents=intents,
             max_messages=200,
             chunk_guilds_at_startup=True,
-            connector=_discord_connector(ipv4_only=ipv4_only),
         )
         self.db = db
+        self._ipv4_only = ipv4_only
         self._guild_commands_synced = False
+
+    async def login(self, token: str) -> None:
+        # HTTP session is created here; attach IPv4 connector on this running loop.
+        if self.http.connector is None:
+            self.http.connector = _discord_connector(ipv4_only=self._ipv4_only)
+        await super().login(token)
 
     async def setup_hook(self) -> None:
         # Persistent buttons (work after restarts)

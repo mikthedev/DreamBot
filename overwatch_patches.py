@@ -1614,9 +1614,16 @@ class OverwatchPatchCog(commands.Cog):
         self,
         channel: discord.TextChannel | discord.ForumChannel,
         summary: PatchSummary,
+        *,
+        force: bool = False,
     ) -> list[discord.Message]:
-        """Overwrite the live patch post (forum thread or text messages)."""
-        if not has_hero_balance(summary):
+        """Overwrite the live patch post (forum thread or text messages).
+
+        Auto-poll skips drops with no retail hero balance. Manual **Post patch**
+        passes ``force=True`` so a deleted or empty post can still be published.
+        If the stored forum thread is gone, a new post is created.
+        """
+        if not force and not has_hero_balance(summary):
             log.info(
                 "Skipping empty OW patch %s — no retail hero balance",
                 summary.fingerprint,

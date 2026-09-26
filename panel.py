@@ -1324,24 +1324,28 @@ class AdminHubView(discord.ui.View):
                     "Could not parse the patch notes page.", ephemeral=True
                 )
                 return
-            if not has_hero_balance(summary):
+            messages = await cog.publish_live(channel, summary, force=True)
+            if not messages:
                 await interaction.followup.send(
-                    "Latest notes have no retail hero balance — nothing posted.",
+                    "Could not create or update the live patch post.",
                     ephemeral=True,
                 )
                 return
-            await cog.publish_live(channel, summary)
             kind = (
-                "forum post (edited in place)"
+                "forum post (edited in place, or recreated if it was deleted)"
                 if isinstance(channel, discord.ForumChannel)
                 else "channel"
             )
+            extra = ""
+            if not has_hero_balance(summary):
+                extra = "\n_Latest notes have no retail hero balance; posted anyway._"
             embed = hub_overwatch_embed(interaction.guild, self.bot)
             embed.add_field(
                 name="Posted",
                 value=(
                     f"**{summary.title}** → {channel.mention}\n"
                     f"_(Live {kind}; reactions allowed, no comments.)_"
+                    f"{extra}"
                 ),
                 inline=False,
             )

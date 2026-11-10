@@ -24,7 +24,7 @@ Once a year, Dream Team’s founding date (**28.06.2017**) gets its own annivers
 
 ## Music
 
-SoundCloud + Spotify in voice: `/play`, then use the **Stop / Queue / Skip** buttons on the now-playing card (`/pause`, `/resume`, `/leave` still exist). Paste a SoundCloud link, a Spotify song/album/playlist link, or search by name (SoundCloud). Spotify can’t stream DRM audio directly — the bot matches the song on SoundCloud and keeps the Spotify title/art in the card. YouTube is not supported.
+SoundCloud + Spotify in voice: `/play`, then use the **Stop / Queue / Skip** buttons on the now-playing card (`/pause`, `/resume`, `/leave` still exist). Paste a SoundCloud link, a Spotify song/album/playlist link, or search by name (SoundCloud). Spotify can’t stream DRM audio — the bot keeps Spotify title/art/link, then matches the real track on **YouTube first** (duration + official upload scoring), with SoundCloud only as fallback. Pasting a raw YouTube link still isn’t supported.
 
 Needs **discord.py 2.7+** with `davey` (Discord’s DAVE voice encryption). On 2.6 the bot can join and show “Now playing” while everyone hears silence. Smoke-test with `python test_voice_play.py` (join a voice channel first).
 

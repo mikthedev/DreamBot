@@ -48,7 +48,25 @@ _SPOTIFY_KIND_RE = re.compile(
 )
 _SPOTIFY_SHORT_HOSTS = {"spotify.link", "spotify.app.link", "spoti.fi"}
 _SPOTIFY_PLAYLIST_CAP = 50
-_SC_SEARCH_CANDIDATES = 5
+_BRIDGE_SEARCH_CANDIDATES = 8
+_BRIDGE_NOISE = (
+    "remix",
+    "cover",
+    "karaoke",
+    "nightcore",
+    "sped up",
+    "speed up",
+    "slowed",
+    "reverb",
+    "8d audio",
+    "mashup",
+    "bootleg",
+    "live at",
+    "live session",
+    "acoustic version",
+    "piano version",
+    "instrumental",
+)
 
 
 def _yt_dlp():
@@ -459,101 +477,248 @@ async def _resolve_spotify_songs(query: str) -> list[_SpotifySong]:
     return _spotify_songs_from_entity(entity)
 
 
-def _sc_search_query(title: str, artist: str | None) -> str:
-    parts = [p for p in (artist, title) if p and str(p).strip()]
-    return " ".join(parts).strip() or title
+def _match_query(title: str, artist: str | None) -> str:
+    title = (title or "").strip()
+    artist = (artist or "").strip()
+    if artist and title:
+        return f"{artist} - {title}"
+    return title or artist
 
 
-def _candidate_score(entry: dict, search: str) -> tuple:
-    """Prefer closer title matches; deprioritize obvious remix/cover noise."""
-    title = (entry.get("title") or "").lower()
-    search_l = search.lower()
-    tokens = [t for t in re.split(r"\s+", search_l) if len(t) > 1]
-    hit = sum(1 for t in tokens if t in title)
-    noise = 0
-    for word in ("remix", "cover", "karaoke", "nightcore", "sped up", "slowed"):
-        if word in title and word not in search_l:
-            noise += 1
-    return (-hit, noise)
+def _encode_spotbridge(song: "_SpotifySong") -> str:
+    # Keep Spotify identity for lazy playlist resolves.
+    artist = (song.artist or "").replace("|", "/")
+    title = (song.title or "").replace("|", "/")
+    return (
+        f"spotbridge:{song.track_id}|{song.duration or ''}|{artist}|{title}"
+    )
 
 
-def _soundcloud_search_candidates(search: str) -> list[str]:
-    """Return SoundCloud track URLs for a text search (best-effort)."""
+def _decode_spotbridge(query: str) -> "_SpotifySong":
+    raw = query.removeprefix("spotbridge:")
+    parts = raw.split("|", 3)
+    if len(parts) < 4:
+        raise ValueError("Bad Spotify bridge payload.")
+    track_id, dur_s, artist, title = parts
+    duration = int(dur_s) if dur_s.isdigit() else None
+    return _SpotifySong(
+        title=title,
+        artist=artist or None,
+        track_id=track_id,
+        duration=duration,
+    )
+
+
+def _bridge_candidate_score(
+    entry: dict,
+    *,
+    title: str,
+    artist: str | None,
+    duration: int | None,
+) -> int:
+    """Higher is better — prefer official uploads close to Spotify duration."""
+    etitle = (entry.get("title") or "").lower()
+    echan = (
+        entry.get("uploader")
+        or entry.get("channel")
+        or entry.get("creator")
+        or ""
+    ).lower()
+    want_title = (title or "").lower()
+    want_artist = (artist or "").lower()
+
+    score = 0
+    if want_title and want_title in etitle:
+        score += 60
+    for tok in re.split(r"\s+", want_title):
+        if len(tok) > 2 and tok in etitle:
+            score += 4
+    if want_artist and want_artist in etitle:
+        score += 25
+    if want_artist and want_artist in echan:
+        score += 35
+    for badge in ("topic", "vevo", "official", "records", "music"):
+        if badge in echan:
+            score += 12
+    if "official audio" in etitle or "official video" in etitle:
+        score += 20
+
+    for word in _BRIDGE_NOISE:
+        if word in etitle and word not in want_title:
+            score -= 55
+
+    edur = entry.get("duration")
+    try:
+        edur_i = int(edur) if edur is not None else None
+    except (TypeError, ValueError):
+        edur_i = None
+    if duration and edur_i:
+        diff = abs(edur_i - int(duration))
+        if diff <= 2:
+            score += 40
+        elif diff <= 6:
+            score += 22
+        elif diff <= 12:
+            score += 8
+        elif diff > 40:
+            score -= 35
+    return score
+
+
+def _search_flat_entries(query: str) -> list[dict]:
     yt_dlp = _yt_dlp()
     opts = _ytdl_opts(
         skip_download=True,
         extract_flat="in_playlist",
         noplaylist=False,
         ignoreerrors=True,
-        playlistend=_SC_SEARCH_CANDIDATES,
+        playlistend=_BRIDGE_SEARCH_CANDIDATES,
+        default_search=None,
     )
-    query = f"scsearch{_SC_SEARCH_CANDIDATES}:{search}"
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(query, download=False)
     if not info:
         return []
     entries = info.get("entries") if isinstance(info, dict) else None
     if not entries:
-        url = (
-            info.get("webpage_url") or info.get("url")
-            if isinstance(info, dict)
-            else None
-        )
-        return [url] if isinstance(url, str) and url.startswith("http") else []
+        return [info] if isinstance(info, dict) else []
+    return [e for e in entries if isinstance(e, dict)]
 
-    ranked = sorted(
-        (e for e in entries if isinstance(e, dict)),
-        key=lambda e: _candidate_score(e, search),
+
+def _entry_url(entry: dict) -> str | None:
+    for key in ("webpage_url", "url", "original_url"):
+        val = entry.get(key)
+        if isinstance(val, str) and val.startswith("http"):
+            return val
+    entry_id = entry.get("id")
+    ie = (entry.get("ie_key") or entry.get("extractor_key") or "").lower()
+    if entry_id and "youtube" in ie:
+        return f"https://www.youtube.com/watch?v={entry_id}"
+    return None
+
+
+def _extract_bridge_info(url: str) -> dict:
+    """Extract playable info; YouTube gets mobile clients to avoid JS challenges."""
+    extra: dict[str, Any] = {}
+    if "youtube.com" in url or "youtu.be" in url:
+        extra["extractor_args"] = {
+            "youtube": {"player_client": ["android", "ios", "web"]}
+        }
+    return _extract_info(url, for_stream=True) if not extra else _unwrap_and_check(
+        url, **extra
     )
-    urls: list[str] = []
-    for entry in ranked:
-        for key in ("webpage_url", "url", "original_url"):
-            val = entry.get(key)
-            if isinstance(val, str) and val.startswith("http"):
-                urls.append(val)
-                break
-    return urls
 
 
-def _soundcloud_bridge(search: str) -> tuple[str, dict]:
-    """Find a playable SoundCloud stream for a title/artist search string."""
-    search = (search or "").strip()
-    if not search:
-        raise ValueError("Empty SoundCloud search.")
-    candidates = _soundcloud_search_candidates(search)
-    last_error: Exception | None = None
-    for candidate in candidates:
+def _unwrap_and_check(query: str, **extra: Any) -> dict:
+    yt_dlp = _yt_dlp()
+    opts = _ytdl_opts(skip_download=True, **extra)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = _unwrap_info(ydl.extract_info(query, download=False))
+    _pick_stream_url(info)
+    return info
+
+
+def _bridge_from_platform(
+    *,
+    platform: str,
+    title: str,
+    artist: str | None,
+    duration: int | None,
+) -> tuple[str, dict]:
+    """Search one platform and pick the best playable match."""
+    base = _match_query(title, artist)
+    if platform == "youtube":
+        searches = [
+            f"ytsearch{_BRIDGE_SEARCH_CANDIDATES}:{base}",
+            f"ytsearch{_BRIDGE_SEARCH_CANDIDATES}:{base} official audio",
+        ]
+    else:
+        searches = [
+            f"scsearch{_BRIDGE_SEARCH_CANDIDATES}:{base}",
+        ]
+
+    ranked: list[tuple[int, str, dict]] = []
+    for search in searches:
         try:
-            info = _extract_info(candidate, for_stream=True)
-            _pick_stream_url(info)
+            entries = _search_flat_entries(search)
+        except Exception as exc:
+            log.info("%s search failed for %r: %r", platform, search, exc)
+            continue
+        for entry in entries:
+            url = _entry_url(entry)
+            if not url:
+                continue
+            score = _bridge_candidate_score(
+                entry, title=title, artist=artist, duration=duration
+            )
+            ranked.append((score, url, entry))
+
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    last_error: Exception | None = None
+    seen: set[str] = set()
+    for score, url, flat in ranked:
+        if url in seen or score < -20:
+            continue
+        seen.add(url)
+        try:
+            if platform == "youtube":
+                info = _extract_bridge_info(url)
+            else:
+                info = _extract_info(url, for_stream=True)
+                _pick_stream_url(info)
+            # Re-check with full metadata (duration is often missing in flat results).
+            full_score = _bridge_candidate_score(
+                info, title=title, artist=artist, duration=duration
+            )
+            if full_score < 0:
+                log.info(
+                    "Skipping weak %s match score=%s title=%r",
+                    platform,
+                    full_score,
+                    info.get("title"),
+                )
+                continue
             webpage = (
                 info.get("webpage_url")
                 or info.get("original_url")
-                or candidate
+                or url
+            )
+            log.info(
+                "Spotify bridge via %s score=%s → %s",
+                platform,
+                full_score,
+                info.get("title"),
             )
             return str(webpage), info
-        except Exception as exc:  # noqa: BLE001 — try next SoundCloud hit
+        except Exception as exc:  # noqa: BLE001
             last_error = exc
-            log.info(
-                "SoundCloud candidate failed for '%s': %s (%r)",
-                search,
-                candidate,
-                exc,
-            )
+            log.info("%s candidate failed (%s): %r", platform, url[:80], exc)
             continue
 
-    # Last resort: let yt-dlp pick scsearch1 itself
-    try:
-        info = _extract_info(search, for_stream=True)
-        webpage = info.get("webpage_url") or info.get("original_url") or search
-        _pick_stream_url(info)
-        return str(webpage), info
-    except Exception as exc:
-        last_error = exc
-
     detail = f" ({last_error})" if last_error else ""
+    raise ValueError(f"No good {platform} match for “{base}”.{detail}")
+
+
+def _bridge_spotify_song(song: "_SpotifySong") -> tuple[str, dict]:
+    """
+    Spotify can't stream DRM audio. Match the Spotify track on YouTube first
+    (much more accurate), then fall back to SoundCloud.
+    """
+    errors: list[str] = []
+    for platform in ("youtube", "soundcloud"):
+        try:
+            return _bridge_from_platform(
+                platform=platform,
+                title=song.title,
+                artist=song.artist,
+                duration=song.duration,
+            )
+        except Exception as exc:
+            errors.append(f"{platform}: {exc}")
+            log.info("Spotify→%s bridge missed for %s: %r", platform, song.title, exc)
     raise ValueError(
-        f"Couldn’t find a playable SoundCloud match for “{search}”.{detail}"
+        "Couldn’t match that Spotify track on YouTube or SoundCloud. "
+        + " | ".join(errors)
     )
 
 
@@ -643,15 +808,14 @@ async def _tracks_from_spotify(
 
     # Resolve the first song now so /play fails fast if nothing is playable.
     first = songs[0]
-    first_search = _sc_search_query(first.title, first.artist)
-    sc_url, sc_info = await asyncio.to_thread(_soundcloud_bridge, first_search)
+    media_url, media_info = await asyncio.to_thread(_bridge_spotify_song, first)
     tracks.append(
         _track_from_soundcloud_info(
-            sc_info,
+            media_info,
             requester=requester,
             source="spotify",
             webpage_url=f"https://open.spotify.com/track/{first.track_id}",
-            query=sc_url,
+            query=media_url,
             title=first.title,
             uploader=first.artist,
             thumbnail=first.thumbnail,
@@ -667,7 +831,7 @@ async def _tracks_from_spotify(
                 webpage_url=f"https://open.spotify.com/track/{song.track_id}",
                 requester=requester,
                 source="spotify",
-                query=f"scbridge:{_sc_search_query(song.title, song.artist)}",
+                query=_encode_spotbridge(song),
                 thumbnail=song.thumbnail,
                 uploader=song.artist,
                 duration=song.duration,
@@ -714,10 +878,23 @@ async def resolve_track(query: str, requester: discord.Member) -> Track:
 async def resolve_stream_url(track: Track) -> str:
     def extract_url() -> tuple[str, str | None]:
         query = track.query
-        if query.startswith("scbridge:"):
-            search = query.removeprefix("scbridge:")
-            sc_url, info = _soundcloud_bridge(search)
-            return _pick_stream_url(info), sc_url
+        if query.startswith("spotbridge:") or query.startswith("scbridge:"):
+            if query.startswith("spotbridge:"):
+                song = _decode_spotbridge(query)
+                media_url, info = _bridge_spotify_song(song)
+            else:
+                # Legacy playlist items from older builds.
+                song = _SpotifySong(
+                    title=query.removeprefix("scbridge:"),
+                    artist=None,
+                    track_id="unknown",
+                )
+                media_url, info = _bridge_spotify_song(song)
+            return _pick_stream_url(info), media_url
+
+        if "youtube.com" in query or "youtu.be" in query:
+            info = _extract_bridge_info(query)
+            return _pick_stream_url(info), None
 
         info = _extract_info(query, for_stream=True)
         return _pick_stream_url(info), None
@@ -750,6 +927,10 @@ def _download_audio_file(query: str) -> Path:
         # Keep container ffmpeg can decode without post-processing plugins.
         format="bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
     )
+    if "youtube.com" in query or "youtu.be" in query:
+        opts["extractor_args"] = {
+            "youtube": {"player_client": ["android", "ios", "web"]}
+        }
     # Drop extract flags that skip writing a file.
     opts.pop("skip_download", None)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -775,18 +956,23 @@ def _download_audio_file(query: str) -> Path:
 
 
 async def prepare_playable_path(track: Track) -> Path:
-    """Resolve SoundCloud (incl. Spotify bridge) and download to a local file."""
+    """Resolve Spotify bridge (YouTube→SoundCloud) and download a local file."""
 
     def work() -> Path:
         query = track.query
-        if query.startswith("scbridge:"):
-            search = query.removeprefix("scbridge:")
-            sc_url, _info = _soundcloud_bridge(search)
-            track.query = sc_url
-            query = sc_url
-        elif query.startswith("http") and "soundcloud" not in query.lower():
-            # Fresh stream URL — prefer re-resolving from webpage when we have one.
-            query = track.query
+        if query.startswith("spotbridge:") or query.startswith("scbridge:"):
+            if query.startswith("spotbridge:"):
+                song = _decode_spotbridge(query)
+            else:
+                song = _SpotifySong(
+                    title=query.removeprefix("scbridge:"),
+                    artist=track.uploader,
+                    track_id="unknown",
+                    duration=track.duration,
+                )
+            media_url, _info = _bridge_spotify_song(song)
+            track.query = media_url
+            query = media_url
         return _download_audio_file(query)
 
     return await asyncio.to_thread(work)

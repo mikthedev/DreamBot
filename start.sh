@@ -117,6 +117,12 @@ echo "[DreamBot] Ensuring discord.py[voice]>=2.7 + davey>=0.2 (DAVE)"
   || "$PY_BIN" -m pip install -q -U 'discord.py[voice]>=2.7.0' 'davey>=0.2.0' 'PyNaCl>=1.5.0' \
   || echo "[DreamBot] discord.py upgrade skipped"
 
+# YouTube SABR experiment 403s on yt-dlp < 2026.8.19 — force the fixed release.
+echo "[DreamBot] Ensuring yt-dlp>=2026.8.19 (YouTube SABR/403 fix)"
+"$PY_BIN" -m pip install --user -q -U 'yt-dlp[default]>=2026.8.19' \
+  || "$PY_BIN" -m pip install -q -U 'yt-dlp[default]>=2026.8.19' \
+  || echo "[DreamBot] yt-dlp upgrade skipped"
+
 # Optional voice-recv (DAVE decrypt). Must NOT live in requirements.txt — the host
 # egg runs pip install -r requirements.txt before start.sh, and a failed git+https
 # fetch (Cloudflare/GitHub) aborts the whole server with exit code 1.

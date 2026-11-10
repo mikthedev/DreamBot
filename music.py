@@ -599,24 +599,15 @@ def _entry_url(entry: dict) -> str | None:
     return None
 
 
-def _youtube_extractor_args() -> dict[str, Any]:
-    # Prefer TV / web_safari clients — android/ios often hit SABR-only URLs (403).
-    return {
-        "youtube": {
-            "player_client": ["tv", "web_safari", "mweb", "android", "ios", "web"]
-        }
-    }
-
-
 def _is_youtube_url(url: str) -> bool:
     lower = (url or "").lower()
     return "youtube.com" in lower or "youtu.be" in lower or "music.youtube.com" in lower
 
 
 def _extract_bridge_info(url: str) -> dict:
-    """Extract playable info; YouTube gets clients that still return direct URLs."""
+    """Extract playable info. Leave player_client to yt-dlp defaults (SABR-aware)."""
     if _is_youtube_url(url):
-        return _unwrap_and_check(url, extractor_args=_youtube_extractor_args())
+        return _unwrap_and_check(url)
     return _extract_info(url, for_stream=True)
 
 
@@ -710,23 +701,49 @@ def _bridge_from_platform(
     raise ValueError(f"No good {platform} match for “{base}”.{detail}")
 
 
+def _youtube_download_works(url: str) -> bool:
+    """True only if yt-dlp can actually fetch bytes (metadata alone often lies)."""
+    try:
+        _download_audio_file(url)
+        return True
+    except Exception as exc:
+        log.warning("YouTube match not downloadable (%s): %r", url[:80], exc)
+        return False
+
+
 def _bridge_spotify_song(song: "_SpotifySong") -> tuple[str, dict]:
     """
-    Spotify can't stream DRM audio. Match the Spotify track on YouTube first
-    (much more accurate), then fall back to SoundCloud.
+    Spotify can't stream DRM audio. Prefer a YouTube match when it is actually
+    downloadable; otherwise SoundCloud (bot-host IPs often 403 YouTube).
     """
     errors: list[str] = []
-    for platform in ("youtube", "soundcloud"):
-        try:
-            return _bridge_from_platform(
-                platform=platform,
-                title=song.title,
-                artist=song.artist,
-                duration=song.duration,
-            )
-        except Exception as exc:
-            errors.append(f"{platform}: {exc}")
-            log.info("Spotify→%s bridge missed for %s: %r", platform, song.title, exc)
+
+    try:
+        yt_url, yt_info = _bridge_from_platform(
+            platform="youtube",
+            title=song.title,
+            artist=song.artist,
+            duration=song.duration,
+        )
+        # Metadata can succeed while the real media URL 403s (SABR / bot-check).
+        if _youtube_download_works(yt_url):
+            return yt_url, yt_info
+        errors.append("youtube: matched but download/stream blocked (403/bot-check)")
+    except Exception as exc:
+        errors.append(f"youtube: {exc}")
+        log.info("Spotify→youtube bridge missed for %s: %r", song.title, exc)
+
+    try:
+        return _bridge_from_platform(
+            platform="soundcloud",
+            title=song.title,
+            artist=song.artist,
+            duration=song.duration,
+        )
+    except Exception as exc:
+        errors.append(f"soundcloud: {exc}")
+        log.info("Spotify→soundcloud bridge missed for %s: %r", song.title, exc)
+
     raise ValueError(
         "Couldn’t match that Spotify track on YouTube or SoundCloud. "
         + " | ".join(errors)
@@ -984,8 +1001,6 @@ def _download_audio_file(query: str) -> Path:
         # Keep container ffmpeg can decode without post-processing plugins.
         format="bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
     )
-    if _is_youtube_url(query):
-        opts["extractor_args"] = _youtube_extractor_args()
     # Drop extract flags that skip writing a file.
     opts.pop("skip_download", None)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1614,8 +1629,29 @@ class MusicCog(commands.Cog):
         self._last_idle_rotate_at = time.time()
         self.idle_watchdog.start()
         voice_ok, voice_detail = _voice_stack_ok()
+        try:
+            import yt_dlp as _ydl_mod
+
+            ytdlp_ver = getattr(_ydl_mod, "version", None)
+            ytdlp_ver = getattr(ytdlp_ver, "__version__", None) or "?"
+        except Exception:
+            ytdlp_ver = "missing"
         if voice_ok:
-            log.info("Music cog loaded (%s, SoundCloud + Spotify)", voice_detail)
+            log.info(
+                "Music cog loaded (%s, yt-dlp=%s, SoundCloud + Spotify)",
+                voice_detail,
+                ytdlp_ver,
+            )
+            try:
+                ver_tuple = tuple(int(p) for p in str(ytdlp_ver).split(".")[:3])
+            except ValueError:
+                ver_tuple = ()
+            if ver_tuple and ver_tuple < (2026, 8, 19):
+                log.error(
+                    "yt-dlp %s is too old for YouTube SABR fixes — "
+                    "need >=2026.8.19 (start.sh should upgrade on boot)",
+                    ytdlp_ver,
+                )
         else:
             log.error(
                 "Music cog loaded but voice stack is incomplete — "

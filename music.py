@@ -828,15 +828,98 @@ async def _wait_for_dave(voice: discord.VoiceClient, *, timeout: float = 12.0) -
     )
 
 
-class TrackLinkView(discord.ui.View):
-    def __init__(self, url: str, platform: str) -> None:
+class MusicControlsView(discord.ui.View):
+    """Persistent Stop / Queue / Skip controls on now-playing cards."""
+
+    def __init__(self) -> None:
         super().__init__(timeout=None)
-        self.add_item(
-            discord.ui.Button(
-                label=f"Open on {platform}",
-                style=discord.ButtonStyle.link,
-                url=url,
+
+    @staticmethod
+    def _cog(interaction: discord.Interaction) -> "MusicCog | None":
+        return interaction.client.get_cog("MusicCog")  # type: ignore[return-value]
+
+    @discord.ui.button(
+        label="Stop",
+        style=discord.ButtonStyle.danger,
+        custom_id="dream_team:music:stop",
+    )
+    async def stop_button(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Use this in a server.", ephemeral=True
             )
+            return
+        cog = self._cog(interaction)
+        if cog is None:
+            await interaction.response.send_message(
+                "Music isn’t loaded.", ephemeral=True
+            )
+            return
+        await cog.get_player(interaction.guild.id).stop()
+        await interaction.response.send_message(
+            "Stopped and left the voice channel.", ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Queue",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dream_team:music:queue",
+    )
+    async def queue_button(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Use this in a server.", ephemeral=True
+            )
+            return
+        cog = self._cog(interaction)
+        if cog is None:
+            await interaction.response.send_message(
+                "Music isn’t loaded.", ephemeral=True
+            )
+            return
+        player = cog.get_player(interaction.guild.id)
+        if not player.current and not player.queue:
+            await interaction.response.send_message(
+                "Queue is empty.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            embed=queue_embed(player), ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Skip",
+        style=discord.ButtonStyle.primary,
+        custom_id="dream_team:music:skip",
+    )
+    async def skip_button(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Use this in a server.", ephemeral=True
+            )
+            return
+        cog = self._cog(interaction)
+        if cog is None:
+            await interaction.response.send_message(
+                "Music isn’t loaded.", ephemeral=True
+            )
+            return
+        player = cog.get_player(interaction.guild.id)
+        skipped = await player.skip()
+        if skipped is None and not player.queue:
+            await interaction.response.send_message(
+                "Nothing to skip.", ephemeral=True
+            )
+            return
+        title = skipped.title if skipped else "current track"
+        await interaction.response.send_message(
+            f"Skipped **{title}**.", ephemeral=True
         )
 
 
@@ -909,7 +992,7 @@ def queue_embed(player: "GuildPlayer") -> discord.Embed:
             lines.append(f"*+{len(player.queue) - 10} more*")
         embed.add_field(name="Up next", value="\n".join(lines), inline=False)
     elif not player.current:
-        embed.description = "Empty. Use `/play` to add something."
+        embed.description = "Empty. `/play` something to fill it."
 
     return embed
 
@@ -1352,11 +1435,7 @@ class MusicCog(commands.Cog):
                 )
 
         try:
-            view = None
-            if track is not None:
-                view = TrackLinkView(
-                    track.webpage_url, _source_label(track.source)
-                )
+            view = MusicControlsView() if track is not None else None
 
             if message_id:
                 try:
@@ -1469,39 +1548,7 @@ class MusicCog(commands.Cog):
                 + "*"
             )
 
-        await interaction.followup.send(
-            embed=embed,
-            view=TrackLinkView(track.webpage_url, _source_label(track.source)),
-        )
-
-    @app_commands.command(name="skip", description="Skip the current track")
-    async def skip(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "Use this in a server.", ephemeral=True
-            )
-            return
-        player = self.get_player(interaction.guild_id)
-        skipped = await player.skip()
-        if skipped is None and not player.queue:
-            await interaction.response.send_message(
-                "Nothing to skip.", ephemeral=True
-            )
-            return
-        title = skipped.title if skipped else "current track"
-        await interaction.response.send_message(f"Skipped **{title}**.")
-
-    @app_commands.command(name="stop", description="Stop music and leave voice")
-    async def stop(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "Use this in a server.", ephemeral=True
-            )
-            return
-        await self.get_player(interaction.guild_id).stop()
-        await interaction.response.send_message(
-            "Stopped and left the voice channel."
-        )
+        await interaction.followup.send(embed=embed, view=MusicControlsView())
 
     @app_commands.command(name="pause", description="Pause the current track")
     async def pause(self, interaction: discord.Interaction) -> None:
@@ -1540,42 +1587,6 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message(
                 "Nothing is paused.", ephemeral=True
             )
-
-    @app_commands.command(name="queue", description="Show the music queue")
-    async def queue(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "Use this in a server.", ephemeral=True
-            )
-            return
-        player = self.get_player(interaction.guild_id)
-        if not player.current and not player.queue:
-            await interaction.response.send_message(
-                "Queue is empty.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(embed=queue_embed(player))
-
-    @app_commands.command(
-        name="nowplaying", description="Show the track currently playing"
-    )
-    async def nowplaying(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "Use this in a server.", ephemeral=True
-            )
-            return
-        track = self.get_player(interaction.guild_id).current
-        if track is None:
-            await interaction.response.send_message(
-                "Nothing is playing.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            embed=track_embed(track, heading="Now playing"),
-            view=TrackLinkView(track.webpage_url, _source_label(track.source)),
-        )
 
     @app_commands.command(name="leave", description="Disconnect the bot from voice")
     async def leave(self, interaction: discord.Interaction) -> None:

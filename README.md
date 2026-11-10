@@ -24,7 +24,7 @@ Once a year, Dream Team’s founding date (**28.06.2017**) gets its own annivers
 
 ## Music
 
-SoundCloud + Spotify in voice: `/play`, `/skip`, `/pause`, `/queue`, `/nowplaying`, `/stop`. Paste a SoundCloud link, a Spotify song/album/playlist link, or search by name (SoundCloud). Spotify can’t stream DRM audio directly — the bot matches the song on SoundCloud and keeps the Spotify title/art/link in the now-playing card. YouTube is not supported.
+SoundCloud + Spotify in voice: `/play`, then use the **Stop / Queue / Skip** buttons on the now-playing card (`/pause`, `/resume`, `/leave` still exist). Paste a SoundCloud link, a Spotify song/album/playlist link, or search by name (SoundCloud). Spotify can’t stream DRM audio directly — the bot matches the song on SoundCloud and keeps the Spotify title/art in the card. YouTube is not supported.
 
 Needs **discord.py 2.7+** with `davey` (Discord’s DAVE voice encryption). On 2.6 the bot can join and show “Now playing” while everyone hears silence. Smoke-test with `python test_voice_play.py` (join a voice channel first).
 
@@ -99,7 +99,7 @@ Auto suggestions, auto events, and personal invites each have an on/off toggle. 
 | `/join` / `/disconnect` | Voice AI in / out |
 | `/setbirthday` · `/mybirthday` · `/clearbirthday` | Birthday self-service |
 | `/hero` | One hero’s balance changes across recent patches |
-| `/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave` | Music (SoundCloud + Spotify) |
+| `/play` · `/pause` · `/resume` · `/leave` | Music (Stop / Queue / Skip are buttons on the card) |
 
 **Admins**
 

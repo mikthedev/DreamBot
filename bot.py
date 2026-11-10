@@ -20,7 +20,7 @@ from birthdays import (
     parse_birthday,
 )
 from database import Database
-from music import MusicCog
+from music import MusicCog, MusicControlsView
 from names import WelcomeNameView, WelcomePrivateView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
 from overwatch_patches import OverwatchPatchCog, OwPatchHistoryView
@@ -217,6 +217,7 @@ class DreamTeamBot(commands.Bot):
         self.add_view(OwLegacyHeroHistoryHubView())
         self.add_view(OnboardingView())
         self.add_view(PlayRsvpView())
+        self.add_view(MusicControlsView())
         self.add_dynamic_items(
             PlayExpandInButton, PlayExpandMaybeButton, PlayExpandNopeButton
         )

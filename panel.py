@@ -123,7 +123,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
             "`/join` · `/disconnect` — voice AI (say **Dream**, …)\n"
             "`/hero` — one hero’s balance changes across patches\n"
             "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"
-            "`/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave`"
+            "`/play` · `/pause` · `/resume` · `/leave` — Stop / Queue / Skip on the card"
         ),
         inline=False,
     )

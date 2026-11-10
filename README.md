@@ -24,7 +24,7 @@ Once a year, Dream Team’s founding date (**28.06.2017**) gets its own annivers
 
 ## Music
 
-SoundCloud in voice: `/play`, `/skip`, `/pause`, `/queue`, `/nowplaying`, `/stop`. Paste a SoundCloud link or search by name. YouTube is not supported; Spotify is planned later.
+SoundCloud + Spotify in voice: `/play`, `/skip`, `/pause`, `/queue`, `/nowplaying`, `/stop`. Paste a SoundCloud link, a Spotify song/album/playlist link, or search by name (SoundCloud). Spotify can’t stream DRM audio directly — the bot matches the song on SoundCloud and keeps the Spotify title/art/link in the now-playing card. YouTube is not supported.
 
 While a track plays, the bot shows rich presence (title, artist, progress, queue). A live now-playing card can sit in a channel of your choice.
 
@@ -97,7 +97,7 @@ Auto suggestions, auto events, and personal invites each have an on/off toggle. 
 | `/join` / `/disconnect` | Voice AI in / out |
 | `/setbirthday` · `/mybirthday` · `/clearbirthday` | Birthday self-service |
 | `/hero` | One hero’s balance changes across recent patches |
-| `/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave` | Music (SoundCloud) |
+| `/play` · `/pause` · `/skip` · `/queue` · `/stop` · `/leave` | Music (SoundCloud + Spotify) |
 
 **Admins**
 

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import shutil
+import ssl
 import time
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
+import aiohttp
+import certifi
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -22,6 +28,23 @@ from rich_presence import (
 import config
 
 log = logging.getLogger("dream_team.music")
+
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+_SPOTIFY_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_SPOTIFY_KIND_RE = re.compile(
+    r"(?:https?://(?:open|play)\.spotify\.com/(?:intl-[a-z]{2}/)?|spotify:)"
+    r"(track|album|playlist|episode|show)[/:]([A-Za-z0-9]+)",
+    re.IGNORECASE,
+)
+_SPOTIFY_SHORT_HOSTS = {"spotify.link", "spotify.app.link", "spoti.fi"}
+_SPOTIFY_PLAYLIST_CAP = 50
+_SC_SEARCH_CANDIDATES = 5
 
 
 def _yt_dlp():
@@ -181,9 +204,9 @@ class Track:
 
 def _detect_source(query: str) -> str:
     lower = query.lower().strip()
-    if "soundcloud.com" in lower:
+    if "soundcloud.com" in lower or "snd.sc/" in lower:
         return "soundcloud"
-    if "spotify.com" in lower or lower.startswith("spotify:"):
+    if _is_spotify_query(lower):
         return "spotify"
     if (
         "youtube.com" in lower
@@ -194,17 +217,296 @@ def _detect_source(query: str) -> str:
     return "search"
 
 
+def _is_spotify_query(query: str) -> bool:
+    lower = query.lower().strip()
+    if lower.startswith("spotify:"):
+        return True
+    try:
+        host = (urlparse(lower).hostname or "").lower()
+    except Exception:
+        host = ""
+    if host in _SPOTIFY_SHORT_HOSTS:
+        return True
+    if "spotify.com" in lower:
+        return True
+    return False
+
+
 def _reject_unsupported(source: str) -> None:
     if source == "youtube":
         raise ValueError(
-            "YouTube isn’t supported anymore — paste a SoundCloud link "
-            "or search by track/artist name."
+            "YouTube isn’t supported anymore — paste a SoundCloud / Spotify "
+            "link or search by track/artist name."
         )
-    if source == "spotify":
+
+
+def _parse_spotify_ref(query: str) -> tuple[str, str] | None:
+    match = _SPOTIFY_KIND_RE.search(query.strip())
+    if not match:
+        return None
+    return match.group(1).lower(), match.group(2)
+
+
+async def _follow_spotify_short_link(url: str) -> str:
+    timeout = aiohttp.ClientTimeout(total=20)
+    connector = aiohttp.TCPConnector(ssl=_SSL_CTX)
+    async with aiohttp.ClientSession(
+        connector=connector, headers=_SPOTIFY_HTTP_HEADERS, timeout=timeout
+    ) as session:
+        async with session.get(url, allow_redirects=True) as resp:
+            return str(resp.url)
+
+
+async def _spotify_embed_entity(kind: str, spotify_id: str) -> dict[str, Any]:
+    url = f"https://open.spotify.com/embed/{kind}/{spotify_id}"
+    timeout = aiohttp.ClientTimeout(total=20)
+    connector = aiohttp.TCPConnector(ssl=_SSL_CTX)
+    async with aiohttp.ClientSession(
+        connector=connector, headers=_SPOTIFY_HTTP_HEADERS, timeout=timeout
+    ) as session:
+        async with session.get(url) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise ValueError(
+                    f"Spotify couldn’t open that {kind} (HTTP {resp.status})."
+                )
+
+    match = re.search(
+        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', text, re.S
+    )
+    if not match:
+        raise ValueError("Spotify returned an unexpected page for that link.")
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Couldn’t parse Spotify track info.") from exc
+
+    page = payload.get("props", {}).get("pageProps", {})
+    state = page.get("state")
+    if not state:
+        status = page.get("status")
         raise ValueError(
-            "Spotify isn’t wired up yet — use a SoundCloud link for now "
-            "(Spotify coming later)."
+            f"Spotify couldn’t find that {kind}"
+            + (f" (HTTP {status})." if status else ".")
         )
+    entity = (state.get("data") or {}).get("entity")
+    if not isinstance(entity, dict):
+        raise ValueError("Spotify didn’t return track details for that link.")
+    return entity
+
+
+def _spotify_thumb(entity: dict[str, Any]) -> str | None:
+    images = (entity.get("visualIdentity") or {}).get("image") or []
+    if isinstance(images, list) and images:
+        best = max(
+            (img for img in images if isinstance(img, dict) and img.get("url")),
+            key=lambda img: (img.get("maxHeight") or 0) * (img.get("maxWidth") or 0),
+            default=None,
+        )
+        if best and isinstance(best.get("url"), str):
+            return best["url"]
+    return None
+
+
+def _spotify_duration_sec(raw: Any) -> int | None:
+    try:
+        ms = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if ms <= 0:
+        return None
+    return max(1, ms // 1000)
+
+
+@dataclass
+class _SpotifySong:
+    title: str
+    artist: str | None
+    track_id: str
+    duration: int | None = None
+    thumbnail: str | None = None
+
+
+def _spotify_songs_from_entity(entity: dict[str, Any]) -> list[_SpotifySong]:
+    kind = (entity.get("type") or "").lower()
+    cover = _spotify_thumb(entity)
+
+    if kind == "track":
+        artists = entity.get("artists") or []
+        artist_names = [
+            a.get("name")
+            for a in artists
+            if isinstance(a, dict) and a.get("name")
+        ]
+        track_id = entity.get("id") or ""
+        uri = entity.get("uri") or ""
+        if not track_id and uri.startswith("spotify:track:"):
+            track_id = uri.rsplit(":", 1)[-1]
+        title = entity.get("title") or entity.get("name") or "Unknown track"
+        if not track_id:
+            raise ValueError("Spotify track is missing an id.")
+        return [
+            _SpotifySong(
+                title=str(title),
+                artist=", ".join(artist_names) if artist_names else None,
+                track_id=track_id,
+                duration=_spotify_duration_sec(entity.get("duration")),
+                thumbnail=cover,
+            )
+        ]
+
+    if kind in {"playlist", "album"}:
+        rows = entity.get("trackList") or []
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(f"That Spotify {kind} has no playable tracks.")
+        songs: list[_SpotifySong] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            uri = str(row.get("uri") or "")
+            if not uri.startswith("spotify:track:"):
+                continue
+            track_id = uri.rsplit(":", 1)[-1]
+            title = row.get("title") or row.get("name") or "Unknown track"
+            artist = row.get("subtitle") or None
+            songs.append(
+                _SpotifySong(
+                    title=str(title),
+                    artist=str(artist) if artist else None,
+                    track_id=track_id,
+                    duration=_spotify_duration_sec(row.get("duration")),
+                    thumbnail=cover,
+                )
+            )
+            if len(songs) >= _SPOTIFY_PLAYLIST_CAP:
+                break
+        if not songs:
+            raise ValueError(f"No songs found in that Spotify {kind}.")
+        return songs
+
+    raise ValueError(
+        "Only Spotify tracks, albums, and playlists are supported "
+        "(not podcasts/episodes)."
+    )
+
+
+async def _resolve_spotify_songs(query: str) -> list[_SpotifySong]:
+    text = query.strip()
+    host = (urlparse(text).hostname or "").lower()
+    if host in _SPOTIFY_SHORT_HOSTS:
+        text = await _follow_spotify_short_link(text)
+
+    parsed = _parse_spotify_ref(text)
+    if parsed is None:
+        raise ValueError(
+            "That doesn’t look like a Spotify track/album/playlist link."
+        )
+    kind, spotify_id = parsed
+    if kind in {"episode", "show"}:
+        raise ValueError(
+            "Spotify podcasts aren’t supported — paste a song, album, or playlist."
+        )
+
+    entity = await _spotify_embed_entity(kind, spotify_id)
+    return _spotify_songs_from_entity(entity)
+
+
+def _sc_search_query(title: str, artist: str | None) -> str:
+    parts = [p for p in (artist, title) if p and str(p).strip()]
+    return " ".join(parts).strip() or title
+
+
+def _candidate_score(entry: dict, search: str) -> tuple:
+    """Prefer closer title matches; deprioritize obvious remix/cover noise."""
+    title = (entry.get("title") or "").lower()
+    search_l = search.lower()
+    tokens = [t for t in re.split(r"\s+", search_l) if len(t) > 1]
+    hit = sum(1 for t in tokens if t in title)
+    noise = 0
+    for word in ("remix", "cover", "karaoke", "nightcore", "sped up", "slowed"):
+        if word in title and word not in search_l:
+            noise += 1
+    return (-hit, noise)
+
+
+def _soundcloud_search_candidates(search: str) -> list[str]:
+    """Return SoundCloud track URLs for a text search (best-effort)."""
+    yt_dlp = _yt_dlp()
+    opts = _ytdl_opts(
+        skip_download=True,
+        extract_flat="in_playlist",
+        noplaylist=False,
+        ignoreerrors=True,
+        playlistend=_SC_SEARCH_CANDIDATES,
+    )
+    query = f"scsearch{_SC_SEARCH_CANDIDATES}:{search}"
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(query, download=False)
+    if not info:
+        return []
+    entries = info.get("entries") if isinstance(info, dict) else None
+    if not entries:
+        url = (
+            info.get("webpage_url") or info.get("url")
+            if isinstance(info, dict)
+            else None
+        )
+        return [url] if isinstance(url, str) and url.startswith("http") else []
+
+    ranked = sorted(
+        (e for e in entries if isinstance(e, dict)),
+        key=lambda e: _candidate_score(e, search),
+    )
+    urls: list[str] = []
+    for entry in ranked:
+        for key in ("webpage_url", "url", "original_url"):
+            val = entry.get(key)
+            if isinstance(val, str) and val.startswith("http"):
+                urls.append(val)
+                break
+    return urls
+
+
+def _soundcloud_bridge(search: str) -> tuple[str, dict]:
+    """Find a playable SoundCloud stream for a title/artist search string."""
+    search = (search or "").strip()
+    if not search:
+        raise ValueError("Empty SoundCloud search.")
+    candidates = _soundcloud_search_candidates(search)
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            info = _extract_info(candidate, for_stream=True)
+            _pick_stream_url(info)
+            webpage = (
+                info.get("webpage_url")
+                or info.get("original_url")
+                or candidate
+            )
+            return str(webpage), info
+        except Exception as exc:  # noqa: BLE001 — try next SoundCloud hit
+            last_error = exc
+            log.info(
+                "SoundCloud candidate failed for '%s': %s (%r)",
+                search,
+                candidate,
+                exc,
+            )
+            continue
+
+    # Last resort: let yt-dlp pick scsearch1 itself
+    try:
+        info = _extract_info(search, for_stream=True)
+        webpage = info.get("webpage_url") or info.get("original_url") or search
+        _pick_stream_url(info)
+        return str(webpage), info
+    except Exception as exc:
+        last_error = exc
+
+    detail = f" ({last_error})" if last_error else ""
+    raise ValueError(
+        f"Couldn’t find a playable SoundCloud match for “{search}”.{detail}"
+    )
 
 
 def _pick_thumbnail(info: dict) -> str | None:
@@ -249,9 +551,89 @@ def _clip(text: str, limit: int) -> str:
     return text[: max(0, limit - 1)].rstrip() + "…"
 
 
-async def resolve_track(query: str, requester: discord.Member) -> Track:
+def _duration_int(raw: Any) -> int | None:
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _track_from_soundcloud_info(
+    info: dict,
+    *,
+    requester: discord.Member,
+    source: str,
+    webpage_url: str,
+    query: str,
+    title: str | None = None,
+    uploader: str | None = None,
+    thumbnail: str | None = None,
+    duration: int | None = None,
+) -> Track:
+    return Track(
+        title=title or info.get("title") or "Unknown track",
+        webpage_url=webpage_url,
+        requester=requester,
+        source=source,
+        query=query,
+        thumbnail=thumbnail or _pick_thumbnail(info),
+        uploader=uploader
+        or info.get("uploader")
+        or info.get("channel")
+        or info.get("creator"),
+        duration=duration
+        if duration is not None
+        else _duration_int(info.get("duration")),
+    )
+
+
+async def _tracks_from_spotify(
+    query: str, requester: discord.Member
+) -> list[Track]:
+    songs = await _resolve_spotify_songs(query)
+    tracks: list[Track] = []
+
+    # Resolve the first song now so /play fails fast if nothing is playable.
+    first = songs[0]
+    first_search = _sc_search_query(first.title, first.artist)
+    sc_url, sc_info = await asyncio.to_thread(_soundcloud_bridge, first_search)
+    tracks.append(
+        _track_from_soundcloud_info(
+            sc_info,
+            requester=requester,
+            source="spotify",
+            webpage_url=f"https://open.spotify.com/track/{first.track_id}",
+            query=sc_url,
+            title=first.title,
+            uploader=first.artist,
+            thumbnail=first.thumbnail,
+            duration=first.duration,
+        )
+    )
+
+    # Remaining playlist/album songs bridge lazily at play time.
+    for song in songs[1:]:
+        tracks.append(
+            Track(
+                title=song.title,
+                webpage_url=f"https://open.spotify.com/track/{song.track_id}",
+                requester=requester,
+                source="spotify",
+                query=f"scbridge:{_sc_search_query(song.title, song.artist)}",
+                thumbnail=song.thumbnail,
+                uploader=song.artist,
+                duration=song.duration,
+            )
+        )
+    return tracks
+
+
+async def resolve_tracks(query: str, requester: discord.Member) -> list[Track]:
     source = _detect_source(query)
     _reject_unsupported(source)
+
+    if source == "spotify":
+        return await _tracks_from_spotify(query, requester)
 
     info = await asyncio.to_thread(_extract_info, query, for_stream=True)
     webpage = info.get("webpage_url") or info.get("original_url") or query
@@ -261,34 +643,41 @@ async def resolve_track(query: str, requester: discord.Member) -> Track:
         if "soundcloud" not in extractor:
             raise ValueError(
                 "Search only looks on SoundCloud right now. "
-                "Try a SoundCloud URL or different keywords."
+                "Try a SoundCloud / Spotify URL or different keywords."
             )
         resolved_source = "soundcloud"
 
-    duration = info.get("duration")
-    try:
-        duration_i = int(duration) if duration is not None else None
-    except (TypeError, ValueError):
-        duration_i = None
+    return [
+        _track_from_soundcloud_info(
+            info,
+            requester=requester,
+            source=resolved_source,
+            webpage_url=str(webpage),
+            query=str(webpage),
+        )
+    ]
 
-    return Track(
-        title=info.get("title") or "Unknown track",
-        webpage_url=webpage,
-        requester=requester,
-        source=resolved_source,
-        query=webpage,
-        thumbnail=_pick_thumbnail(info),
-        uploader=info.get("uploader") or info.get("channel") or info.get("creator"),
-        duration=duration_i,
-    )
+
+async def resolve_track(query: str, requester: discord.Member) -> Track:
+    tracks = await resolve_tracks(query, requester)
+    return tracks[0]
 
 
 async def resolve_stream_url(track: Track) -> str:
-    def extract_url() -> str:
-        info = _extract_info(track.query, for_stream=True)
-        return _pick_stream_url(info)
+    def extract_url() -> tuple[str, str | None]:
+        query = track.query
+        if query.startswith("scbridge:"):
+            search = query.removeprefix("scbridge:")
+            sc_url, info = _soundcloud_bridge(search)
+            return _pick_stream_url(info), sc_url
 
-    return await asyncio.to_thread(extract_url)
+        info = _extract_info(query, for_stream=True)
+        return _pick_stream_url(info), None
+
+    stream_url, cached_query = await asyncio.to_thread(extract_url)
+    if cached_query:
+        track.query = cached_query
+    return stream_url
 
 
 def make_audio_source(stream_url: str) -> discord.AudioSource:
@@ -353,7 +742,7 @@ def track_embed(
 def idle_music_embed() -> discord.Embed:
     embed = discord.Embed(
         title="Now playing",
-        description="Nothing yet.\n`/play` a SoundCloud link or search.",
+        description="Nothing yet.\n`/play` a SoundCloud / Spotify link or search.",
         color=BRAND_COLOR,
     )
     embed.set_author(name="Dream Team")
@@ -575,7 +964,10 @@ class MusicCog(commands.Cog):
         self._showing_full_idle = True
         self._last_idle_rotate_at = time.time()
         self.idle_watchdog.start()
-        log.info("Music cog loaded (ffmpeg=%s, SoundCloud only)", FFMPEG_EXECUTABLE)
+        log.info(
+            "Music cog loaded (ffmpeg=%s, SoundCloud + Spotify)",
+            FFMPEG_EXECUTABLE,
+        )
 
     def cog_unload(self) -> None:
         self.idle_watchdog.cancel()
@@ -787,9 +1179,11 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(
         name="play",
-        description="Play audio from SoundCloud (link or search)",
+        description="Play audio from SoundCloud or Spotify (link or search)",
     )
-    @app_commands.describe(query="SoundCloud URL or search text")
+    @app_commands.describe(
+        query="SoundCloud / Spotify URL, or SoundCloud search text"
+    )
     async def play(self, interaction: discord.Interaction, query: str) -> None:
         ctx = await self._require_voice(interaction)
         if ctx is None:
@@ -807,8 +1201,10 @@ class MusicCog(commands.Cog):
                     "Install it with: brew install ffmpeg"
                 )
             await player.connect(channel)
-            track = await resolve_track(query.strip(), member)
-            position = await player.enqueue(track)
+            tracks = await resolve_tracks(query.strip(), member)
+            positions: list[int] = []
+            for track in tracks:
+                positions.append(await player.enqueue(track))
         except Exception as exc:
             log.warning("/play failed: %r\n%s", exc, traceback.format_exc())
             msg = str(exc)
@@ -816,11 +1212,28 @@ class MusicCog(commands.Cog):
             await interaction.followup.send(f"Couldn't play that: {msg}")
             return
 
-        if was_idle:
-            embed = track_embed(track, heading="Now playing")
+        track = tracks[0]
+        position = positions[0]
+        if len(tracks) == 1:
+            if was_idle:
+                embed = track_embed(track, heading="Now playing")
+            else:
+                embed = track_embed(
+                    track, heading="Queued", queue_position=position
+                )
         else:
-            embed = track_embed(
-                track, heading="Queued", queue_position=position
+            heading = "Now playing" if was_idle else "Queued"
+            embed = track_embed(track, heading=heading)
+            extra = len(tracks) - 1
+            embed.description = (
+                (embed.description or "")
+                + f"\n*+{extra} more from Spotify"
+                + (
+                    f" (capped at {_SPOTIFY_PLAYLIST_CAP})"
+                    if len(tracks) >= _SPOTIFY_PLAYLIST_CAP
+                    else ""
+                )
+                + "*"
             )
 
         await interaction.followup.send(

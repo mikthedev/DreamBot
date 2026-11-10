@@ -151,7 +151,7 @@ def _pick_stream_url(info: dict) -> str:
             and not direct.endswith((".jpg", ".webp", ".png"))
         ):
             return direct
-        raise ValueError("Could not get an audio stream for that SoundCloud track.")
+        raise ValueError("Could not get a playable audio stream for that track.")
 
     def score(fmt: dict) -> tuple:
         vcodec = (fmt.get("vcodec") or "none").lower()
@@ -266,6 +266,8 @@ class Track:
     uploader: str | None = None
     duration: int | None = None
     started_at: float | None = field(default=None, repr=False)
+    # Kept so we can re-bridge Spotify → SoundCloud if YouTube 403s at play time.
+    spotify_id: str | None = field(default=None, repr=False)
 
 
 def _detect_source(query: str) -> str:
@@ -597,16 +599,25 @@ def _entry_url(entry: dict) -> str | None:
     return None
 
 
-def _extract_bridge_info(url: str) -> dict:
-    """Extract playable info; YouTube gets mobile clients to avoid JS challenges."""
-    extra: dict[str, Any] = {}
-    if "youtube.com" in url or "youtu.be" in url:
-        extra["extractor_args"] = {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+def _youtube_extractor_args() -> dict[str, Any]:
+    # Prefer TV / web_safari clients — android/ios often hit SABR-only URLs (403).
+    return {
+        "youtube": {
+            "player_client": ["tv", "web_safari", "mweb", "android", "ios", "web"]
         }
-    return _extract_info(url, for_stream=True) if not extra else _unwrap_and_check(
-        url, **extra
-    )
+    }
+
+
+def _is_youtube_url(url: str) -> bool:
+    lower = (url or "").lower()
+    return "youtube.com" in lower or "youtu.be" in lower or "music.youtube.com" in lower
+
+
+def _extract_bridge_info(url: str) -> dict:
+    """Extract playable info; YouTube gets clients that still return direct URLs."""
+    if _is_youtube_url(url):
+        return _unwrap_and_check(url, extractor_args=_youtube_extractor_args())
+    return _extract_info(url, for_stream=True)
 
 
 def _unwrap_and_check(query: str, **extra: Any) -> dict:
@@ -809,19 +820,19 @@ async def _tracks_from_spotify(
     # Resolve the first song now so /play fails fast if nothing is playable.
     first = songs[0]
     media_url, media_info = await asyncio.to_thread(_bridge_spotify_song, first)
-    tracks.append(
-        _track_from_soundcloud_info(
-            media_info,
-            requester=requester,
-            source="spotify",
-            webpage_url=f"https://open.spotify.com/track/{first.track_id}",
-            query=media_url,
-            title=first.title,
-            uploader=first.artist,
-            thumbnail=first.thumbnail,
-            duration=first.duration,
-        )
+    first_track = _track_from_soundcloud_info(
+        media_info,
+        requester=requester,
+        source="spotify",
+        webpage_url=f"https://open.spotify.com/track/{first.track_id}",
+        query=media_url,
+        title=first.title,
+        uploader=first.artist,
+        thumbnail=first.thumbnail,
+        duration=first.duration,
     )
+    first_track.spotify_id = first.track_id
+    tracks.append(first_track)
 
     # Remaining playlist/album songs bridge lazily at play time.
     for song in songs[1:]:
@@ -835,6 +846,7 @@ async def _tracks_from_spotify(
                 thumbnail=song.thumbnail,
                 uploader=song.artist,
                 duration=song.duration,
+                spotify_id=song.track_id,
             )
         )
     return tracks
@@ -875,34 +887,79 @@ async def resolve_track(query: str, requester: discord.Member) -> Track:
     return tracks[0]
 
 
+def _song_from_track(track: Track) -> _SpotifySong:
+    return _SpotifySong(
+        title=track.title,
+        artist=track.uploader,
+        track_id=track.spotify_id or "unknown",
+        duration=track.duration,
+        thumbnail=track.thumbnail,
+    )
+
+
+def _rebridge_spotify_to_soundcloud(track: Track) -> tuple[str, dict]:
+    """When a YouTube bridge 403s, rematch the same Spotify track on SoundCloud."""
+    song = _song_from_track(track)
+    media_url, info = _bridge_from_platform(
+        platform="soundcloud",
+        title=song.title,
+        artist=song.artist,
+        duration=song.duration,
+    )
+    track.query = media_url
+    log.info(
+        "Spotify→SoundCloud re-bridge for %s → %s",
+        track.title,
+        info.get("title") or media_url,
+    )
+    return media_url, info
+
+
+def _resolve_bridge_query(track: Track) -> str:
+    """Materialize spotbridge:/scbridge: into a concrete media URL on the track."""
+    query = track.query
+    if query.startswith("spotbridge:") or query.startswith("scbridge:"):
+        if query.startswith("spotbridge:"):
+            song = _decode_spotbridge(query)
+        else:
+            song = _SpotifySong(
+                title=query.removeprefix("scbridge:"),
+                artist=track.uploader,
+                track_id=track.spotify_id or "unknown",
+                duration=track.duration,
+                thumbnail=track.thumbnail,
+            )
+        media_url, _info = _bridge_spotify_song(song)
+        track.query = media_url
+        return media_url
+    return query
+
+
+def _extract_stream_for_track(track: Track) -> str:
+    """Sync stream URL resolver with YouTube → SoundCloud fallback for Spotify."""
+    query = _resolve_bridge_query(track)
+
+    def pick(url: str) -> str:
+        if _is_youtube_url(url):
+            return _pick_stream_url(_extract_bridge_info(url))
+        return _pick_stream_url(_extract_info(url, for_stream=True))
+
+    try:
+        return pick(query)
+    except Exception as yt_exc:
+        if track.source == "spotify" and _is_youtube_url(query):
+            log.warning(
+                "YouTube stream failed for %s (%r) — rematching on SoundCloud",
+                track.title,
+                yt_exc,
+            )
+            sc_url, info = _rebridge_spotify_to_soundcloud(track)
+            return _pick_stream_url(info) if info.get("formats") else pick(sc_url)
+        raise
+
+
 async def resolve_stream_url(track: Track) -> str:
-    def extract_url() -> tuple[str, str | None]:
-        query = track.query
-        if query.startswith("spotbridge:") or query.startswith("scbridge:"):
-            if query.startswith("spotbridge:"):
-                song = _decode_spotbridge(query)
-                media_url, info = _bridge_spotify_song(song)
-            else:
-                # Legacy playlist items from older builds.
-                song = _SpotifySong(
-                    title=query.removeprefix("scbridge:"),
-                    artist=None,
-                    track_id="unknown",
-                )
-                media_url, info = _bridge_spotify_song(song)
-            return _pick_stream_url(info), media_url
-
-        if "youtube.com" in query or "youtu.be" in query:
-            info = _extract_bridge_info(query)
-            return _pick_stream_url(info), None
-
-        info = _extract_info(query, for_stream=True)
-        return _pick_stream_url(info), None
-
-    stream_url, cached_query = await asyncio.to_thread(extract_url)
-    if cached_query:
-        track.query = cached_query
-    return stream_url
+    return await asyncio.to_thread(_extract_stream_for_track, track)
 
 
 def _cache_stem(query: str) -> str:
@@ -927,10 +984,8 @@ def _download_audio_file(query: str) -> Path:
         # Keep container ffmpeg can decode without post-processing plugins.
         format="bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
     )
-    if "youtube.com" in query or "youtu.be" in query:
-        opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "ios", "web"]}
-        }
+    if _is_youtube_url(query):
+        opts["extractor_args"] = _youtube_extractor_args()
     # Drop extract flags that skip writing a file.
     opts.pop("skip_download", None)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -955,27 +1010,26 @@ def _download_audio_file(query: str) -> Path:
     raise ValueError(f"Download produced no audio file for {query}")
 
 
+def _prepare_playable_path_sync(track: Track) -> Path:
+    """Resolve bridges and download; Spotify YouTube failures rematch on SoundCloud."""
+    query = _resolve_bridge_query(track)
+    try:
+        return _download_audio_file(query)
+    except Exception as dl_exc:
+        if track.source == "spotify" and _is_youtube_url(query):
+            log.warning(
+                "YouTube download failed for %s (%r) — rematching on SoundCloud",
+                track.title,
+                dl_exc,
+            )
+            sc_url, _info = _rebridge_spotify_to_soundcloud(track)
+            return _download_audio_file(sc_url)
+        raise
+
+
 async def prepare_playable_path(track: Track) -> Path:
     """Resolve Spotify bridge (YouTube→SoundCloud) and download a local file."""
-
-    def work() -> Path:
-        query = track.query
-        if query.startswith("spotbridge:") or query.startswith("scbridge:"):
-            if query.startswith("spotbridge:"):
-                song = _decode_spotbridge(query)
-            else:
-                song = _SpotifySong(
-                    title=query.removeprefix("scbridge:"),
-                    artist=track.uploader,
-                    track_id="unknown",
-                    duration=track.duration,
-                )
-            media_url, _info = _bridge_spotify_song(song)
-            track.query = media_url
-            query = media_url
-        return _download_audio_file(query)
-
-    return await asyncio.to_thread(work)
+    return await asyncio.to_thread(_prepare_playable_path_sync, track)
 
 
 def make_audio_source(path_or_url: str) -> discord.AudioSource:
@@ -1028,14 +1082,6 @@ async def _wait_for_dave(voice: discord.VoiceClient, *, timeout: float = 20.0) -
                 _dave_debug(conn),
             )
             last_log = now
-            # Nudge a stuck pending session once.
-            session = getattr(conn, "dave_session", None)
-            if session is not None and not session.ready:
-                try:
-                    session.prepare_transition(0, int(ver or 1))
-                    session.execute_transition(0)
-                except Exception:
-                    pass
         await asyncio.sleep(0.15)
     log.warning(
         "DAVE not ready after %.1fs (protocol=%s can_encrypt=%s %s) — audio may be silent",
@@ -1130,12 +1176,12 @@ class MusicControlsView(discord.ui.View):
             )
             return
         player = cog.get_player(interaction.guild.id)
-        skipped = await player.skip()
-        if skipped is None and not player.queue:
+        if player.current is None and not player.queue:
             await interaction.response.send_message(
                 "Nothing to skip.", ephemeral=True
             )
             return
+        skipped = await player.skip()
         title = skipped.title if skipped else "current track"
         await interaction.response.send_message(
             f"Skipped **{title}**.", ephemeral=True
@@ -1228,6 +1274,7 @@ class GuildPlayer:
         self._audio_lock = asyncio.Lock()
         self._player_task: asyncio.Task | None = None
         self._stopped = False
+        self._skip_requested = False
         self._playback_error: Exception | None = None
 
     async def _announce(self, message: str) -> None:
@@ -1316,9 +1363,14 @@ class GuildPlayer:
         return len(self.queue)
 
     async def skip(self) -> Track | None:
+        """Stop current (playing or paused) so the player loop advances to next."""
         skipped = self.current
+        if skipped is None and not self.queue:
+            return None
+        self._skip_requested = True
         voice = self._sync_voice()
-        if voice and voice.is_playing():
+        if voice and (voice.is_playing() or voice.is_paused()):
+            # stop() also clears pause state and fires the after callback.
             voice.stop()
         return skipped
 
@@ -1326,6 +1378,7 @@ class GuildPlayer:
         self.queue.clear()
         self.current = None
         self._stopped = True
+        self._skip_requested = False
         voice = self._sync_voice()
         if voice and (voice.is_playing() or voice.is_paused()):
             voice.stop()
@@ -1384,6 +1437,7 @@ class GuildPlayer:
 
                 track = self.queue.popleft()
                 self.current = track
+                self._skip_requested = False
                 finished = asyncio.Event()
                 self._playback_error = None
 
@@ -1401,11 +1455,22 @@ class GuildPlayer:
                 async with self._audio_lock:
                     local_path: Path | None = None
                     try:
-                        if voice.is_playing():
+                        if self._skip_requested:
+                            self._skip_requested = False
+                            self.current = None
+                            continue
+
+                        if voice.is_playing() or voice.is_paused():
                             voice.stop()
                             await asyncio.sleep(0.2)
 
                         await _wait_for_dave(voice)
+
+                        if self._skip_requested:
+                            self._skip_requested = False
+                            self.current = None
+                            continue
+
                         try:
                             local_path = await prepare_playable_path(track)
                             play_target = str(local_path)
@@ -1431,6 +1496,11 @@ class GuildPlayer:
                                 play_target[:96],
                             )
 
+                        if self._skip_requested:
+                            self._skip_requested = False
+                            self.current = None
+                            continue
+
                         source = make_audio_source(play_target)
                         track.started_at = time.time()
                         voice.play(source, after=after_play)
@@ -1442,15 +1512,33 @@ class GuildPlayer:
                             exc,
                             traceback.format_exc(),
                         )
+                        # Don't leave the queue stuck — advance to the next song.
+                        self._skip_requested = False
                         self.current = None
-                        await self._set_presence(None)
-                        await self._announce(
-                            f"Couldn’t start **{track.title}**: `{exc}`"
-                        )
+                        if self.queue:
+                            await self._announce(
+                                f"Couldn’t start **{track.title}** — trying next…"
+                            )
+                        else:
+                            await self._set_presence(None)
+                            await self._announce(
+                                f"Couldn’t start **{track.title}**: `{exc}`"
+                            )
                         continue
 
                 # Catch silent FFmpeg deaths (card said “Now playing”, audio never flowed).
                 await asyncio.sleep(1.25)
+                was_skip = self._skip_requested
+                if was_skip:
+                    self._skip_requested = False
+                    # Skip during the start grace window — wait for after() then next.
+                    if not finished.is_set():
+                        await finished.wait()
+                    self.current = None
+                    if not self.queue:
+                        await self._set_presence(None)
+                    continue
+
                 legitimately_short = bool(
                     track.duration is not None and track.duration <= 2
                 )
@@ -1462,12 +1550,19 @@ class GuildPlayer:
                         track.title,
                         detail,
                     )
-                    await self._announce(
-                        f"Audio died immediately for **{track.title}**."
-                        f"{detail} Try another link or `/play` again."
-                    )
+                    if self.queue:
+                        await self._announce(
+                            f"Audio died immediately for **{track.title}**."
+                            f"{detail} Trying next…"
+                        )
+                    else:
+                        await self._announce(
+                            f"Audio died immediately for **{track.title}**."
+                            f"{detail} Try another link or `/play` again."
+                        )
                     self.current = None
-                    await self._set_presence(None)
+                    if not self.queue:
+                        await self._set_presence(None)
                     continue
 
                 if (
@@ -1482,11 +1577,13 @@ class GuildPlayer:
                         "Check the bot’s Speak permission in that channel."
                     )
                     self.current = None
-                    await self._set_presence(None)
+                    if not self.queue:
+                        await self._set_presence(None)
                     continue
 
                 if not finished.is_set():
                     await finished.wait()
+                self._skip_requested = False
                 if self._playback_error is not None:
                     await self._announce(
                         f"Playback error on **{track.title}**: `{self._playback_error}`"
@@ -1655,6 +1752,13 @@ class MusicCog(commands.Cog):
             owner_guild_id, track=None, queue_len=0, paused=False
         )
 
+    def bind_player_channel(self, guild_id: int, channel_id: int) -> None:
+        """Keep one editable player message in the channel where people /play."""
+        prev_ch, _prev_msg = self.bot.db.get_now_playing_panel(guild_id)
+        if prev_ch != channel_id:
+            # New channel → drop the old message id so we create a fresh player card.
+            self.bot.db.set_now_playing_panel(guild_id, channel_id, None)
+
     async def refresh_now_playing_panel(
         self,
         guild_id: int,
@@ -1662,8 +1766,9 @@ class MusicCog(commands.Cog):
         track: Track | None,
         queue_len: int,
         paused: bool = False,
+        heading: str | None = None,
     ) -> None:
-        """Editable channel message — this is the fancy UI bots CAN show."""
+        """Edit (or create once) the single player message for this guild."""
         channel_id, message_id = self.bot.db.get_now_playing_panel(guild_id)
         if not channel_id:
             return
@@ -1678,8 +1783,8 @@ class MusicCog(commands.Cog):
         if track is None:
             embed = idle_music_embed()
         else:
-            heading = "Paused" if paused else "Now playing"
-            embed = track_embed(track, heading=heading)
+            status = heading or ("Paused" if paused else "Now playing")
+            embed = track_embed(track, heading=status)
             if queue_len:
                 embed.description = (
                     (embed.description or "")
@@ -1687,7 +1792,8 @@ class MusicCog(commands.Cog):
                 )
 
         try:
-            view = MusicControlsView() if track is not None else None
+            # Keep controls on the same message whether idle or playing.
+            view = MusicControlsView()
 
             if message_id:
                 try:
@@ -1744,10 +1850,11 @@ class MusicCog(commands.Cog):
             return
         member, channel = ctx
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         player = self.get_player(interaction.guild_id)
         if interaction.channel_id:
             player.announce_channel_id = interaction.channel_id
+            self.bind_player_channel(interaction.guild_id, interaction.channel_id)
         was_idle = player.current is None and not player.queue
 
         try:
@@ -1773,34 +1880,54 @@ class MusicCog(commands.Cog):
             log.warning("/play failed: %r\n%s", exc, traceback.format_exc())
             msg = str(exc)
             msg = re.sub(r"\x1b\[[0-9;]*m", "", msg)
-            await interaction.followup.send(f"Couldn't play that: {msg}")
+            await interaction.followup.send(
+                f"Couldn't play that: {msg}", ephemeral=True
+            )
             return
 
         track = tracks[0]
         position = positions[0]
-        if len(tracks) == 1:
-            if was_idle:
-                embed = track_embed(track, heading="Now playing")
+        extra = len(tracks) - 1
+        if was_idle:
+            # Seed / edit the single player card; loop upgrades heading to Now playing.
+            if player.current is not None:
+                waiting = len(player.queue)
+                shown = player.current
+                seed_heading = "Now playing"
             else:
-                embed = track_embed(
-                    track, heading="Queued", queue_position=position
-                )
-        else:
-            heading = "Now playing" if was_idle else "Queued"
-            embed = track_embed(track, heading=heading)
-            extra = len(tracks) - 1
-            embed.description = (
-                (embed.description or "")
-                + f"\n*+{extra} more from Spotify"
-                + (
-                    f" (capped at {_SPOTIFY_PLAYLIST_CAP})"
-                    if len(tracks) >= _SPOTIFY_PLAYLIST_CAP
-                    else ""
-                )
-                + "*"
+                waiting = max(0, len(player.queue) - 1)
+                shown = track
+                seed_heading = "Queued"
+            await self.refresh_now_playing_panel(
+                interaction.guild_id,
+                track=shown,
+                queue_len=waiting,
+                heading=seed_heading,
             )
+            ack = f"Starting **{_clip(track.title, 80)}**…"
+            if extra:
+                ack += f" (+{extra} more queued)"
+            await interaction.followup.send(ack, ephemeral=True)
+            return
 
-        await interaction.followup.send(embed=embed, view=MusicControlsView())
+        # Something already playing — bump the one player message, don't spam a new card.
+        shown = player.current or track
+        voice = player._sync_voice()
+        paused = bool(voice and voice.is_paused())
+        await self.refresh_now_playing_panel(
+            interaction.guild_id,
+            track=shown,
+            queue_len=len(player.queue),
+            paused=paused,
+        )
+        if extra:
+            ack = (
+                f"Queued **{_clip(track.title, 80)}** +{extra} more "
+                f"(#{position}–#{position + extra})."
+            )
+        else:
+            ack = f"Queued **{_clip(track.title, 80)}** (#{position})."
+        await interaction.followup.send(ack, ephemeral=True)
 
     @app_commands.command(name="pause", description="Pause the current track")
     async def pause(self, interaction: discord.Interaction) -> None:

@@ -185,16 +185,52 @@ def _ffmpeg_executable() -> str:
 
 
 FFMPEG_EXECUTABLE = _ffmpeg_executable()
-# HLS (SoundCloud) needs reconnect + protocol whitelist; headers help CDN allow the pull.
+# Keep reconnect flags conservative — old host ffmpeg builds reject unknown opts.
 FFMPEG_BEFORE = (
     "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 "
-    "-reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx "
-    "-http_persistent 0 "
-    "-probesize 32M -analyzeduration 0 "
     f"-headers '{_HTTP_HEADERS}'"
 )
 # PCM is more reliable than FFmpegOpusAudio+Ogg for HLS/AAC inputs.
 FFMPEG_OPTIONS = "-vn"
+
+
+def _ensure_opus() -> bool:
+    if discord.opus.is_loaded():
+        return True
+    for name in (
+        "opus",
+        "libopus.so.0",
+        "libopus.dylib",
+        "/usr/lib/x86_64-linux-gnu/libopus.so.0",
+        "/usr/lib/aarch64-linux-gnu/libopus.so.0",
+        "/opt/homebrew/lib/libopus.dylib",
+        "/usr/local/lib/libopus.dylib",
+    ):
+        try:
+            discord.opus.load_opus(name)
+            if discord.opus.is_loaded():
+                log.info("Loaded Opus library via %s", name)
+                return True
+        except Exception:
+            continue
+    return discord.opus.is_loaded()
+
+
+def _voice_stack_ok() -> tuple[bool, str]:
+    """Discord DAVE requires discord.py >= 2.7 or clients hear silence."""
+    ver = tuple(int(p) for p in discord.__version__.split(".")[:2])
+    try:
+        import davey  # noqa: F401
+        has_davey = True
+    except Exception:
+        has_davey = False
+    opus_ok = _ensure_opus()
+    ok = ver >= (2, 7) and has_davey
+    detail = (
+        f"discord.py={discord.__version__} davey={'yes' if has_davey else 'NO'} "
+        f"opus={'yes' if opus_ok else 'NO'} ffmpeg={FFMPEG_EXECUTABLE}"
+    )
+    return ok, detail
 
 
 @dataclass
@@ -1036,10 +1072,16 @@ class MusicCog(commands.Cog):
         self._showing_full_idle = True
         self._last_idle_rotate_at = time.time()
         self.idle_watchdog.start()
-        log.info(
-            "Music cog loaded (ffmpeg=%s, SoundCloud + Spotify)",
-            FFMPEG_EXECUTABLE,
-        )
+        voice_ok, voice_detail = _voice_stack_ok()
+        if voice_ok:
+            log.info("Music cog loaded (%s, SoundCloud + Spotify)", voice_detail)
+        else:
+            log.error(
+                "Music cog loaded but voice stack is incomplete — "
+                "clients will hear SILENCE. Upgrade: pip install -U "
+                "'discord.py[voice]>=2.7.0' davey. (%s)",
+                voice_detail,
+            )
 
     def cog_unload(self) -> None:
         self.idle_watchdog.cancel()
@@ -1273,6 +1315,14 @@ class MusicCog(commands.Cog):
                 raise RuntimeError(
                     "FFmpeg is not installed (or not on PATH). "
                     "Install it with: brew install ffmpeg"
+                )
+            voice_ok, voice_detail = _voice_stack_ok()
+            if not voice_ok:
+                raise RuntimeError(
+                    "Voice stack can’t send audible audio "
+                    f"({voice_detail}). Host needs "
+                    "`pip install -U 'discord.py[voice]>=2.7.0' davey` "
+                    "then restart."
                 )
             await player.connect(channel)
             tracks = await resolve_tracks(query.strip(), member)

@@ -110,6 +110,13 @@ fi
 
 echo "[DreamBot] Python: $("$PY_BIN" -V 2>&1) at $PY_BIN"
 
+# Force DAVE-capable discord.py. Older 2.6 builds join voice and run ffmpeg but
+# clients hear silence (Discord requires DAVE encryption since 2026-03-02).
+echo "[DreamBot] Ensuring discord.py[voice]>=2.7 + davey (DAVE)"
+"$PY_BIN" -m pip install --user -q -U 'discord.py[voice]>=2.7.0' 'davey>=0.1.0' 'PyNaCl>=1.5.0' \
+  || "$PY_BIN" -m pip install -q -U 'discord.py[voice]>=2.7.0' 'davey>=0.1.0' 'PyNaCl>=1.5.0' \
+  || echo "[DreamBot] discord.py upgrade skipped"
+
 # Optional voice-recv (DAVE decrypt). Must NOT live in requirements.txt — the host
 # egg runs pip install -r requirements.txt before start.sh, and a failed git+https
 # fetch (Cloudflare/GitHub) aborts the whole server with exit code 1.
@@ -126,14 +133,24 @@ if ! "$PY_BIN" - <<'PY'
 import sys
 print("[DreamBot] probing imports…", flush=True)
 missing = []
-for name in ("discord", "aiohttp", "dotenv", "PIL"):
+for name in ("discord", "aiohttp", "dotenv", "PIL", "davey", "nacl"):
     try:
-        __import__(name if name != "dotenv" else "dotenv")
+        if name == "dotenv":
+            __import__("dotenv")
+        elif name == "nacl":
+            __import__("nacl")
+        else:
+            __import__(name)
     except Exception as exc:
         missing.append(f"{name}: {exc}")
 if missing:
     print("[DreamBot] missing deps:", "; ".join(missing), flush=True)
     sys.exit(2)
+import discord
+print(f"[DreamBot] discord.py {discord.__version__} davey=ok", flush=True)
+ver = tuple(int(p) for p in discord.__version__.split(".")[:2])
+if ver < (2, 7):
+    print("[DreamBot] WARNING: discord.py < 2.7 — voice audio will be silent (no DAVE)", flush=True)
 print("[DreamBot] core imports ok", flush=True)
 PY
 then

@@ -26,6 +26,8 @@ Once a year, Dream Team’s founding date (**28.06.2017**) gets its own annivers
 
 SoundCloud + Spotify in voice: `/play`, `/skip`, `/pause`, `/queue`, `/nowplaying`, `/stop`. Paste a SoundCloud link, a Spotify song/album/playlist link, or search by name (SoundCloud). Spotify can’t stream DRM audio directly — the bot matches the song on SoundCloud and keeps the Spotify title/art/link in the now-playing card. YouTube is not supported.
 
+Needs **discord.py 2.7+** with `davey` (Discord’s DAVE voice encryption). On 2.6 the bot can join and show “Now playing” while everyone hears silence. Smoke-test with `python test_voice_play.py` (join a voice channel first).
+
 While a track plays, the bot shows rich presence (title, artist, progress, queue). A live now-playing card can sit in a channel of your choice.
 
 If the channel empties, the bot leaves after **10 seconds**.

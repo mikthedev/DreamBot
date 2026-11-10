@@ -48,25 +48,97 @@ _SPOTIFY_KIND_RE = re.compile(
 )
 _SPOTIFY_SHORT_HOSTS = {"spotify.link", "spotify.app.link", "spoti.fi"}
 _SPOTIFY_PLAYLIST_CAP = 50
-_BRIDGE_SEARCH_CANDIDATES = 8
-_BRIDGE_NOISE = (
+_BRIDGE_SEARCH_CANDIDATES = 12
+# Reject weak matches rather than playing a cover/remix of the wrong recording.
+_BRIDGE_MIN_ACCEPT_SCORE = 55
+# SoundCloud go / free previews are typically ~30s — never treat those as the song
+# unless Spotify itself says the track is that short.
+_PREVIEW_DURATION_MAX = 35
+_MIN_FULL_TRACK_SEC = 45
+_DURATION_HARD_REJECT_SEC = 25
+# Alternate recordings — hard-reject unless the Spotify title asked for them.
+_BRIDGE_VARIANTS = (
     "remix",
+    "bootleg",
+    "mashup",
     "cover",
+    "covers",
     "karaoke",
+    "instrumental",
     "nightcore",
     "sped up",
     "speed up",
     "slowed",
+    "slowed + reverb",
     "reverb",
     "8d audio",
-    "mashup",
-    "bootleg",
-    "live at",
-    "live session",
-    "acoustic version",
+    "8d",
+    "bass boosted",
+    "phonk",
+    "lofi",
+    "lo-fi",
+    "chipmunk",
+    "chipmunks",
+    "tribute",
+    "made famous by",
+    "originally performed by",
+    "in the style of",
+    "sound-alike",
+    "sound alike",
+    "type beat",
+    "remake",
+    "rendition",
     "piano version",
-    "instrumental",
+    "guitar version",
+    "violin version",
+    "acoustic version",
+    "acoustic cover",
+    "live version",
+    "live at",
+    "live on",
+    "live from",
+    "live session",
+    "mtv unplugged",
+    "fan edit",
+    "tiktok version",
+    "piano",
+    "pianoforte",
+    "guitar",
+    "violin",
+    "orchestral",
+    "orchestra",
+    "symphony",
+    "lullaby",
+    "music box",
+    "chopped and screwed",
+    "chopped & screwed",
 )
+
+# Parentheticals allowed even when Spotify didn't mention them.
+_BRIDGE_ALLOWED_PARENS = {
+    "official audio",
+    "official video",
+    "official music video",
+    "official lyric video",
+    "official lyrics video",
+    "official visualizer",
+    "audio",
+    "lyrics",
+    "lyric video",
+    "lyrics video",
+    "lyric",
+    "visualizer",
+    "visualiser",
+    "hd",
+    "hq",
+    "4k",
+    "explicit",
+    "clean",
+    "remastered",
+    "remaster",
+    "mono",
+    "stereo",
+}
 
 
 def _yt_dlp():
@@ -480,10 +552,11 @@ async def _resolve_spotify_songs(query: str) -> list[_SpotifySong]:
 
 
 def _match_query(title: str, artist: str | None) -> str:
-    title = (title or "").strip()
-    artist = (artist or "").strip()
+    """Build a search string — strip leading '-' (YouTube treats it as exclude)."""
+    title = re.sub(r"^[\s\-–—]+", "", (title or "").strip())
+    artist = re.sub(r"^[\s\-–—]+", "", (artist or "").strip())
     if artist and title:
-        return f"{artist} - {title}"
+        return f"{artist} {title}"
     return title or artist
 
 
@@ -511,6 +584,133 @@ def _decode_spotbridge(query: str) -> "_SpotifySong":
     )
 
 
+def _normalize_match_text(text: str) -> str:
+    text = (text or "").lower()
+    text = text.replace("’", "'").replace("“", '"').replace("”", '"')
+    text = re.sub(r"[&+]", " and ", text)
+    text = re.sub(r"[^\w\s']+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _core_title(title: str) -> str:
+    """Title words we must match — drop feat credits and trailing Official tags."""
+    t = title or ""
+    t = re.sub(r"\(feat\.?[^)]*\)", " ", t, flags=re.I)
+    t = re.sub(r"\(ft\.?[^)]*\)", " ", t, flags=re.I)
+    t = re.sub(r"\[feat\.?[^\]]*\]", " ", t, flags=re.I)
+    t = re.sub(r"\bfeat\.?\b.*$", " ", t, flags=re.I)
+    t = re.sub(r"\bft\.?\b.*$", " ", t, flags=re.I)
+    t = re.sub(
+        r"\s*[-–—]\s*(official|audio|video|lyric|lyrics|visuali[sz]er).*$",
+        " ",
+        t,
+        flags=re.I,
+    )
+    return _normalize_match_text(t)
+
+
+def _title_tokens(title: str) -> list[str]:
+    stop = {"the", "a", "an", "and", "of", "to", "in", "on", "for", "my", "your"}
+    return [
+        tok
+        for tok in _core_title(title).split()
+        if len(tok) > 1 and tok not in stop
+    ]
+
+
+def _artist_names(artist: str | None) -> list[str]:
+    if not artist:
+        return []
+    parts = re.split(r"\s*,\s*|\s+&\s+|\s+and\s+|\s+x\s+|\s+with\s+", artist, flags=re.I)
+    names: list[str] = []
+    for part in parts:
+        cleaned = _normalize_match_text(part)
+        cleaned = re.sub(r"^(feat|ft)\s+", "", cleaned)
+        if cleaned:
+            names.append(cleaned)
+    return names
+
+
+def _contains_variant(text: str, token: str) -> bool:
+    """Word-boundary-ish match so 'cover' doesn't hit 'recovery'."""
+    pattern = rf"(?<!\w){re.escape(token)}(?!\w)"
+    return re.search(pattern, text, flags=re.I) is not None
+
+
+def _unwanted_parentheticals(candidate_title: str, want_title: str) -> list[str]:
+    """Reject version tags in ()/[] that Spotify didn’t ask for (e.g. Pianoforte)."""
+    want = _normalize_match_text(want_title)
+    extras: list[str] = []
+    for raw in re.findall(r"[\(\[]([^\)\]]+)[\)\]]", candidate_title or ""):
+        tag = _normalize_match_text(raw)
+        if not tag:
+            continue
+        if tag in _BRIDGE_ALLOWED_PARENS:
+            continue
+        if tag.startswith("official"):
+            continue
+        if re.fullmatch(r"(19|20)\d{2}(\s+remaster(ed)?)?", tag):
+            continue
+        if re.fullmatch(r"remaster(ed)?(\s+(19|20)\d{2})?", tag):
+            continue
+        if re.fullmatch(r"(hd|hq|4k|720p|1080p|mv)", tag):
+            continue
+        if tag.startswith("feat") or tag.startswith("ft "):
+            continue
+        if tag in want or _contains_variant(want, tag):
+            continue
+        # Whole tag is an unrequested version marker.
+        extras.append(tag)
+    return extras
+
+
+def _unwanted_variants(candidate_title: str, want_title: str) -> list[str]:
+    """Variant tokens present on the candidate but not requested by Spotify."""
+    cand = _normalize_match_text(candidate_title)
+    want = _normalize_match_text(want_title)
+    hits: list[str] = []
+    for token in _BRIDGE_VARIANTS:
+        if _contains_variant(cand, token) and not _contains_variant(want, token):
+            hits.append(token)
+    # Bare "live" / "cover" / "remix" with separators — catch "Song (Live)" etc.
+    for token in ("live", "cover", "remix", "karaoke", "instrumental"):
+        if token in hits:
+            continue
+        if re.search(rf"[\(\[\-\|:]\s*{token}\b|\b{token}\s*[\)\]]", cand) and not (
+            re.search(rf"[\(\[\-\|:]\s*{token}\b|\b{token}\s*[\)\]]", want)
+            or _contains_variant(want, token)
+        ):
+            hits.append(token)
+    hits.extend(_unwanted_parentheticals(candidate_title, want_title))
+    # De-dupe while preserving order
+    return list(dict.fromkeys(hits))
+
+
+def _entry_duration_sec(entry: dict) -> int | None:
+    for key in ("duration", "approx_duration_ms"):
+        raw = entry.get(key)
+        if raw is None:
+            continue
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if key.endswith("_ms"):
+            val = max(1, val // 1000)
+        if val > 0:
+            return val
+    return None
+
+
+def _is_preview_clip(duration_sec: int | None, want_duration: int | None) -> bool:
+    """True for ~30s SoundCloud/limited previews when the real track is longer."""
+    if duration_sec is None:
+        return False
+    if want_duration is not None and want_duration <= _MIN_FULL_TRACK_SEC:
+        return False
+    return duration_sec <= _PREVIEW_DURATION_MAX
+
+
 def _bridge_candidate_score(
     entry: dict,
     *,
@@ -518,52 +718,98 @@ def _bridge_candidate_score(
     artist: str | None,
     duration: int | None,
 ) -> int:
-    """Higher is better — prefer official uploads close to Spotify duration."""
-    etitle = (entry.get("title") or "").lower()
-    echan = (
-        entry.get("uploader")
-        or entry.get("channel")
-        or entry.get("creator")
-        or ""
-    ).lower()
-    want_title = (title or "").lower()
-    want_artist = (artist or "").lower()
+    """
+    Higher is better. Hard-rejects (large negative) for covers/remixes/previews
+    unless the Spotify title itself asked for that variant.
+    """
+    etitle_raw = entry.get("title") or entry.get("track") or ""
+    etitle = _normalize_match_text(str(etitle_raw))
+    echan = _normalize_match_text(
+        str(
+            entry.get("uploader")
+            or entry.get("channel")
+            or entry.get("creator")
+            or entry.get("artist")
+            or ""
+        )
+    )
+    # Topic channels often look like "Artist - Topic"
+    echan_clean = re.sub(r"\s*-\s*topic$", "", echan).strip()
+
+    variants = _unwanted_variants(str(etitle_raw), title)
+    if variants:
+        return -1000 - len(variants)
+
+    edur = _entry_duration_sec(entry)
+    if _is_preview_clip(edur, duration):
+        return -900
+
+    tokens = _title_tokens(title)
+    if tokens:
+        hit = sum(1 for tok in tokens if tok in etitle)
+        if hit / len(tokens) < 0.8:
+            # Allow one-edit-ish miss only when almost all tokens match.
+            if hit < max(1, len(tokens) - 1):
+                return -800
+
+    artists = _artist_names(artist)
+    artist_hit = False
+    if artists:
+        for name in artists:
+            if name and (name in etitle or name in echan or name in echan_clean):
+                artist_hit = True
+                break
+            # Primary artist last-name / first token fallback
+            bits = name.split()
+            if bits and len(bits[-1]) > 2 and (
+                bits[-1] in echan_clean or bits[-1] in etitle
+            ):
+                artist_hit = True
+                break
+        if not artist_hit:
+            return -750
 
     score = 0
-    if want_title and want_title in etitle:
-        score += 60
-    for tok in re.split(r"\s+", want_title):
-        if len(tok) > 2 and tok in etitle:
-            score += 4
-    if want_artist and want_artist in etitle:
-        score += 25
-    if want_artist and want_artist in echan:
+    if tokens:
+        score += int(40 * (sum(1 for tok in tokens if tok in etitle) / len(tokens)))
+    core = _core_title(title)
+    if core and core in etitle:
         score += 35
-    for badge in ("topic", "vevo", "official", "records", "music"):
-        if badge in echan:
-            score += 12
-    if "official audio" in etitle or "official video" in etitle:
+
+    if artist_hit:
+        score += 30
+    if artists and any(name == echan_clean or name in echan_clean for name in artists):
         score += 20
+    if echan.endswith("topic") or " - topic" in echan or echan.endswith("vevo"):
+        score += 25
+    for badge in ("vevo", "official", "records", "music"):
+        if badge in echan:
+            score += 6
+    if "official audio" in etitle:
+        score += 22
+    elif "official video" in etitle or "official music video" in etitle:
+        score += 10
+    elif "lyric" in etitle:
+        score += 4
 
-    for word in _BRIDGE_NOISE:
-        if word in etitle and word not in want_title:
-            score -= 55
-
-    edur = entry.get("duration")
-    try:
-        edur_i = int(edur) if edur is not None else None
-    except (TypeError, ValueError):
-        edur_i = None
-    if duration and edur_i:
-        diff = abs(edur_i - int(duration))
+    if duration and edur:
+        diff = abs(edur - int(duration))
+        if diff > _DURATION_HARD_REJECT_SEC:
+            return -700
         if diff <= 2:
-            score += 40
-        elif diff <= 6:
+            score += 45
+        elif diff <= 5:
+            score += 35
+        elif diff <= 10:
             score += 22
-        elif diff <= 12:
-            score += 8
-        elif diff > 40:
-            score -= 35
+        elif diff <= 15:
+            score += 10
+        else:
+            score -= 15
+    elif duration and edur is None:
+        # Flat search rows without duration — don't trust them as much.
+        score -= 10
+
     return score
 
 
@@ -620,6 +866,35 @@ def _unwrap_and_check(query: str, **extra: Any) -> dict:
     return info
 
 
+def _bridge_search_queries(platform: str, title: str, artist: str | None) -> list[str]:
+    base = _match_query(title, artist)
+    core = _core_title(title) or (title or "").strip()
+    primary = (_artist_names(artist) or [None])[0]
+    n = _BRIDGE_SEARCH_CANDIDATES
+    if platform == "youtube":
+        queries = [f"ytsearch{n}:{base}"]
+        if primary and core:
+            queries.append(f'ytsearch{n}:{primary} "{core}"')
+            queries.append(f"ytsearch{n}:{primary} {core} official audio")
+        else:
+            queries.append(f"ytsearch{n}:{base} official audio")
+        return list(dict.fromkeys(queries))
+    queries = [f"scsearch{n}:{base}"]
+    if primary and core:
+        queries.append(f"scsearch{n}:{primary} {core}")
+    return list(dict.fromkeys(queries))
+
+
+def _reject_preview_info(info: dict, *, want_duration: int | None = None) -> None:
+    """Raise if this looks like a 30s limited/preview clip."""
+    dur = _entry_duration_sec(info)
+    if _is_preview_clip(dur, want_duration):
+        title = info.get("title") or "track"
+        raise ValueError(
+            f"“{title}” looks like a {dur}s preview/limited clip — skipping."
+        )
+
+
 def _bridge_from_platform(
     *,
     platform: str,
@@ -627,20 +902,10 @@ def _bridge_from_platform(
     artist: str | None,
     duration: int | None,
 ) -> tuple[str, dict]:
-    """Search one platform and pick the best playable match."""
+    """Search one platform and pick the best playable *original* match."""
     base = _match_query(title, artist)
-    if platform == "youtube":
-        searches = [
-            f"ytsearch{_BRIDGE_SEARCH_CANDIDATES}:{base}",
-            f"ytsearch{_BRIDGE_SEARCH_CANDIDATES}:{base} official audio",
-        ]
-    else:
-        searches = [
-            f"scsearch{_BRIDGE_SEARCH_CANDIDATES}:{base}",
-        ]
-
     ranked: list[tuple[int, str, dict]] = []
-    for search in searches:
+    for search in _bridge_search_queries(platform, title, artist):
         try:
             entries = _search_flat_entries(search)
         except Exception as exc:
@@ -653,13 +918,21 @@ def _bridge_from_platform(
             score = _bridge_candidate_score(
                 entry, title=title, artist=artist, duration=duration
             )
+            if score < 0:
+                log.debug(
+                    "Reject flat %s candidate score=%s title=%r",
+                    platform,
+                    score,
+                    entry.get("title"),
+                )
+                continue
             ranked.append((score, url, entry))
 
     ranked.sort(key=lambda row: row[0], reverse=True)
     last_error: Exception | None = None
     seen: set[str] = set()
     for score, url, flat in ranked:
-        if url in seen or score < -20:
+        if url in seen:
             continue
         seen.add(url)
         try:
@@ -668,16 +941,18 @@ def _bridge_from_platform(
             else:
                 info = _extract_info(url, for_stream=True)
                 _pick_stream_url(info)
+            _reject_preview_info(info, want_duration=duration)
             # Re-check with full metadata (duration is often missing in flat results).
             full_score = _bridge_candidate_score(
                 info, title=title, artist=artist, duration=duration
             )
-            if full_score < 0:
+            if full_score < _BRIDGE_MIN_ACCEPT_SCORE:
                 log.info(
-                    "Skipping weak %s match score=%s title=%r",
+                    "Skipping weak %s match score=%s title=%r want=%r",
                     platform,
                     full_score,
                     info.get("title"),
+                    title,
                 )
                 continue
             webpage = (
@@ -686,10 +961,12 @@ def _bridge_from_platform(
                 or url
             )
             log.info(
-                "Spotify bridge via %s score=%s → %s",
+                "Spotify bridge via %s score=%s → %s (want %r by %r)",
                 platform,
                 full_score,
                 info.get("title"),
+                title,
+                artist,
             )
             return str(webpage), info
         except Exception as exc:  # noqa: BLE001
@@ -698,7 +975,10 @@ def _bridge_from_platform(
             continue
 
     detail = f" ({last_error})" if last_error else ""
-    raise ValueError(f"No good {platform} match for “{base}”.{detail}")
+    raise ValueError(
+        f"No faithful {platform} match for “{base}” "
+        f"(skipped covers/remixes/previews).{detail}"
+    )
 
 
 def _youtube_download_works(url: str) -> bool:
@@ -869,6 +1149,30 @@ async def _tracks_from_spotify(
     return tracks
 
 
+def _pick_soundcloud_search_info(query: str) -> dict:
+    """SoundCloud text search — skip 30s preview/limited clips."""
+    entries = _search_flat_entries(f"scsearch{_BRIDGE_SEARCH_CANDIDATES}:{query}")
+    last_err: Exception | None = None
+    for entry in entries:
+        url = _entry_url(entry)
+        if not url:
+            continue
+        try:
+            info = _extract_info(url, for_stream=True)
+            _pick_stream_url(info)
+            _reject_preview_info(info)
+            return info
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            log.info("Skipping SoundCloud search hit %s: %r", url[:80], exc)
+            continue
+    detail = f" ({last_err})" if last_err else ""
+    raise ValueError(
+        "No full-length SoundCloud track found for that search "
+        f"(skipped previews/limited clips).{detail}"
+    )
+
+
 async def resolve_tracks(query: str, requester: discord.Member) -> list[Track]:
     source = _detect_source(query)
     _reject_unsupported(source)
@@ -876,18 +1180,15 @@ async def resolve_tracks(query: str, requester: discord.Member) -> list[Track]:
     if source == "spotify":
         return await _tracks_from_spotify(query, requester)
 
-    info = await asyncio.to_thread(_extract_info, query, for_stream=True)
-    webpage = info.get("webpage_url") or info.get("original_url") or query
-    extractor = (info.get("extractor") or "").lower()
-    resolved_source = source
     if source == "search":
-        if "soundcloud" not in extractor:
-            raise ValueError(
-                "Search only looks on SoundCloud right now. "
-                "Try a SoundCloud / Spotify URL or different keywords."
-            )
+        info = await asyncio.to_thread(_pick_soundcloud_search_info, query.strip())
         resolved_source = "soundcloud"
+    else:
+        info = await asyncio.to_thread(_extract_info, query, for_stream=True)
+        _reject_preview_info(info)
+        resolved_source = source
 
+    webpage = info.get("webpage_url") or info.get("original_url") or query
     return [
         _track_from_soundcloud_info(
             info,

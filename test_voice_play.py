@@ -201,35 +201,46 @@ def main() -> None:
             return
 
         log.info("Connecting to #%s (%s) in %s", channel.name, channel.id, channel.guild.name)
-        voice = await channel.connect(reconnect=True, self_deaf=True)
+        voice = await channel.connect(reconnect=True, self_deaf=False, self_mute=False)
         await asyncio.sleep(0.5)
+
+        # Wait for DAVE encryption — without it Discord clients hear silence.
+        from music import _wait_for_dave, prepare_playable_path, resolve_track
+
+        await _wait_for_dave(voice)
+        conn = getattr(voice, "_connection", None)
+        log.info(
+            "DAVE protocol=%s can_encrypt=%s",
+            getattr(conn, "dave_protocol_version", None),
+            bool(getattr(conn, "can_encrypt", False)),
+        )
 
         tmp_path: Path | None = None
         try:
             if args.url:
-                source_path = await _resolve_url(args.url.strip())
-                log.info("Playing URL/file: %s", source_path[:120])
-                headers = (
-                    "User-Agent: Mozilla/5.0\r\n"
-                    "Referer: https://soundcloud.com/\r\n"
+                class _Req:
+                    display_name = "voice-test"
+                    display_avatar = type(
+                        "A",
+                        (),
+                        {"url": "https://cdn.discordapp.com/embed/avatars/0.png"},
+                    )()
+
+                track = await resolve_track(args.url.strip(), _Req())  # type: ignore[arg-type]
+                local = await prepare_playable_path(track)
+                log.info(
+                    "Playing downloaded %s (%s bytes)", local.name, local.stat().st_size
                 )
-                before = (
-                    "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 "
-                    f"-headers '{headers}'"
-                )
-                source = discord.FFmpegPCMAudio(
-                    source_path,
-                    executable=_ffmpeg(),
-                    before_options=before if source_path.startswith("http") else None,
-                    options="-vn",
-                )
+                pcm = discord.FFmpegPCMAudio(str(local), executable=_ffmpeg(), options="-vn")
+                source = discord.PCMVolumeTransformer(pcm, volume=1.0)
             else:
                 tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
                 tmp_path = Path(tmp.name)
                 tmp.close()
                 _write_tone_wav(tmp_path, seconds=min(args.seconds, 8.0))
                 log.info("Playing generated tone: %s", tmp_path)
-                source = discord.FFmpegPCMAudio(str(tmp_path), executable=_ffmpeg())
+                pcm = discord.FFmpegPCMAudio(str(tmp_path), executable=_ffmpeg())
+                source = discord.PCMVolumeTransformer(pcm, volume=1.0)
 
             done = asyncio.Event()
 

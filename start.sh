@@ -150,14 +150,28 @@ import discord
 print(f"[DreamBot] discord.py {discord.__version__} davey=ok", flush=True)
 ver = tuple(int(p) for p in discord.__version__.split(".")[:2])
 if ver < (2, 7):
-    print("[DreamBot] WARNING: discord.py < 2.7 — voice audio will be silent (no DAVE)", flush=True)
+    print("[DreamBot] FATAL: discord.py < 2.7 — voice is silent without DAVE. Refusing to start.", flush=True)
+    sys.exit(3)
+if not discord.opus.is_loaded():
+    for cand in ("libopus.so.0", "opus", "libopus.dylib"):
+        try:
+            discord.opus.load_opus(cand)
+        except Exception:
+            pass
+    print(f"[DreamBot] opus loaded={discord.opus.is_loaded()}", flush=True)
 print("[DreamBot] core imports ok", flush=True)
 PY
 then
-  echo "[DreamBot] Core imports failed — trying pip install -r requirements.txt"
+  _probe_rc=$?
+  echo "[DreamBot] Core imports failed (rc=${_probe_rc}) — trying pip install -r requirements.txt"
   "$PY_BIN" -m pip install --user -q -r "$ROOT/requirements.txt" \
     || "$PY_BIN" -m pip install -q -r "$ROOT/requirements.txt" \
     || echo "[DreamBot] pip install failed — will still try to launch"
+  # Re-check after install; still refuse ancient discord.py
+  if ! "$PY_BIN" -c "import discord,sys; v=tuple(map(int,discord.__version__.split('.')[:2])); sys.exit(0 if v>=(2,7) else 3)"; then
+    echo "[DreamBot] FATAL: still on discord.py < 2.7 after pip — voice cannot work" >&2
+    exit 3
+  fi
 fi
 
 # Memory snapshot before launch

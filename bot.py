@@ -246,6 +246,24 @@ class DreamTeamBot(commands.Bot):
         else:
             log.warning("GROQ_API_KEY not set — /ask, @mention, and /join AI disabled")
         try:
+            import davey  # noqa: F401
+
+            davey_ok = True
+        except Exception:
+            davey_ok = False
+        log.info(
+            "Voice stack: discord.py=%s davey=%s opus=%s",
+            discord.__version__,
+            "yes" if davey_ok else "NO",
+            discord.opus.is_loaded(),
+        )
+        ver = tuple(int(p) for p in discord.__version__.split(".")[:2])
+        if ver < (2, 7) or not davey_ok:
+            log.error(
+                "Voice will be SILENT: need discord.py>=2.7 + davey "
+                "(pip install -U 'discord.py[voice]' davey)"
+            )
+        try:
             rev = subprocess.check_output(
                 ["git", "log", "-1", "--oneline"],
                 cwd=config.BASE_DIR,

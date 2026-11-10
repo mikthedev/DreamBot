@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -28,6 +29,9 @@ from rich_presence import (
 import config
 
 log = logging.getLogger("dream_team.music")
+
+AUDIO_CACHE_DIR = config.DATA_DIR / "music_cache"
+AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 _SPOTIFY_HTTP_HEADERS = {
@@ -724,14 +728,103 @@ async def resolve_stream_url(track: Track) -> str:
     return stream_url
 
 
-def make_audio_source(stream_url: str) -> discord.AudioSource:
-    # FFmpegPCMAudio → Discord encodes Opus. More reliable for SoundCloud HLS than
-    # FFmpegOpusAudio (Ogg packet parsing often dies silently on m3u8/AAC).
-    return discord.FFmpegPCMAudio(
-        stream_url,
+def _cache_stem(query: str) -> str:
+    return hashlib.sha1(query.encode("utf-8")).hexdigest()[:20]
+
+
+def _download_audio_file(query: str) -> Path:
+    """Download a playable local file via yt-dlp (avoids flaky live HLS in Discord)."""
+    stem = _cache_stem(query)
+    existing = list(AUDIO_CACHE_DIR.glob(f"{stem}.*"))
+    for path in existing:
+        if path.is_file() and path.stat().st_size > 10_000:
+            return path
+
+    outtmpl = str(AUDIO_CACHE_DIR / f"{stem}.%(ext)s")
+    yt_dlp = _yt_dlp()
+    opts = _ytdl_opts(
+        outtmpl=outtmpl,
+        quiet=True,
+        noplaylist=True,
+        overwrites=True,
+        # Keep container ffmpeg can decode without post-processing plugins.
+        format="bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+    )
+    # Drop extract flags that skip writing a file.
+    opts.pop("skip_download", None)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = _unwrap_info(ydl.extract_info(query, download=True))
+
+    requested = info.get("requested_downloads") or []
+    if requested and isinstance(requested[0], dict):
+        filepath = requested[0].get("filepath")
+        if filepath and Path(filepath).is_file():
+            return Path(filepath)
+
+    # Fallback: whatever landed with our stem.
+    matches = sorted(
+        AUDIO_CACHE_DIR.glob(f"{stem}.*"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in matches:
+        if path.is_file() and path.stat().st_size > 10_000:
+            return path
+
+    raise ValueError(f"Download produced no audio file for {query}")
+
+
+async def prepare_playable_path(track: Track) -> Path:
+    """Resolve SoundCloud (incl. Spotify bridge) and download to a local file."""
+
+    def work() -> Path:
+        query = track.query
+        if query.startswith("scbridge:"):
+            search = query.removeprefix("scbridge:")
+            sc_url, _info = _soundcloud_bridge(search)
+            track.query = sc_url
+            query = sc_url
+        elif query.startswith("http") and "soundcloud" not in query.lower():
+            # Fresh stream URL — prefer re-resolving from webpage when we have one.
+            query = track.query
+        return _download_audio_file(query)
+
+    return await asyncio.to_thread(work)
+
+
+def make_audio_source(path_or_url: str) -> discord.AudioSource:
+    # Local file: no reconnect/headers needed. Remote URL: keep stream flags.
+    is_remote = path_or_url.startswith("http://") or path_or_url.startswith("https://")
+    before = FFMPEG_BEFORE if is_remote else None
+    source = discord.FFmpegPCMAudio(
+        path_or_url,
         executable=FFMPEG_EXECUTABLE,
-        before_options=FFMPEG_BEFORE,
+        before_options=before,
         options=FFMPEG_OPTIONS,
+    )
+    # Slight boost — Discord + PCM often feels quiet otherwise.
+    return discord.PCMVolumeTransformer(source, volume=1.0)
+
+
+async def _wait_for_dave(voice: discord.VoiceClient, *, timeout: float = 12.0) -> None:
+    """Discord drops unencrypted voice; wait until DAVE can encrypt packets."""
+    conn = getattr(voice, "_connection", None)
+    if conn is None:
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        # can_encrypt is a @property on VoiceConnectionState (bool, not callable)
+        can = bool(getattr(conn, "can_encrypt", False))
+        ver = getattr(conn, "dave_protocol_version", None)
+        if can:
+            log.info("DAVE ready (protocol=%s)", ver)
+            return
+        await asyncio.sleep(0.15)
+    log.warning(
+        "DAVE not ready after %.1fs (protocol=%s can_encrypt=%s) — audio may be silent",
+        timeout,
+        getattr(conn, "dave_protocol_version", None),
+        bool(getattr(conn, "can_encrypt", False)),
     )
 
 
@@ -867,22 +960,18 @@ class GuildPlayer:
 
         existing = guild.voice_client
         if existing and existing.is_connected():
+            # Music playback uses the stock VoiceClient. If /join left a VoiceRecvClient,
+            # keep it (both can play); otherwise reconnect cleanly.
             if existing.channel and existing.channel.id != channel.id:
                 await existing.move_to(channel)
             self.voice = existing
+            await _wait_for_dave(existing)
             return existing
 
-        # Prefer VoiceRecvClient so /join can share this connection
-        connect_kwargs: dict = {"reconnect": True, "self_deaf": True}
-        try:
-            from discord.ext import voice_recv
-
-            connect_kwargs["cls"] = voice_recv.VoiceRecvClient
-        except ImportError:
-            pass
-
-        self.voice = await channel.connect(**connect_kwargs)
-        await asyncio.sleep(0.5)
+        # Stock VoiceClient — third-party VoiceRecvClient has broken DAVE send on some hosts.
+        self.voice = await channel.connect(reconnect=True, self_deaf=False, self_mute=False)
+        await asyncio.sleep(0.4)
+        await _wait_for_dave(self.voice)
         return self.voice
 
     async def enqueue(self, track: Track) -> int:
@@ -975,21 +1064,41 @@ class GuildPlayer:
                     self.bot.loop.call_soon_threadsafe(finished.set)
 
                 async with self._audio_lock:
+                    local_path: Path | None = None
                     try:
                         if voice.is_playing():
                             voice.stop()
                             await asyncio.sleep(0.2)
 
-                        stream_url = await resolve_stream_url(track)
-                        log.info(
-                            "Starting '%s' via ffmpeg=%s url=%s",
-                            track.title,
-                            FFMPEG_EXECUTABLE,
-                            stream_url[:96],
-                        )
-                        source = make_audio_source(stream_url)
+                        await _wait_for_dave(voice)
+                        try:
+                            local_path = await prepare_playable_path(track)
+                            play_target = str(local_path)
+                            log.info(
+                                "Starting '%s' via ffmpeg=%s file=%s (%s bytes)",
+                                track.title,
+                                FFMPEG_EXECUTABLE,
+                                local_path.name,
+                                local_path.stat().st_size,
+                            )
+                        except Exception as dl_exc:
+                            # Fall back to live stream if download fails.
+                            log.warning(
+                                "Download failed for %s (%r) — streaming instead",
+                                track.title,
+                                dl_exc,
+                            )
+                            play_target = await resolve_stream_url(track)
+                            log.info(
+                                "Starting '%s' via ffmpeg=%s url=%s",
+                                track.title,
+                                FFMPEG_EXECUTABLE,
+                                play_target[:96],
+                            )
+
+                        source = make_audio_source(play_target)
                         track.started_at = time.time()
-                        voice.play(source, after=after_play, signal_type="music")
+                        voice.play(source, after=after_play)
                         await self._set_presence(track)
                     except Exception as exc:
                         log.warning(

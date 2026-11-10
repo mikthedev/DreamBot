@@ -156,6 +156,9 @@ def _extract_info(query: str, *, for_stream: bool) -> dict:
 _HTTP_HEADERS = (
     "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n"
+    "Accept: */*\r\n"
+    "Referer: https://soundcloud.com/\r\n"
+    "Origin: https://soundcloud.com\r\n"
 )
 
 SOURCE_COLORS = {
@@ -182,10 +185,15 @@ def _ffmpeg_executable() -> str:
 
 
 FFMPEG_EXECUTABLE = _ffmpeg_executable()
+# HLS (SoundCloud) needs reconnect + protocol whitelist; headers help CDN allow the pull.
 FFMPEG_BEFORE = (
-    f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 "
+    "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 "
+    "-reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx "
+    "-http_persistent 0 "
+    "-probesize 32M -analyzeduration 0 "
     f"-headers '{_HTTP_HEADERS}'"
 )
+# PCM is more reliable than FFmpegOpusAudio+Ogg for HLS/AAC inputs.
 FFMPEG_OPTIONS = "-vn"
 
 
@@ -681,12 +689,13 @@ async def resolve_stream_url(track: Track) -> str:
 
 
 def make_audio_source(stream_url: str) -> discord.AudioSource:
-    return discord.FFmpegOpusAudio(
+    # FFmpegPCMAudio → Discord encodes Opus. More reliable for SoundCloud HLS than
+    # FFmpegOpusAudio (Ogg packet parsing often dies silently on m3u8/AAC).
+    return discord.FFmpegPCMAudio(
         stream_url,
         executable=FFMPEG_EXECUTABLE,
         before_options=FFMPEG_BEFORE,
         options=FFMPEG_OPTIONS,
-        bitrate=128,
     )
 
 
@@ -783,10 +792,26 @@ class GuildPlayer:
         self.queue: deque[Track] = deque()
         self.current: Track | None = None
         self.voice: discord.VoiceClient | None = None
+        self.announce_channel_id: int | None = None
         self._play_next = asyncio.Event()
         self._audio_lock = asyncio.Lock()
         self._player_task: asyncio.Task | None = None
         self._stopped = False
+        self._playback_error: Exception | None = None
+
+    async def _announce(self, message: str) -> None:
+        if not self.announce_channel_id:
+            return
+        guild = self.bot.get_guild(self.guild_id)
+        if guild is None:
+            return
+        channel = guild.get_channel(self.announce_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            await channel.send(message)
+        except discord.HTTPException as exc:
+            log.debug("Could not announce music error: %s", exc)
 
     def ensure_player_loop(self) -> None:
         if self._player_task is None or self._player_task.done():
@@ -900,9 +925,11 @@ class GuildPlayer:
                 track = self.queue.popleft()
                 self.current = track
                 finished = asyncio.Event()
+                self._playback_error = None
 
                 def after_play(error: Exception | None) -> None:
                     if error:
+                        self._playback_error = error
                         log.warning(
                             "Playback error for %s: %r\n%s",
                             track.title,
@@ -919,9 +946,10 @@ class GuildPlayer:
 
                         stream_url = await resolve_stream_url(track)
                         log.info(
-                            "Starting '%s' via ffmpeg=%s",
+                            "Starting '%s' via ffmpeg=%s url=%s",
                             track.title,
                             FFMPEG_EXECUTABLE,
+                            stream_url[:96],
                         )
                         source = make_audio_source(stream_url)
                         track.started_at = time.time()
@@ -936,9 +964,53 @@ class GuildPlayer:
                         )
                         self.current = None
                         await self._set_presence(None)
+                        await self._announce(
+                            f"Couldn’t start **{track.title}**: `{exc}`"
+                        )
                         continue
 
-                await finished.wait()
+                # Catch silent FFmpeg deaths (card said “Now playing”, audio never flowed).
+                await asyncio.sleep(1.25)
+                legitimately_short = bool(
+                    track.duration is not None and track.duration <= 2
+                )
+                if finished.is_set() and not legitimately_short:
+                    err = self._playback_error
+                    detail = f" `{err}`" if err else ""
+                    log.warning(
+                        "Track ended within 1.25s (no audible play): %s%s",
+                        track.title,
+                        detail,
+                    )
+                    await self._announce(
+                        f"Audio died immediately for **{track.title}**."
+                        f"{detail} Try another link or `/play` again."
+                    )
+                    self.current = None
+                    await self._set_presence(None)
+                    continue
+
+                if (
+                    not finished.is_set()
+                    and not (voice.is_playing() or voice.is_paused())
+                ):
+                    log.warning(
+                        "Voice reports not playing after start: %s", track.title
+                    )
+                    await self._announce(
+                        f"Joined voice but isn’t transmitting **{track.title}**. "
+                        "Check the bot’s Speak permission in that channel."
+                    )
+                    self.current = None
+                    await self._set_presence(None)
+                    continue
+
+                if not finished.is_set():
+                    await finished.wait()
+                if self._playback_error is not None:
+                    await self._announce(
+                        f"Playback error on **{track.title}**: `{self._playback_error}`"
+                    )
                 self.current = None
                 if not self.queue:
                     await self._set_presence(None)
@@ -1192,6 +1264,8 @@ class MusicCog(commands.Cog):
 
         await interaction.response.defer()
         player = self.get_player(interaction.guild_id)
+        if interaction.channel_id:
+            player.announce_channel_id = interaction.channel_id
         was_idle = player.current is None and not player.queue
 
         try:

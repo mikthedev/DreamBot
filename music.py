@@ -48,6 +48,7 @@ _SPOTIFY_KIND_RE = re.compile(
 )
 _SPOTIFY_SHORT_HOSTS = {"spotify.link", "spotify.app.link", "spoti.fi"}
 _SPOTIFY_PLAYLIST_CAP = 50
+_EPHEMERAL_DELETE_AFTER = 20.0
 _BRIDGE_SEARCH_CANDIDATES = 12
 # Reject weak matches rather than playing a cover/remix of the wrong recording.
 _BRIDGE_MIN_ACCEPT_SCORE = 55
@@ -1440,7 +1441,9 @@ class MusicControlsView(discord.ui.View):
             return
         await cog.get_player(interaction.guild.id).stop()
         await interaction.response.send_message(
-            "Stopped and left the voice channel.", ephemeral=True
+            "Stopped and left the voice channel.",
+            ephemeral=True,
+            delete_after=_EPHEMERAL_DELETE_AFTER,
         )
 
     @discord.ui.button(
@@ -1469,7 +1472,9 @@ class MusicControlsView(discord.ui.View):
             )
             return
         await interaction.response.send_message(
-            embed=queue_embed(player), ephemeral=True
+            embed=queue_embed(player),
+            ephemeral=True,
+            delete_after=_EPHEMERAL_DELETE_AFTER,
         )
 
     @discord.ui.button(
@@ -1500,7 +1505,9 @@ class MusicControlsView(discord.ui.View):
         skipped = await player.skip()
         title = skipped.title if skipped else "current track"
         await interaction.response.send_message(
-            f"Skipped **{title}**.", ephemeral=True
+            f"Skipped **{title}**.",
+            ephemeral=True,
+            delete_after=_EPHEMERAL_DELETE_AFTER,
         )
 
 
@@ -2142,10 +2149,6 @@ class MusicCog(commands.Cog):
 
             msg = await channel.send(embed=embed, view=view)
             self.bot.db.set_now_playing_panel(guild_id, channel.id, msg.id)
-            try:
-                await msg.pin(reason="Dream Team now-playing panel")
-            except discord.HTTPException:
-                pass
         except discord.Forbidden:
             log.warning("Cannot update now-playing panel in %s", guild.name)
         except discord.HTTPException as exc:
@@ -2218,7 +2221,9 @@ class MusicCog(commands.Cog):
             msg = str(exc)
             msg = re.sub(r"\x1b\[[0-9;]*m", "", msg)
             await interaction.followup.send(
-                f"Couldn't play that: {msg}", ephemeral=True
+                f"Couldn't play that: {msg}",
+                ephemeral=True,
+                delete_after=_EPHEMERAL_DELETE_AFTER,
             )
             return
 
@@ -2244,7 +2249,9 @@ class MusicCog(commands.Cog):
             ack = f"Starting **{_clip(track.title, 80)}**…"
             if extra:
                 ack += f" (+{extra} more queued)"
-            await interaction.followup.send(ack, ephemeral=True)
+            await interaction.followup.send(
+                ack, ephemeral=True, delete_after=_EPHEMERAL_DELETE_AFTER
+            )
             return
 
         # Something already playing — bump the one player message, don't spam a new card.
@@ -2264,7 +2271,9 @@ class MusicCog(commands.Cog):
             )
         else:
             ack = f"Queued **{_clip(track.title, 80)}** (#{position})."
-        await interaction.followup.send(ack, ephemeral=True)
+        await interaction.followup.send(
+            ack, ephemeral=True, delete_after=_EPHEMERAL_DELETE_AFTER
+        )
 
     @app_commands.command(name="pause", description="Pause the current track")
     async def pause(self, interaction: discord.Interaction) -> None:

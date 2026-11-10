@@ -112,9 +112,9 @@ echo "[DreamBot] Python: $("$PY_BIN" -V 2>&1) at $PY_BIN"
 
 # Force DAVE-capable discord.py. Older 2.6 builds join voice and run ffmpeg but
 # clients hear silence (Discord requires DAVE encryption since 2026-03-02).
-echo "[DreamBot] Ensuring discord.py[voice]>=2.7 + davey (DAVE)"
-"$PY_BIN" -m pip install --user -q -U 'discord.py[voice]>=2.7.0' 'davey>=0.1.0' 'PyNaCl>=1.5.0' \
-  || "$PY_BIN" -m pip install -q -U 'discord.py[voice]>=2.7.0' 'davey>=0.1.0' 'PyNaCl>=1.5.0' \
+echo "[DreamBot] Ensuring discord.py[voice]>=2.7 + davey>=0.2 (DAVE)"
+"$PY_BIN" -m pip install --user -q -U 'discord.py[voice]>=2.7.0' 'davey>=0.2.0' 'PyNaCl>=1.5.0' \
+  || "$PY_BIN" -m pip install -q -U 'discord.py[voice]>=2.7.0' 'davey>=0.2.0' 'PyNaCl>=1.5.0' \
   || echo "[DreamBot] discord.py upgrade skipped"
 
 # Optional voice-recv (DAVE decrypt). Must NOT live in requirements.txt — the host

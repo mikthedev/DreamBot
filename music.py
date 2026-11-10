@@ -806,26 +806,59 @@ def make_audio_source(path_or_url: str) -> discord.AudioSource:
     return discord.PCMVolumeTransformer(source, volume=1.0)
 
 
-async def _wait_for_dave(voice: discord.VoiceClient, *, timeout: float = 12.0) -> None:
+def _dave_debug(conn: Any) -> str:
+    session = getattr(conn, "dave_session", None)
+    if session is None:
+        return "session=None"
+    try:
+        return (
+            f"ready={session.ready} status={session.status} "
+            f"epoch={session.epoch} sess_can_encrypt={session.can_encrypt}"
+        )
+    except Exception as exc:
+        return f"session_err={exc!r}"
+
+
+async def _wait_for_dave(voice: discord.VoiceClient, *, timeout: float = 20.0) -> bool:
     """Discord drops unencrypted voice; wait until DAVE can encrypt packets."""
     conn = getattr(voice, "_connection", None)
     if conn is None:
-        return
+        return False
     deadline = time.monotonic() + timeout
+    last_log = 0.0
     while time.monotonic() < deadline:
         # can_encrypt is a @property on VoiceConnectionState (bool, not callable)
         can = bool(getattr(conn, "can_encrypt", False))
         ver = getattr(conn, "dave_protocol_version", None)
         if can:
-            log.info("DAVE ready (protocol=%s)", ver)
-            return
+            log.info("DAVE ready (protocol=%s %s)", ver, _dave_debug(conn))
+            return True
+        now = time.monotonic()
+        if now - last_log >= 3.0:
+            log.info(
+                "DAVE waiting… protocol=%s can_encrypt=%s %s",
+                ver,
+                can,
+                _dave_debug(conn),
+            )
+            last_log = now
+            # Nudge a stuck pending session once.
+            session = getattr(conn, "dave_session", None)
+            if session is not None and not session.ready:
+                try:
+                    session.prepare_transition(0, int(ver or 1))
+                    session.execute_transition(0)
+                except Exception:
+                    pass
         await asyncio.sleep(0.15)
     log.warning(
-        "DAVE not ready after %.1fs (protocol=%s can_encrypt=%s) — audio may be silent",
+        "DAVE not ready after %.1fs (protocol=%s can_encrypt=%s %s) — audio may be silent",
         timeout,
         getattr(conn, "dave_protocol_version", None),
         bool(getattr(conn, "can_encrypt", False)),
+        _dave_debug(conn),
     )
+    return False
 
 
 class MusicControlsView(discord.ui.View):
@@ -1042,19 +1075,52 @@ class GuildPlayer:
             raise RuntimeError("Guild not found.")
 
         existing = guild.voice_client
+        # Always prefer a stock VoiceClient for music. VoiceRecvClient (from /join)
+        # often never finishes the DAVE MLS handshake → silent audio on hosts.
         if existing and existing.is_connected():
-            # Music playback uses the stock VoiceClient. If /join left a VoiceRecvClient,
-            # keep it (both can play); otherwise reconnect cleanly.
-            if existing.channel and existing.channel.id != channel.id:
-                await existing.move_to(channel)
-            self.voice = existing
-            await _wait_for_dave(existing)
-            return existing
+            is_recv = existing.__class__.__name__ == "VoiceRecvClient"
+            wrong_channel = bool(
+                existing.channel and existing.channel.id != channel.id
+            )
+            if is_recv or wrong_channel:
+                log.info(
+                    "Reconnecting voice for music (recv=%s move=%s)",
+                    is_recv,
+                    wrong_channel,
+                )
+                try:
+                    await existing.disconnect(force=True)
+                except Exception as exc:
+                    log.debug("Disconnect before music reconnect: %r", exc)
+                await asyncio.sleep(0.5)
+            else:
+                self.voice = existing
+                if await _wait_for_dave(existing):
+                    return existing
+                log.warning("Existing voice DAVE stuck — forcing reconnect")
+                try:
+                    await existing.disconnect(force=True)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
 
-        # Stock VoiceClient — third-party VoiceRecvClient has broken DAVE send on some hosts.
-        self.voice = await channel.connect(reconnect=True, self_deaf=False, self_mute=False)
+        self.voice = await channel.connect(
+            reconnect=True, self_deaf=False, self_mute=False
+        )
         await asyncio.sleep(0.4)
-        await _wait_for_dave(self.voice)
+        if not await _wait_for_dave(self.voice):
+            # One hard reset of the voice websocket / MLS session.
+            log.warning("DAVE still not ready — cycling voice connection")
+            try:
+                await self.voice.disconnect(force=True)
+            except Exception:
+                pass
+            await asyncio.sleep(0.8)
+            self.voice = await channel.connect(
+                reconnect=True, self_deaf=False, self_mute=False
+            )
+            await asyncio.sleep(0.4)
+            await _wait_for_dave(self.voice)
         return self.voice
 
     async def enqueue(self, track: Track) -> int:

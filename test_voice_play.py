@@ -160,6 +160,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     _print_env()
+    from dave_fix import apply_dave_patches
+
+    apply_dave_patches()
 
     intents = discord.Intents.default()
     intents.guilds = True

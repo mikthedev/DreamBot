@@ -20,6 +20,7 @@ from birthdays import (
     parse_birthday,
 )
 from database import Database
+from dave_fix import apply_dave_patches
 from music import MusicCog, MusicControlsView
 from names import WelcomeNameView, WelcomePrivateView, apply_real_name
 from nicknames import build_nickname, display_base, is_guild_manager
@@ -207,6 +208,7 @@ class DreamTeamBot(commands.Bot):
         await super().login(token)
 
     async def setup_hook(self) -> None:
+        apply_dave_patches()
         # Persistent buttons (work after restarts)
         self.add_view(BirthdaySignupView())
         self.add_view(WelcomeNameView())

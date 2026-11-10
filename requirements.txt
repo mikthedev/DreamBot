@@ -2,7 +2,7 @@
 discord.py[voice]>=2.7.0,<3.0.0
 python-dotenv>=1.0.0
 PyNaCl>=1.5.0
-davey>=0.1.0
+davey>=0.2.0
 # SoundCloud audio for /play; Bluesky media helpers (YouTube not used)
 yt-dlp[default]>=2026.3.10
 certifi>=2024.0.0

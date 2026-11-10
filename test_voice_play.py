@@ -18,16 +18,23 @@ import asyncio
 import logging
 import os
 import shutil
+import ssl
 import struct
 import tempfile
 import wave
 from pathlib import Path
 
+import aiohttp
+import certifi
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# macOS python.org builds often lack system CAs
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -160,6 +167,11 @@ def main() -> None:
     bot = commands.Bot(command_prefix="!", intents=intents)
 
     @bot.event
+    async def setup_hook() -> None:
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        bot.http.connector = aiohttp.TCPConnector(ssl=ctx)
+
+    @bot.event
     async def on_ready() -> None:
         log.info("Logged in as %s (%s)", bot.user, bot.user and bot.user.id)
         channel: discord.VoiceChannel | None = None
@@ -168,18 +180,16 @@ def main() -> None:
             if isinstance(ch, discord.VoiceChannel):
                 channel = ch
         else:
-            me = bot.user
+            # Prefer a channel that already has a human in it.
+            scored: list[tuple[int, discord.VoiceChannel]] = []
             for guild in bot.guilds:
                 for vc in guild.voice_channels:
-                    if me and any(m.id == me.id for m in vc.members):
-                        continue
-                    # Prefer a channel that has a human member
                     humans = [m for m in vc.members if not m.bot]
                     if humans:
-                        channel = vc
-                        break
-                if channel:
-                    break
+                        scored.append((len(humans), vc))
+            if scored:
+                scored.sort(key=lambda item: item[0], reverse=True)
+                channel = scored[0][1]
 
         if channel is None:
             log.error(

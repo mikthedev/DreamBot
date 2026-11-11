@@ -7,6 +7,7 @@ import re
 import ssl
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -37,7 +38,8 @@ PENDING_SECONDS = 90.0
 CONVO_SECONDS = 90.0
 HISTORY_TURNS = 6
 
-SYSTEM_INSTRUCTION = (
+_PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "inworld_dreambot_system.txt"
+_FALLBACK_SYSTEM = (
     "You are Dream, a sharp but chill teammate on the Dream Team Discord.\n"
     "Talk naturally — short, warm, conversational. Usually 1–2 sentences in voice.\n"
     "No markdown, no bullet lists, no headers, no robotic phrasing.\n"
@@ -59,6 +61,19 @@ SYSTEM_INSTRUCTION = (
     "Refer to patches by calendar DATE only. Never invent nerfs/buffs.\n"
     "For Discord bot features: briefly point to slash commands."
 )
+
+
+def _load_system_instruction() -> str:
+    try:
+        text = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    except OSError:
+        log.warning("Could not read %s — using built-in Dream system prompt", _PROMPT_PATH)
+    return _FALLBACK_SYSTEM
+
+
+SYSTEM_INSTRUCTION = _load_system_instruction()
 
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
@@ -555,9 +570,12 @@ async def generate_reply(
             "environment (Inworld Portal → API key)."
         )
 
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": system or SYSTEM_INSTRUCTION},
-    ]
+    messages: list[dict[str, str]] = []
+    # Router may already own the Dream system template; local copy is default on.
+    if config.INWORLD_USE_LOCAL_SYSTEM:
+        messages.append(
+            {"role": "system", "content": system or SYSTEM_INSTRUCTION}
+        )
     if history:
         for turn in history[-HISTORY_TURNS * 2 :]:
             messages.append({"role": turn.role, "content": turn.content})
@@ -609,12 +627,15 @@ async def generate_reply(
             "Keep the same meaning. Do not add new facts.\n\n"
             f"Answer to rewrite:\n{reply}"
         )
+        rewrite_messages: list[dict[str, str]] = []
+        if config.INWORLD_USE_LOCAL_SYSTEM:
+            rewrite_messages.append(
+                {"role": "system", "content": SYSTEM_INSTRUCTION}
+            )
+        rewrite_messages.append({"role": "user", "content": fix_prompt})
         payload2 = {
             "model": config.INWORLD_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_INSTRUCTION},
-                {"role": "user", "content": fix_prompt},
-            ],
+            "messages": rewrite_messages,
             "temperature": 0.2,
             "max_tokens": max_tokens,
         }

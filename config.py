@@ -102,6 +102,11 @@ INWORLD_CHAT_URL = (
     ).strip()
     or "https://api.inworld.ai/v1/chat/completions"
 )
+# 1/true = send local system prompt with each request (default).
+# Set 0 after the same text is saved on the Inworld router message template.
+INWORLD_USE_LOCAL_SYSTEM = os.getenv(
+    "INWORLD_USE_LOCAL_SYSTEM", "1"
+).strip().lower() not in ("0", "false", "no", "off")
 
 # Groq Whisper for voice STT only — https://console.groq.com/keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()

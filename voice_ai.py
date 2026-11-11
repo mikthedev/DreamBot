@@ -450,8 +450,11 @@ class VoiceAICog(commands.Cog):
             self._bump_idle_timer(guild_id)
             reply = (turn.reply or "").strip()
             if reply:
-                # Speak first; transcript is secondary (don't add Discord RTT)
-                asyncio.create_task(self._announce_text(guild_id, who, reply))
+                # Default: voice only. Text chat only if they asked for it.
+                if getattr(turn, "show_text", False):
+                    asyncio.create_task(
+                        self._announce_text(guild_id, who, reply)
+                    )
                 await self._speak(guild, reply)
             if turn.leave:
                 await self._leave_voice(guild_id)
@@ -479,26 +482,43 @@ class VoiceAICog(commands.Cog):
             pass
 
     async def _announce_text(self, guild_id: int, who: str, reply: str) -> None:
-        """Private transcript for the /join user — ephemeral in-channel."""
-        inter = self._join_interaction.get(guild_id)
-        if inter is None:
-            return
+        """Post the spoken answer in text chat — only when the user asked for text."""
         embed = discord.Embed(
-            title="Dream (voice)",
+            title="Dream",
             description=reply[:4096],
             color=discord.Color.from_rgb(46, 230, 166),
         )
-        embed.set_footer(text=f"Heard {who} · only you can see this")
+        embed.set_footer(text=f"Voice reply for {who}")
+
+        # Prefer the configured voice-log channel, else the /join text channel.
+        channel = None
         try:
-            await inter.followup.send(embed=embed, ephemeral=True)
-        except (discord.NotFound, discord.HTTPException) as exc:
-            # Interaction token expires ~15 min after /join
-            log.info(
-                "Ephemeral transcript failed guild=%s (token expired?): %s",
-                guild_id,
-                exc,
-            )
-            self._join_interaction.pop(guild_id, None)
+            log_id = self.bot.db.get_voice_log_channel(guild_id)
+        except Exception:
+            log_id = None
+        if log_id:
+            channel = self.bot.get_channel(int(log_id))
+        if not isinstance(channel, discord.TextChannel):
+            channel_id = self._text_channel.get(guild_id)
+            channel = self.bot.get_channel(channel_id) if channel_id else None
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            msg = await channel.send(embed=embed)
+            try:
+                delete_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=TRANSCRIPT_TTL_SECONDS
+                )
+                self.bot.db.schedule_voice_log_delete(
+                    guild_id,
+                    channel.id,
+                    msg.id,
+                    delete_at,
+                )
+            except Exception:
+                log.debug("Could not schedule voice text delete", exc_info=True)
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.info("Voice text post failed guild=%s: %s", guild_id, exc)
 
     @tasks.loop(seconds=TRANSCRIPT_CLEANUP_SECONDS)
     async def _cleanup_transcripts(self) -> None:
@@ -726,9 +746,11 @@ class VoiceAICog(commands.Cog):
         await interaction.followup.send(
             f"Listening in **{channel.name}**. Say **Dream, …** to talk "
             f"(~90s follow-ups without repeating Dream). "
+            f"I answer in **voice** only — say **show as text** / **напиши текстом** "
+            f"if you also want it in chat. "
             f"To leave: **Dream leave** / **disconnect** / **выйди** / **вийди** / "
             f"**thank Dream** (EN/RU/UK). Idle 2.5 min → I leave. "
-            f"Replies show only to you. Use `/disconnect` anytime.",
+            f"Use `/disconnect` anytime.",
             ephemeral=True,
         )
 

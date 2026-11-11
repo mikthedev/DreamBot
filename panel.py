@@ -578,7 +578,7 @@ class AdminHubView(discord.ui.View):
                 discord.SelectOption(
                     label="Dream AI",
                     value="dream",
-                    description="Voice transcript channel (24h auto-delete)",
+                    description="Channel for voice→text when asked (24h delete)",
                     emoji="🎤",
                 ),
                 discord.SelectOption(

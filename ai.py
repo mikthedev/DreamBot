@@ -468,6 +468,40 @@ class VoiceTurnResult:
 
     reply: str | None = None
     leave: bool = False
+    # True only when the user asked to also put the answer in text chat
+    show_text: bool = False
+
+
+# "Dream, … and show that as text" — otherwise voice answers stay audio-only.
+_TEXT_REQUEST_RE = re.compile(
+    r"(?i)(?:"
+    r"(?:please\s+)?(?:also\s+)?"
+    r"(?:show|send|write|post|type|put|drop)\s+"
+    r"(?:it|that|this|the\s+answer|the\s+reply)?\s*"
+    r"(?:as\s+)?(?:(?:in|into|to)\s+)?"
+    r"(?:text|chat|discord|message|here)\b|"
+    r"(?:text|write)\s+(?:it|that|this)\b(?:\s+(?:in|into|to)\s+chat)?|"
+    r"\bin\s+(?:the\s+)?(?:text\s+)?chat\b|"
+    r"\bas\s+text\b|"
+    r"(?:покажи|напиши|скинь|пришли|выведи|надішли)\s+"
+    r"(?:это|це|ответ|відповідь|его|її)?\s*"
+    r"(?:в\s+|у\s+)?"
+    r"(?:текст(?:ом)?|чат(?:е|і)?|дискорд)\b|"
+    r"\bтекстом\b|"
+    r"\bв\s+чат(?:е|і)?\b"
+    r")"
+)
+
+
+def wants_text_reply(text: str) -> bool:
+    return bool(_TEXT_REQUEST_RE.search(text or ""))
+
+
+def strip_text_request(text: str) -> str:
+    """Remove the 'show as text' ask so the LLM answers the real question."""
+    cleaned = _TEXT_REQUEST_RE.sub(" ", text or "")
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.-")
+    return cleaned or (text or "").strip()
 
 
 def is_affirmative(text: str) -> bool:
@@ -1323,6 +1357,16 @@ async def voice_reply_from_wav(
         touch_session(guild_id, user_id, last_lang=lang)
         return VoiceTurnResult(reply=bye, leave=True)
 
+    show_text = wants_text_reply(question)
+    if show_text:
+        question = strip_text_request(question)
+        if not question.strip():
+            # They only asked for text — speak/show a short nudge.
+            nudge = empty_prompt_reply(lang)
+            return VoiceTurnResult(
+                reply=nudge, leave=False, show_text=True
+            )
+
     reply = await handle_user_turn(
         question,
         session=session,
@@ -1331,7 +1375,7 @@ async def voice_reply_from_wav(
         user_id=user_id,
         voice=True,
     )
-    return VoiceTurnResult(reply=reply, leave=False)
+    return VoiceTurnResult(reply=reply, leave=False, show_text=show_text)
 
 
 def _api_error_message(data: Any) -> str:

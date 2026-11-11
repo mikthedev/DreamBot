@@ -46,7 +46,7 @@ Chat runs through the [Inworld Router](https://docs.inworld.ai/router/quickstart
 
 Ask about any Overwatch hero and Dream scans the live [Blizzard patch notes](https://overwatch.blizzard.com/en-us/news/patch-notes/) (including older months on that site), then answers with the **patch date** — never the patch title. Example: *Dream, was Genji nerfed?* → short take, then offer details; say **yes** / **да** for highlights. Ask anything else and Dream still answers naturally like a teammate.
 
-Voice transcript embeds (text copies of what Dream said) go to a channel you set in **`/panel` → Dream AI**, and the bot deletes them after **24 hours**.
+Voice answers stay in VC by default. If you ask Dream to **show as text** / **напиши текстом**, a text copy is posted to the channel from **`/panel` → Dream AI** (or the channel you `/join`’d from) and deleted after **24 hours**.
 
 ---
 

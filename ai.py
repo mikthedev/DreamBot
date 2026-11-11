@@ -629,6 +629,8 @@ async def generate_reply(
     history: list[ChatTurn] | None = None,
     lang: str | None = None,
     mode: str = "text",
+    # Voice path skips the language-rewrite second call (latency).
+    allow_language_rewrite: bool | None = None,
 ) -> str:
     if not config.INWORLD_API_KEY:
         raise AIError(
@@ -671,7 +673,7 @@ async def generate_reply(
             config.INWORLD_CHAT_URL,
             json=payload,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=45),
+            timeout=aiohttp.ClientTimeout(total=20 if mode == "voice" else 45),
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status >= 400:
@@ -691,8 +693,13 @@ async def generate_reply(
         raise AIError("AI returned an empty reply. Try rephrasing.")
     reply = _strip_markdown(text.strip())
 
+    do_rewrite = (
+        allow_language_rewrite
+        if allow_language_rewrite is not None
+        else mode != "voice"
+    )
     # One retry if the model ignored REPLY LANGUAGE (common EN→UA bleed)
-    if lang and not reply_matches_language(reply, lang):
+    if do_rewrite and lang and not reply_matches_language(reply, lang):
         log.info("Language mismatch (want=%s) — rewriting", lang)
         fix_prompt = (
             f"{language_instruction(lang)}\n"
@@ -784,7 +791,7 @@ async def _whisper_once(
         GROQ_TRANSCRIBE_URL,
         data=form,
         headers=headers,
-        timeout=aiohttp.ClientTimeout(total=45),
+        timeout=aiohttp.ClientTimeout(total=12),
     ) as resp:
         data = await resp.json(content_type=None)
         if resp.status >= 400:
@@ -877,10 +884,12 @@ async def transcribe_audio(
     *,
     session: aiohttp.ClientSession,
     filename: str = "clip.wav",
+    fast: bool = False,
 ) -> str:
     """
     Transcribe with Whisper large-v3 + vocabulary prompt.
     Pick the best pass by confidence — do not 'fix' wrong words into right ones.
+    fast=True: single Whisper pass (voice path — lower latency).
     """
     if not whisper_configured():
         raise AIError(
@@ -904,6 +913,16 @@ async def transcribe_audio(
             first.text[:80],
         )
         return ""
+
+    if fast:
+        log.info(
+            "STT fast lang=%s no_speech=%.2f logprob=%.2f text=%r",
+            first.language,
+            first.no_speech,
+            first.avg_logprob,
+            first.text[:120],
+        )
+        return first.text
 
     candidates = [first]
 
@@ -1144,7 +1163,12 @@ async def handle_user_turn(
     q = resolve_question(raw, sess)
     if not is_affirmative(raw) and len(raw.split()) >= 3:
         lang = detect_user_language(raw, fallback=None)
-    history = list(sess.history) if sess and sess.history else None
+    # Voice: keep less history — fewer tokens → faster Inworld TTFT.
+    if sess and sess.history:
+        keep = 4 if voice else HISTORY_TURNS * 2
+        history = list(sess.history[-keep:])
+    else:
+        history = None
     context_line = ""
     if sess and sess.last_hero:
         context_line = f"LAST HERO in this chat: {sess.last_hero}\n"
@@ -1186,11 +1210,12 @@ async def handle_user_turn(
             reply = await generate_reply(
                 prompt,
                 session=session,
-                max_tokens=80,
+                max_tokens=60 if voice else 80,
                 temperature=0.25,
                 history=history,
                 lang=lang,
                 mode="voice" if voice else "text",
+                allow_language_rewrite=not voice,
             )
             remember_turn(
                 guild_id, user_id, user=raw, assistant=reply, hero=hero, lang=lang
@@ -1220,11 +1245,19 @@ async def handle_user_turn(
         and not _patch_question(q)
     ):
         try:
-            web_block = await gather_web_facts(q, session)
+            import asyncio as _asyncio
+
+            # Voice: don't wait long for web — answer fast if lookup is slow.
+            web_timeout = 0.7 if voice else 8.0
+            web_block = await _asyncio.wait_for(
+                gather_web_facts(q, session),
+                timeout=web_timeout,
+            )
             if web_block:
                 log.info("Web facts loaded for: %r", q[:80])
         except Exception:
-            log.debug("Web search failed", exc_info=True)
+            log.debug("Web search skipped/failed", exc_info=True)
+            web_block = ""
 
     style = (
         "Reply like a real friend in voice chat: natural, warm, 1–2 short "
@@ -1243,11 +1276,12 @@ async def handle_user_turn(
     reply = await generate_reply(
         f"{lang_line}{context_line}{facts_line}{style}\n\nUser: {q}",
         session=session,
-        max_tokens=120 if voice else 200,
+        max_tokens=80 if voice else 200,
         temperature=0.25 if web_block else 0.35,
         history=history,
         lang=lang,
         mode="voice" if voice else "text",
+        allow_language_rewrite=not voice,
     )
     maybe_hero = extract_hero_query(q)
     remember_turn(
@@ -1300,7 +1334,7 @@ async def voice_reply_from_wav(
     Transcribe → wake / active convo / pending-yes → answer.
     Returns None if this utterance should be ignored.
     """
-    transcript = await transcribe_audio(wav_bytes, session=session)
+    transcript = await transcribe_audio(wav_bytes, session=session, fast=True)
     if not (transcript or "").strip():
         log.info("Empty / non-speech transcript ignored")
         return None

@@ -37,14 +37,14 @@ _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 SAMPLE_RATE = 48000
 CHANNELS = 2
 SAMPLE_WIDTH = 2
-# Wait for a clear end-of-phrase pause, but keep it snappy for voice latency.
-SILENCE_SECONDS = 0.65
-MIN_UTTERANCE_SECONDS = 0.45
-MAX_UTTERANCE_SECONDS = 12.0
+# End-of-phrase gate — lower = faster reply, higher = fewer mid-sentence cuts.
+SILENCE_SECONDS = 0.35
+MIN_UTTERANCE_SECONDS = 0.30
+MAX_UTTERANCE_SECONDS = 10.0
 RMS_THRESHOLD = 420
 # Clip must have enough real speech (not just noise spikes)
 MIN_VOICED_RATIO = 0.18
-WAKE_COOLDOWN_SECONDS = 0.6
+WAKE_COOLDOWN_SECONDS = 0.35
 ALONE_LEAVE_SECONDS = 10.0
 # Leave VC if nobody wakes Dream with the wake word
 IDLE_LEAVE_SECONDS = 150.0  # 2.5 minutes
@@ -322,7 +322,7 @@ async def synthesize_speech(text: str, out_path: Path) -> Path:
         voice = config.TTS_VOICE
 
     last_exc: BaseException | None = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             communicate = edge_tts.Communicate(
                 text,
@@ -339,7 +339,7 @@ async def synthesize_speech(text: str, out_path: Path) -> Path:
         except Exception as exc:
             last_exc = exc
             log.warning("TTS attempt %s failed: %s", attempt + 1, exc)
-            await asyncio.sleep(0.4 * (attempt + 1))
+            await asyncio.sleep(0.25 * (attempt + 1))
     raise AIError(
         "Could not speak right now (TTS blocked). "
         "Try again in a moment."
@@ -402,7 +402,8 @@ class VoiceAICog(commands.Cog):
     async def _poll_loop(self) -> None:
         try:
             while True:
-                await asyncio.sleep(0.25)
+                # Tight poll — silence gate already decides readiness.
+                await asyncio.sleep(0.08)
                 now = time.monotonic()
                 for guild_id, sink in list(self._listening.items()):
                     deadline = self._idle_deadline.get(guild_id)
@@ -439,6 +440,7 @@ class VoiceAICog(commands.Cog):
                 log.info("Voice clip too large in guild %s — skipped", guild_id)
                 return
 
+            t0 = time.monotonic()
             log.info(
                 "Processing voice clip in guild %s user %s (%s bytes wav)",
                 guild_id,
@@ -455,7 +457,11 @@ class VoiceAICog(commands.Cog):
                 user_id=user_id,
             )
             if turn is None or (not turn.reply and not turn.leave):
-                log.info("No wake / ignored clip (guild %s)", guild_id)
+                log.info(
+                    "No wake / ignored clip (guild %s) in %.0fms",
+                    guild_id,
+                    (time.monotonic() - t0) * 1000,
+                )
                 return
 
             guild = self.bot.get_guild(guild_id)
@@ -463,7 +469,13 @@ class VoiceAICog(commands.Cog):
                 return
             member = guild.get_member(user_id)
             who = member.display_name if member else f"user {user_id}"
-            log.info("Voice wake from %s in %s", who, guild.name)
+            think_ms = (time.monotonic() - t0) * 1000
+            log.info(
+                "Voice wake from %s in %s (think=%.0fms)",
+                who,
+                guild.name,
+                think_ms,
+            )
 
             self._bump_idle_timer(guild_id)
             reply = (turn.reply or "").strip()
@@ -473,7 +485,15 @@ class VoiceAICog(commands.Cog):
                     asyncio.create_task(
                         self._announce_text(guild_id, who, reply)
                     )
+                tts_t0 = time.monotonic()
                 await self._speak(guild, reply)
+                log.info(
+                    "Voice reply done guild=%s think=%.0fms speak=%.0fms total=%.0fms",
+                    guild_id,
+                    think_ms,
+                    (time.monotonic() - tts_t0) * 1000,
+                    (time.monotonic() - t0) * 1000,
+                )
             if turn.leave:
                 await self._leave_voice(guild_id)
                 return
@@ -584,7 +604,8 @@ class VoiceAICog(commands.Cog):
                 log.info("Skipping TTS while music is playing in %s", guild.name)
                 return
 
-        self.pause_listening(guild.id, 12.0)
+        # Pause only while synthesizing + playing (avoid hearing ourselves).
+        self.pause_listening(guild.id, 30.0)
         tmp = Path(tempfile.mkdtemp(prefix="dream_tts_"))
         mp3 = tmp / "reply.mp3"
         try:
@@ -598,7 +619,12 @@ class VoiceAICog(commands.Cog):
                     log.warning("TTS playback error: %s", err)
                 self.bot.loop.call_soon_threadsafe(done.set)
 
-            source = discord.FFmpegPCMAudio(str(mp3))
+            # Low-latency decode — skip probing fluff.
+            source = discord.FFmpegPCMAudio(
+                str(mp3),
+                before_options="-nostdin",
+                options="-vn -ac 2 -ar 48000",
+            )
             voice.play(source, after=_after)
             try:
                 await asyncio.wait_for(done.wait(), timeout=90)
@@ -759,7 +785,18 @@ class VoiceAICog(commands.Cog):
             except Exception:
                 log.debug("Patch cache warm failed", exc_info=True)
 
+        async def _warm_tts() -> None:
+            # First Edge handshake is the slow one — pay it on /join, not on reply.
+            try:
+                warm = Path(tempfile.mkdtemp(prefix="dream_tts_warm_")) / "w.mp3"
+                await synthesize_speech("ok", warm)
+                warm.unlink(missing_ok=True)
+                warm.parent.rmdir()
+            except Exception:
+                log.debug("TTS warm failed", exc_info=True)
+
         asyncio.create_task(_warm_patches())
+        asyncio.create_task(_warm_tts())
 
         await interaction.followup.send(
             f"Listening in **{channel.name}**. Say **Dream, …** to talk "

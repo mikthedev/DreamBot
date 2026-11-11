@@ -36,7 +36,7 @@ If the channel empties, the bot leaves after **10 seconds**.
 
 ## Dream AI
 
-**100% free** — Llama on [Groq](https://console.groq.com/keys) (no Google billing). Whisper for voice, edge-tts for speech (masculine EN / RU voices).
+Chat runs through the [Inworld Router](https://docs.inworld.ai/router/quickstart) (`inworld/dreambot` by default). Voice still uses free [Groq Whisper](https://console.groq.com/keys) for listening and edge-tts for speech (masculine EN / RU / UK voices).
 
 | How | What happens |
 |---|---|
@@ -95,7 +95,7 @@ Auto suggestions, auto events, and personal invites each have an on/off toggle. 
 | | |
 |---|---|
 | `/help` | Quick guide |
-| `/ask` | Chat with free Llama (Groq) |
+| `/ask` | Chat with Dream (Inworld Router) |
 | `/join` / `/disconnect` | Voice AI in / out |
 | `/setbirthday` · `/mybirthday` · `/clearbirthday` | Birthday self-service |
 | `/hero` | One hero’s balance changes across recent patches |

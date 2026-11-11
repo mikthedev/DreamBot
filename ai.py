@@ -1,14 +1,16 @@
-"""Free Llama chat via Groq — /ask, @mention, and Dream voice."""
+"""Dream chat via Inworld Router — /ask, @mention, and Dream voice."""
 
 from __future__ import annotations
 
 import logging
 import re
+import ssl
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+import certifi
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -24,6 +26,8 @@ from ai_ow import (
 from web_search import gather_web_facts, needs_web_search
 
 log = logging.getLogger("dream_team.ai")
+
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 ACCENT = discord.Color.from_rgb(46, 230, 166)
 DISCORD_MSG_LIMIT = 2000
@@ -56,7 +60,6 @@ SYSTEM_INSTRUCTION = (
     "For Discord bot features: briefly point to slash commands."
 )
 
-GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 _WAKE_RE = re.compile(
@@ -214,6 +217,11 @@ _sessions: dict[tuple[int, int], UserSession] = {}
 
 
 def ai_configured() -> bool:
+    """Chat replies need Inworld. Voice STT still needs Groq Whisper separately."""
+    return bool(config.INWORLD_API_KEY)
+
+
+def whisper_configured() -> bool:
     return bool(config.GROQ_API_KEY)
 
 
@@ -541,10 +549,10 @@ async def generate_reply(
     history: list[ChatTurn] | None = None,
     lang: str | None = None,
 ) -> str:
-    if not config.GROQ_API_KEY:
+    if not config.INWORLD_API_KEY:
         raise AIError(
-            "AI is not configured. Add a free `GROQ_API_KEY` to `.env` "
-            "(https://console.groq.com/keys — no billing required)."
+            "AI is not configured. Add `INWORLD_API_KEY` to the backend "
+            "environment (Inworld Portal → API key)."
         )
 
     messages: list[dict[str, str]] = [
@@ -556,35 +564,36 @@ async def generate_reply(
     messages.append({"role": "user", "content": prompt})
 
     payload: dict[str, Any] = {
-        "model": config.GROQ_MODEL,
+        "model": config.INWORLD_MODEL,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    # Inworld expects the Portal Base64 credential as Basic auth (no re-encode).
     headers = {
-        "Authorization": f"Bearer {config.GROQ_API_KEY}",
+        "Authorization": f"Basic {config.INWORLD_API_KEY}",
         "Content-Type": "application/json",
     }
 
     try:
         async with session.post(
-            GROQ_CHAT_URL,
+            config.INWORLD_CHAT_URL,
             json=payload,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=25),
+            timeout=aiohttp.ClientTimeout(total=45),
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status >= 400:
                 message = _api_error_message(data) or f"HTTP {resp.status}"
-                log.warning("Groq error %s: %s", resp.status, message)
+                log.warning("Inworld error %s: %s", resp.status, message)
                 if resp.status == 429:
                     raise AIError(
-                        "Free Groq rate limit hit — wait a bit and try again."
+                        "Inworld rate limit hit — wait a bit and try again."
                     )
                 raise AIError(f"AI request failed: {message}")
     except aiohttp.ClientError as exc:
-        log.warning("Groq network error: %s", exc)
-        raise AIError("Could not reach Groq. Try again in a moment.") from exc
+        log.warning("Inworld network error: %s", exc)
+        raise AIError("Could not reach Inworld. Try again in a moment.") from exc
 
     text = _chat_text(data)
     if not text:
@@ -601,7 +610,7 @@ async def generate_reply(
             f"Answer to rewrite:\n{reply}"
         )
         payload2 = {
-            "model": config.GROQ_MODEL,
+            "model": config.INWORLD_MODEL,
             "messages": [
                 {"role": "system", "content": SYSTEM_INSTRUCTION},
                 {"role": "user", "content": fix_prompt},
@@ -611,10 +620,10 @@ async def generate_reply(
         }
         try:
             async with session.post(
-                GROQ_CHAT_URL,
+                config.INWORLD_CHAT_URL,
                 json=payload2,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=20),
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as resp2:
                 data2 = await resp2.json(content_type=None)
                 if resp2.status < 400:
@@ -773,8 +782,11 @@ async def transcribe_audio(
     Transcribe with Whisper large-v3 + vocabulary prompt.
     Pick the best pass by confidence — do not 'fix' wrong words into right ones.
     """
-    if not config.GROQ_API_KEY:
-        raise AIError("GROQ_API_KEY not set.")
+    if not whisper_configured():
+        raise AIError(
+            "Voice listening needs `GROQ_API_KEY` for Whisper "
+            "(https://console.groq.com/keys)."
+        )
 
     forced = config.GROQ_WHISPER_LANGUAGE or None
     try:
@@ -1301,7 +1313,9 @@ class AICog(commands.Cog):
         self._last_ask: dict[int, float] = {}
 
     async def cog_load(self) -> None:
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=_SSL_CTX)
+        )
 
     async def cog_unload(self) -> None:
         if self._session and not self._session.closed:
@@ -1323,7 +1337,7 @@ class AICog(commands.Cog):
 
     @app_commands.command(
         name="ask",
-        description="Ask Dream (smart Llama via Groq)",
+        description="Ask Dream anything (Inworld Router)",
     )
     @app_commands.describe(prompt="Your question or message")
     async def ask(self, interaction: discord.Interaction, prompt: str) -> None:

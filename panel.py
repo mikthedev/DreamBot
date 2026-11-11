@@ -119,7 +119,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
         name="Everyone",
         value=(
             "`/help`\n"
-            "`/ask` — free Llama chat (or @mention the bot)\n"
+            "`/ask` — chat with Dream (or @mention the bot)\n"
             "`/join` · `/disconnect` — voice AI (say **Dream**, …)\n"
             "`/hero` — one hero’s balance changes across patches\n"
             "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"

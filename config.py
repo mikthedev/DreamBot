@@ -90,13 +90,21 @@ OW_MEDIA_DOWNLOAD_TIMEOUT = max(
     20, int(os.getenv("OW_MEDIA_DOWNLOAD_TIMEOUT", "90"))
 )
 
-# Free Llama via Groq (no billing) — https://console.groq.com/keys
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-# 70B is still very fast on Groq LPUs and much smarter than 8B
-GROQ_MODEL = (
-    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-    or "llama-3.3-70b-versatile"
+# Inworld Router (OpenAI-compatible chat) — https://docs.inworld.ai/router/quickstart
+# Auth is Authorization: Basic <key> (Portal Base64 credential, no re-encoding).
+INWORLD_API_KEY = os.getenv("INWORLD_API_KEY", "").strip()
+INWORLD_MODEL = (
+    os.getenv("INWORLD_MODEL", "inworld/dreambot").strip() or "inworld/dreambot"
 )
+INWORLD_CHAT_URL = (
+    os.getenv(
+        "INWORLD_CHAT_URL", "https://api.inworld.ai/v1/chat/completions"
+    ).strip()
+    or "https://api.inworld.ai/v1/chat/completions"
+)
+
+# Groq Whisper for voice STT only — https://console.groq.com/keys
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Default turbo for lower voice latency; set GROQ_WHISPER_MODEL=whisper-large-v3 for max accuracy
 GROQ_WHISPER_MODEL = (
     os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo").strip()

@@ -1,4 +1,4 @@
-"""Voice AI — join VC, wake on \"Dream\", answer with free Llama + TTS."""
+"""Voice AI — join VC, wake on \"Dream\", answer with Inworld + TTS."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import audioop
 import io
 import logging
+import ssl
 import tempfile
 import time
 import wave
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
+import certifi
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -25,9 +27,12 @@ from ai import (
     ai_configured,
     detect_user_language,
     voice_reply_from_wav,
+    whisper_configured,
 )
 
 log = logging.getLogger("dream_team.voice_ai")
+
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 SAMPLE_RATE = 48000
 CHANNELS = 2
@@ -342,7 +347,9 @@ class VoiceAICog(commands.Cog):
     async def cog_load(self) -> None:
         _quiet_rtcp_logs()
         _patch_voice_recv_router()
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=_SSL_CTX)
+        )
         self._poll_task = asyncio.create_task(self._poll_loop())
         self._cleanup_transcripts.start()
 
@@ -602,8 +609,15 @@ class VoiceAICog(commands.Cog):
             return
         if not ai_configured():
             await interaction.response.send_message(
-                "Set a free `GROQ_API_KEY` in `.env` first "
-                "(https://console.groq.com/keys — no billing).",
+                "Set `INWORLD_API_KEY` in `.env` first "
+                "(Inworld Portal → API key).",
+                ephemeral=True,
+            )
+            return
+        if not whisper_configured():
+            await interaction.response.send_message(
+                "Voice needs `GROQ_API_KEY` for Whisper STT "
+                "(https://console.groq.com/keys). Text `/ask` still works.",
                 ephemeral=True,
             )
             return

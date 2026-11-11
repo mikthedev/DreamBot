@@ -244,10 +244,19 @@ class DreamTeamBot(commands.Bot):
                 "history stays empty until you enable Presence Intent in the "
                 "Developer Portal and set PLAY_PRESENCE_INTENT=1"
             )
-        if config.GROQ_API_KEY:
-            log.info("Free Groq Llama AI enabled (model=%s)", config.GROQ_MODEL)
+        if config.INWORLD_API_KEY:
+            log.info(
+                "Inworld Router AI enabled (model=%s)", config.INWORLD_MODEL
+            )
         else:
-            log.warning("GROQ_API_KEY not set — /ask, @mention, and /join AI disabled")
+            log.warning(
+                "INWORLD_API_KEY not set — /ask, @mention, and /join AI disabled"
+            )
+        if config.INWORLD_API_KEY and not config.GROQ_API_KEY:
+            log.warning(
+                "GROQ_API_KEY not set — voice STT (/join Whisper) disabled; "
+                "text /ask and @mention still work"
+            )
         try:
             import davey  # noqa: F401
 

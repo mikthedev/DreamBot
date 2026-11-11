@@ -185,6 +185,12 @@ def _run_with_login_backoff(db: Database, token: str) -> None:
             if ipv4_only:
                 log.warning("IPv4 Discord connect failed (%s) — falling back to default", exc)
                 ipv4_only = False
+                # Same boot — don't sit out the restart dampen again.
+                skip_saved_cooldown = True
+                try:
+                    _LOGIN_ATTEMPT_PATH.unlink(missing_ok=True)
+                except Exception:
+                    pass
                 continue
             raise
 
@@ -208,9 +214,11 @@ class DreamTeamBot(commands.Bot):
         self._guild_commands_synced = False
 
     async def login(self, token: str) -> None:
-        # HTTP session is created here; attach IPv4 connector on this running loop.
-        if self.http.connector is None:
-            self.http.connector = _discord_connector(ipv4_only=self._ipv4_only)
+        # HTTP session is created here; always attach our certifi + IP connector.
+        old = self.http.connector
+        self.http.connector = _discord_connector(ipv4_only=self._ipv4_only)
+        if old is not None and old is not self.http.connector and not old.closed:
+            await old.close()
         await super().login(token)
 
     async def setup_hook(self) -> None:

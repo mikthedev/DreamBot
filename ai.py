@@ -75,6 +75,37 @@ def _load_system_instruction() -> str:
 
 SYSTEM_INSTRUCTION = _load_system_instruction()
 
+_LANG_LABELS = {"en": "English", "ru": "Russian", "uk": "Ukrainian"}
+_TEMPLATE_VAR_RE = re.compile(
+    r"\{\{\s*([a-zA-Z_][\w.]*)\s*(?:\|\s*default\(\s*\"([^\"]*)\"\s*\))?\s*\}\}"
+)
+
+
+def _prompt_variables(
+    *,
+    lang: str | None = None,
+    mode: str = "text",
+    character_name: str = "Dream",
+) -> dict[str, str]:
+    return {
+        "character_name": character_name,
+        "reply_language": _LANG_LABELS.get(lang or "", "match the user"),
+        "mode": "voice" if mode == "voice" else "text",
+    }
+
+
+def _render_prompt_template(text: str, variables: dict[str, str]) -> str:
+    """Resolve Inworld-style {{ name | default(\"…\") }} for local system fallback."""
+
+    def repl(match: re.Match[str]) -> str:
+        key = match.group(1)
+        default = match.group(2)
+        if key in variables and variables[key]:
+            return variables[key]
+        return default if default is not None else ""
+
+    return _TEMPLATE_VAR_RE.sub(repl, text)
+
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 _WAKE_RE = re.compile(
@@ -563,6 +594,7 @@ async def generate_reply(
     temperature: float = 0.45,
     history: list[ChatTurn] | None = None,
     lang: str | None = None,
+    mode: str = "text",
 ) -> str:
     if not config.INWORLD_API_KEY:
         raise AIError(
@@ -570,11 +602,16 @@ async def generate_reply(
             "environment (Inworld Portal → API key)."
         )
 
+    variables = _prompt_variables(lang=lang, mode=mode)
     messages: list[dict[str, str]] = []
     # Router may already own the Dream system template; local copy is default on.
     if config.INWORLD_USE_LOCAL_SYSTEM:
+        raw_system = system or SYSTEM_INSTRUCTION
         messages.append(
-            {"role": "system", "content": system or SYSTEM_INSTRUCTION}
+            {
+                "role": "system",
+                "content": _render_prompt_template(raw_system, variables),
+            }
         )
     if history:
         for turn in history[-HISTORY_TURNS * 2 :]:
@@ -586,6 +623,8 @@ async def generate_reply(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        # Fills {{ character_name }}, {{ reply_language }}, {{ mode }} on the router.
+        "prompt_variables": variables,
     }
     # Inworld expects the Portal Base64 credential as Basic auth (no re-encode).
     headers = {
@@ -630,7 +669,12 @@ async def generate_reply(
         rewrite_messages: list[dict[str, str]] = []
         if config.INWORLD_USE_LOCAL_SYSTEM:
             rewrite_messages.append(
-                {"role": "system", "content": SYSTEM_INSTRUCTION}
+                {
+                    "role": "system",
+                    "content": _render_prompt_template(
+                        SYSTEM_INSTRUCTION, variables
+                    ),
+                }
             )
         rewrite_messages.append({"role": "user", "content": fix_prompt})
         payload2 = {
@@ -638,6 +682,7 @@ async def generate_reply(
             "messages": rewrite_messages,
             "temperature": 0.2,
             "max_tokens": max_tokens,
+            "prompt_variables": variables,
         }
         try:
             async with session.post(
@@ -1111,6 +1156,7 @@ async def handle_user_turn(
                 temperature=0.25,
                 history=history,
                 lang=lang,
+                mode="voice" if voice else "text",
             )
             remember_turn(
                 guild_id, user_id, user=raw, assistant=reply, hero=hero, lang=lang
@@ -1167,6 +1213,7 @@ async def handle_user_turn(
         temperature=0.25 if web_block else 0.35,
         history=history,
         lang=lang,
+        mode="voice" if voice else "text",
     )
     maybe_hero = extract_hero_query(q)
     remember_turn(

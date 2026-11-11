@@ -217,8 +217,9 @@ class DreamTeamBot(commands.Bot):
         # HTTP session is created here; always attach our certifi + IP connector.
         old = self.http.connector
         self.http.connector = _discord_connector(ipv4_only=self._ipv4_only)
-        if old is not None and old is not self.http.connector and not old.closed:
-            await old.close()
+        if isinstance(old, aiohttp.BaseConnector) and old is not self.http.connector:
+            if not old.closed:
+                await old.close()
         await super().login(token)
 
     async def setup_hook(self) -> None:

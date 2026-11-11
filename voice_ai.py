@@ -6,6 +6,7 @@ import asyncio
 import audioop
 import io
 import logging
+import re
 import ssl
 import tempfile
 import time
@@ -308,38 +309,105 @@ def _build_sink_class():
     return WakeAudioSink
 
 
+_TTS_LOCK: asyncio.Lock | None = None
+
+
+def _tts_lock() -> asyncio.Lock:
+    global _TTS_LOCK
+    if _TTS_LOCK is None:
+        _TTS_LOCK = asyncio.Lock()
+    return _TTS_LOCK
+
+
+def _tts_voice_for_text(text: str) -> str:
+    """
+    Pick Edge voice from the reply script — not detect_user_language().
+    Latin hero names in a Russian sentence used to flip voice to EN, and
+    GuyNeural then returns NoAudioReceived on Cyrillic.
+    """
+    t = text or ""
+    if re.search(r"[іїєґІЇЄҐ]", t):
+        return config.TTS_VOICE_UK
+    cyr = len(re.findall(r"[а-яА-ЯёЁ]", t))
+    latin = len(re.findall(r"[A-Za-z]", t))
+    if cyr >= 2 and cyr >= latin:
+        return config.TTS_VOICE_RU
+    return config.TTS_VOICE
+
+
+def _sanitize_tts_text(text: str) -> str:
+    """Strip characters that make Edge TTS return empty audio."""
+    import re as _re
+
+    t = (text or "").strip()
+    # Remove markup / XML-ish bits Edge embeds into SSML poorly
+    t = _re.sub(r"[<>]", " ", t)
+    t = _re.sub(r"https?://\S+", " ", t)
+    # Drop most emoji / symbols; keep letters, digits, basic punctuation
+    t = _re.sub(
+        r"[^\w\s.,!?;:'\"%\-–—()+а-яА-ЯёЁіІїЇєЄґҐ]",
+        " ",
+        t,
+        flags=_re.UNICODE,
+    )
+    t = _re.sub(r"\s{2,}", " ", t).strip()
+    # Edge sometimes chokes on very long utterances
+    if len(t) > 400:
+        cut = t[:400]
+        sp = cut.rfind(" ")
+        t = (cut[:sp] if sp > 200 else cut).rstrip(" ,;:") + "."
+    return t
+
+
 async def synthesize_speech(text: str, out_path: Path) -> Path:
     import edge_tts
 
     from ai import AIError
 
-    lang = detect_user_language(text)
-    if lang == "uk":
-        voice = config.TTS_VOICE_UK
-    elif lang == "ru":
-        voice = config.TTS_VOICE_RU
-    else:
-        voice = config.TTS_VOICE
+    clean = _sanitize_tts_text(text)
+    if not clean:
+        raise AIError("Nothing to speak.")
+
+    primary = _tts_voice_for_text(clean)
+    # DmitryNeural occasionally returns empty audio for valid RU text;
+    # Svetlana is the reliable RU fallback. Keep attempts short for latency.
+    ru_alt = "ru-RU-SvetlanaNeural"
+    attempts: list[tuple[str, str, str]] = [
+        (primary, config.TTS_RATE, config.TTS_PITCH),
+        (primary, "+0%", "+0Hz"),
+    ]
+    if primary == config.TTS_VOICE_RU and ru_alt != primary:
+        attempts.append((ru_alt, "+0%", "+0Hz"))
+    for alt in (config.TTS_VOICE_RU, config.TTS_VOICE_UK, config.TTS_VOICE):
+        if alt != primary and all(alt != a[0] for a in attempts):
+            attempts.append((alt, "+0%", "+0Hz"))
+    if ru_alt not in {a[0] for a in attempts}:
+        attempts.append((ru_alt, "+0%", "+0Hz"))
 
     last_exc: BaseException | None = None
-    for attempt in range(2):
-        try:
-            communicate = edge_tts.Communicate(
-                text,
-                voice,
-                rate=config.TTS_RATE,
-                pitch=config.TTS_PITCH,
-            )
-            await communicate.save(str(out_path))
-            if out_path.is_file() and out_path.stat().st_size > 0:
-                return out_path
-            raise AIError("TTS returned an empty audio file.")
-        except AIError:
-            raise
-        except Exception as exc:
-            last_exc = exc
-            log.warning("TTS attempt %s failed: %s", attempt + 1, exc)
-            await asyncio.sleep(0.25 * (attempt + 1))
+    async with _tts_lock():
+        for i, (voice, rate, pitch) in enumerate(attempts, start=1):
+            try:
+                communicate = edge_tts.Communicate(
+                    clean,
+                    voice,
+                    rate=rate,
+                    pitch=pitch,
+                )
+                await communicate.save(str(out_path))
+                if out_path.is_file() and out_path.stat().st_size > 0:
+                    if i > 1:
+                        log.info(
+                            "TTS recovered on attempt %s voice=%s", i, voice
+                        )
+                    return out_path
+                raise RuntimeError("TTS returned an empty audio file.")
+            except Exception as exc:
+                last_exc = exc
+                log.warning(
+                    "TTS attempt %s failed voice=%s: %s", i, voice, exc
+                )
+                await asyncio.sleep(0.12)
     raise AIError(
         "Could not speak right now (TTS blocked). "
         "Try again in a moment."

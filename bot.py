@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import socket
+import ssl
 import subprocess
 import time
 from datetime import datetime
@@ -8,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import aiohttp
+import certifi
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -110,6 +112,9 @@ def _honor_login_gates(*, skip_saved_cooldown: bool = False) -> None:
     _write_ts(_LOGIN_ATTEMPT_PATH, time.time())
 
 
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+
+
 def _discord_connector(*, ipv4_only: bool) -> aiohttp.TCPConnector:
     """bot-hosting's shared IPv6 (2a01:4f9:…) is what Cloudflare 1015 bans.
 
@@ -119,6 +124,7 @@ def _discord_connector(*, ipv4_only: bool) -> aiohttp.TCPConnector:
     family = socket.AF_INET if ipv4_only else 0
     return aiohttp.TCPConnector(
         family=family,
+        ssl=_SSL_CTX,
         ttl_dns_cache=300,
         limit=50,
     )

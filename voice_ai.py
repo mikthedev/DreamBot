@@ -311,6 +311,8 @@ def _build_sink_class():
 async def synthesize_speech(text: str, out_path: Path) -> Path:
     import edge_tts
 
+    from ai import AIError
+
     lang = detect_user_language(text)
     if lang == "uk":
         voice = config.TTS_VOICE_UK
@@ -318,14 +320,30 @@ async def synthesize_speech(text: str, out_path: Path) -> Path:
         voice = config.TTS_VOICE_RU
     else:
         voice = config.TTS_VOICE
-    communicate = edge_tts.Communicate(
-        text,
-        voice,
-        rate=config.TTS_RATE,
-        pitch=config.TTS_PITCH,
-    )
-    await communicate.save(str(out_path))
-    return out_path
+
+    last_exc: BaseException | None = None
+    for attempt in range(3):
+        try:
+            communicate = edge_tts.Communicate(
+                text,
+                voice,
+                rate=config.TTS_RATE,
+                pitch=config.TTS_PITCH,
+            )
+            await communicate.save(str(out_path))
+            if out_path.is_file() and out_path.stat().st_size > 0:
+                return out_path
+            raise AIError("TTS returned an empty audio file.")
+        except AIError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            log.warning("TTS attempt %s failed: %s", attempt + 1, exc)
+            await asyncio.sleep(0.4 * (attempt + 1))
+    raise AIError(
+        "Could not speak right now (TTS blocked). "
+        "Try again in a moment."
+    ) from last_exc
 
 
 class VoiceAICog(commands.Cog):

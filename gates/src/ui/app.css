@@ -1178,7 +1178,7 @@ input {
   to { opacity: 1; transform: none; }
 }
 @keyframes title-snap {
-  0% { opacity: 0; transform: translate(0, 24px) scale(0.92); filter: drop-shadow(3px 3px 0 #1a1208); }
+  0% { opacity: 0; transform: translate(0, 24px) scale(0.92); }
   40% { opacity: 1; transform: translate(-2px, -4px); }
   70% { transform: translate(2px, 2px); }
   100% { opacity: 1; transform: none; }
@@ -1216,6 +1216,15 @@ input {
 .app.pregame {
   grid-template-rows: auto minmax(0, 1fr);
   max-width: none;
+}
+.app.pregame .brand {
+  color: #fff4cc;
+  text-shadow:
+    2px 2px 0 #1a1208,
+    -1px 0 0 #1a1208,
+    1px 0 0 #1a1208,
+    0 -1px 0 #1a1208,
+    0 1px 0 #1a1208;
 }
 .start-menu, .lobby {
   min-height: 0;
@@ -1285,16 +1294,18 @@ input {
   font-size: clamp(40px, 7vw, 72px);
   margin: 0 0 12px;
   line-height: 0.95;
-  text-shadow: 3px 3px 0 #1a1208;
+  color: #fff4cc;
+  text-shadow:
+    4px 4px 0 #1a1208,
+    -2px 0 0 #1a1208,
+    2px 0 0 #1a1208,
+    0 -2px 0 #1a1208,
+    0 2px 0 #1a1208;
 }
 .start-menu h1 span {
   display: inline-block;
+  color: #fff4cc;
   animation: title-snap 0.55s steps(6) both;
-  background: linear-gradient(180deg, #fff4cc, var(--accent) 55%, #a8883a);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(3px 3px 0 #1a1208);
 }
 .start-lead {
   margin: 0 0 28px;
@@ -1361,7 +1372,7 @@ input {
 .lobby.is-in .waiting-booth {
   animation: card-in 0.42s steps(6) 0.08s both;
 }
-.lobby.is-in .start-big:not(:disabled) {
+.lobby.is-in .stall-btn.primary:not(:disabled) {
   animation: start-pulse 1.8s steps(4) infinite;
 }
 .lobby { padding: 12px 16px 24px 108px; }
@@ -1415,30 +1426,55 @@ input {
   box-shadow: 2px 2px 0 #0a080c;
 }
 .swatch.on { outline: 2px solid var(--accent); outline-offset: 2px; }
-.start-big {
+.stall-btn {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: flex-start;
   gap: 4px;
-  min-width: 220px;
-  padding: 14px 22px 16px;
-  background:
-    linear-gradient(180deg, #f0d78c 0%, #c4922a 48%, #8a6a20 100%);
-  color: #1a1208;
-  border: 3px solid #f8e7b0;
-  box-shadow:
-    4px 4px 0 #0a080c,
-    inset 0 2px 0 #fff4cc;
+  min-width: 168px;
+  min-height: 76px;
+  padding: 12px 18px;
+  background: linear-gradient(180deg, #2a2418, #1c1822);
+  color: #fff4cc;
+  border: 3px solid #c9b48a;
+  box-shadow: 4px 4px 0 #0a080c;
   font-family: "Pixelify Sans", Outfit, sans-serif;
 }
-.start-big b { font-size: 28px; line-height: 1; letter-spacing: 0.06em; }
-.start-big small { font-family: Outfit, sans-serif; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; opacity: 0.8; }
-.start-big:hover:not(:disabled) {
+.stall-btn b {
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.stall-btn small {
+  font-family: Outfit, sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  opacity: 0.75;
+  color: inherit;
+}
+.stall-btn.primary {
+  background: linear-gradient(180deg, #f0d78c 0%, #c4922a 48%, #8a6a20 100%);
+  color: #1a1208;
+  border-color: #f8e7b0;
+  box-shadow: 4px 4px 0 #0a080c, inset 0 2px 0 #fff4cc;
+}
+.stall-btn.primary b { font-size: 28px; }
+.stall-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #3a3224, #262030);
+  color: #fff4cc;
+  border-color: var(--accent);
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 #0a080c;
+}
+.stall-btn.primary:hover:not(:disabled) {
   background: linear-gradient(180deg, #ffe9a8 0%, #e0b84a 48%, #a8883a 100%);
   color: #1a1208;
-  transform: translate(-1px, -1px);
 }
-.start-big:disabled { opacity: 0.4; filter: grayscale(0.3); }
+.stall-btn:disabled { opacity: 0.45; filter: grayscale(0.35); }
 .join-rail {
   position: absolute;
   left: 14px;
@@ -1581,7 +1617,7 @@ input {
 .rail-ava.big { border-width: 3px; }
 .rail-ava img { width: 100%; height: 100%; object-fit: cover; }
 .rail-face.host .rail-ava { border-color: var(--accent); }
-.lobby-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.lobby-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
 
 @media (max-width: 760px) {
   .center-actions { width: 100%; }
@@ -1596,5 +1632,5 @@ input {
 @media (prefers-reduced-motion: reduce) {
   .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk,
   .menu-grid, .menu-scan, .menu-floater, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
-  .lobby.is-in, .join-rail, .waiting-booth, .start-big { animation: none; transition: none; }
+  .lobby.is-in, .join-rail, .waiting-booth, .stall-btn { animation: none; transition: none; }
 }

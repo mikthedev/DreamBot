@@ -163,18 +163,21 @@ export function Lobby({
         </p>
         <WaitingBooth />
         <div className="lobby-actions">
-          <button className="start-big" disabled={!ready} onClick={onStart}>
+          <button className="stall-btn primary" disabled={!ready} onClick={onStart}>
             <b>Start</b>
             <small>{ready ? "The stall is open" : `${MIN_PLAYERS - joined.length} more to open`}</small>
           </button>
-          <button className="ghost" onClick={onSeatBots}>
-            Seat bots
+          <button className="stall-btn" onClick={onSeatBots}>
+            <b>Seat bots</b>
+            <small>Fill empty chairs</small>
           </button>
-          <button className="ghost" onClick={onPlayBots}>
-            Play with bots
+          <button className="stall-btn" onClick={onPlayBots}>
+            <b>Play with bots</b>
+            <small>You plus three</small>
           </button>
-          <button className="ghost" onClick={onBack}>
-            Back
+          <button className="stall-btn" onClick={onBack}>
+            <b>Back</b>
+            <small>Pick a table</small>
           </button>
         </div>
       </div>

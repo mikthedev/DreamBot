@@ -684,7 +684,7 @@ body {
   z-index: 1;
 }
 .tile.corner.id-home .corner-art { inset: auto 6% 18% auto; width: 40%; height: 38%; }
-.tile.corner.id-market .corner-art { inset: auto auto 16% 6%; width: 38%; height: 36%; }
+.tile.corner.id-market .corner-art { inset: auto auto 12% 6%; width: 52%; height: 48%; }
 .tile.corner.id-dream .corner-art { inset: 16% 6% auto auto; width: 46%; height: 44%; }
 .tile.corner.id-rest .corner-art { inset: 16% auto auto 8%; width: auto; height: 40%; }
 .corner-copy {
@@ -813,6 +813,53 @@ button:disabled { opacity: 0.4; cursor: default; }
   border-left: 1px solid var(--line);
   animation: sheet-in 0.26s ease;
 }
+.sheet article.deal { width: min(560px, 100%); }
+.deal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 10px 0;
+}
+.deal-grid small {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.cash-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+.cash-line input { width: 96px; padding: 8px; }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.deal-cos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.deal-cos button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+}
+.deal-cos .brand-logo,
+.deal-cos .brand-fallback { width: 16px; height: 16px; }
+.deal-warn { color: #fb7185; }
+.market-card .go { margin-top: 8px; width: 100%; }
 .sheet h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
 .sheet p, .log li { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }

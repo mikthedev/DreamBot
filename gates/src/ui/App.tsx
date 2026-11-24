@@ -12,7 +12,10 @@ import {
   hasSet,
   licenseNeeded,
   ownerOfSet,
+  tradeFee,
+  tradeProblem,
   type Action,
+  type Player,
   type State,
 } from "../engine/game";
 import { TRACK } from "../engine/track";
@@ -31,7 +34,7 @@ export function App() {
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) !== "off");
   const [discordId, setDiscordId] = useState(() => localStorage.getItem(ID_KEY) || "");
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [sheet, setSheet] = useState<null | "more" | "test" | "log">(null);
+  const [sheet, setSheet] = useState<null | "more" | "test" | "log" | "trade">(null);
   const [state, setState] = useState<State>(() =>
     createGame(seats("You", null, true), { seed: Date.now() % 100000 }),
   );
@@ -40,7 +43,7 @@ export function App() {
   const [walk, setWalk] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<{ cash: number; moves: number } | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
-  const [openGroup, setOpenGroup] = useState<SetId | "store" | null>(null);
+  const [openGroup, setOpenGroup] = useState<SetId | "store" | "market" | null>(null);
   const [seatHover, setSeatHover] = useState<string | null>(null);
   const [ownerPeek, setOwnerPeek] = useState<string | null>(null);
   const focusOwner = seatHover ?? ownerPeek;
@@ -213,6 +216,11 @@ export function App() {
                     {b.label}
                   </button>
                 ))}
+                {mine && state.phase === "extra" && !walking && !diceSpin ? (
+                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => setSheet("trade")}>
+                    {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
+                  </button>
+                ) : null}
                 <button className="ghost" onClick={() => setSheet("more")}>More</button>
               </div>
             </div>
@@ -245,6 +253,13 @@ export function App() {
               state={state}
               player={state.players.find((p) => p.id === focusOwner)!}
             />
+          ) : openGroup === "market" ? (
+            <MarketCard
+              state={state}
+              you={me}
+              mine={mine}
+              onTrade={() => setSheet("trade")}
+            />
           ) : openGroup ? (
             <GroupCard group={openGroup} state={state} />
           ) : (
@@ -263,11 +278,11 @@ export function App() {
 
       {sheet && (
         <div className="sheet" onClick={() => setSheet(null)}>
-          <article onClick={(e) => e.stopPropagation()}>
+          <article className={sheet === "trade" ? "deal" : ""} onClick={(e) => e.stopPropagation()}>
             {sheet === "more" && (
               <>
                 <h2>More</h2>
-                <p>Builds, fuel, and the log stay here so the board stays clear.</p>
+                <p>Builds, fuel, trades, and the log stay here so the board stays clear.</p>
                 <div className="row">
                   <button disabled={!mine || state.phase !== "extra"} onClick={() => act({ type: "fuel" })}>
                     Buy move ${fuelPrice(me)}
@@ -285,6 +300,9 @@ export function App() {
                       License {setOf(kind).label} $180
                     </button>
                   ))}
+                  <button className="ghost" disabled={!mine || state.phase !== "extra"} onClick={() => setSheet("trade")}>
+                    {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
+                  </button>
                   <button className="ghost" onClick={() => setSheet("log")}>Recent</button>
                 </div>
                 <h2>Your companies</h2>
@@ -298,6 +316,18 @@ export function App() {
                 ))}
                 {!COMPANIES.some((c) => state.companies[c.id].owner === me.id) && <p>You do not own a company yet.</p>}
               </>
+            )}
+            {sheet === "trade" && (
+              <TradeDesk
+                state={state}
+                you={me}
+                mine={mine}
+                onClose={() => setSheet(null)}
+                onDeal={(action) => {
+                  act(action);
+                  setSheet(null);
+                }}
+              />
             )}
             {sheet === "log" && (
               <>
@@ -426,14 +456,15 @@ function ownedClass(owner: BoardPlayer | undefined, you: string) {
   return owner.id === you ? "owned mine" : "owned theirs";
 }
 
-function groupOf(id: string): SetId | "store" | null {
+function groupOf(id: string): SetId | "store" | "market" | null {
   const co = COMPANIES.find((c) => c.id === id);
   if (co) return co.set;
   if (STORES.some((s) => s.id === id)) return "store";
+  if (id === "market") return "market";
   return null;
 }
 
-function inGroup(id: string, group: SetId | "store" | null) {
+function inGroup(id: string, group: SetId | "store" | "market" | null) {
   if (!group) return false;
   return groupOf(id) === group;
 }
@@ -511,7 +542,7 @@ function Tile({
     const spec = SPECIAL[space.id];
     return (
       <div
-        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""}`}
+        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""}`}
         style={{ gridColumn: space.col, gridRow: space.row }}
         {...bind}
       >
@@ -633,6 +664,33 @@ function TileFloat({
           <b>Unowned</b>
         </div>
       )}
+    </div>
+  );
+}
+
+function MarketCard({
+  state,
+  you,
+  mine,
+  onTrade,
+}: {
+  state: State;
+  you: Player;
+  mine: boolean;
+  onTrade: () => void;
+}) {
+  const fee = tradeFee(state, you);
+  const open = mine && state.phase === "extra";
+  return (
+    <div className="group-card market-card" onClick={(e) => e.stopPropagation()}>
+      <small>Corner</small>
+      <b>Market</b>
+      <p className="dep">
+        Swap companies, cash, or a move. Land here and this turn’s trade is free. Anywhere else it costs ${fee || 20} unless you own Watch.
+      </p>
+      <button className="go" disabled={!open} onClick={onTrade}>
+        {open ? (you.freeTrade ? "Open a free trade" : `Trade $${fee}`) : "Trade after you land"}
+      </button>
     </div>
   );
 }
@@ -1001,6 +1059,141 @@ function Holdings({ state, player }: { state: State; player: { id: string; name:
         </div>
       )}
     </div>
+  );
+}
+
+function TradeDesk({
+  state,
+  you,
+  mine,
+  onClose,
+  onDeal,
+}: {
+  state: State;
+  you: Player;
+  mine: boolean;
+  onClose: () => void;
+  onDeal: (action: Extract<Action, { type: "trade" }>) => void;
+}) {
+  const others = state.players.filter((p) => !p.out && p.id !== you.id);
+  const [to, setTo] = useState(others[0]?.id ?? "");
+  const [give, setGive] = useState<string[]>([]);
+  const [get, setGet] = useState<string[]>([]);
+  const [giveCash, setGiveCash] = useState(0);
+  const [getCash, setGetCash] = useState(0);
+  const [giveMove, setGiveMove] = useState(false);
+  const [getMove, setGetMove] = useState(false);
+  const other = state.players.find((p) => p.id === to);
+  const yours = COMPANIES.filter((c) => state.companies[c.id].owner === you.id);
+  const theirs = COMPANIES.filter((c) => state.companies[c.id].owner === to);
+  const action: Extract<Action, { type: "trade" }> = {
+    type: "trade",
+    to,
+    giveCompanies: give,
+    getCompanies: get,
+    giveCash,
+    getCash,
+    giveMove,
+    getMove,
+  };
+  const problem = !mine ? "Wait for your extra." : tradeProblem(state, action);
+  const fee = tradeFee(state, you);
+
+  function toggle(list: string[], id: string, set: (next: string[]) => void) {
+    set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  }
+
+  if (!other) {
+    return (
+      <>
+        <h2>Market</h2>
+        <p>Nobody else is at the table.</p>
+        <button className="ghost" onClick={onClose}>Close</button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <h2>Market</h2>
+      <p>
+        {you.freeTrade
+          ? "You landed on Market — this deal has no desk fee."
+          : `Desk fee $${fee}. Land on Market next time to trade free.`}
+      </p>
+      <div className="row">
+        {others.map((p) => (
+          <button key={p.id} className={p.id === to ? "" : "ghost"} onClick={() => { setTo(p.id); setGet([]); }}>
+            {p.name}
+          </button>
+        ))}
+      </div>
+      <div className="deal-grid">
+        <div>
+          <small>You give</small>
+          <label className="cash-line">
+            $
+            <input
+              type="number"
+              min={0}
+              value={giveCash}
+              onChange={(e) => setGiveCash(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={giveMove} onChange={(e) => setGiveMove(e.target.checked)} />
+            1 move
+          </label>
+          <ul className="deal-cos">
+            {yours.map((c) => (
+              <li key={c.id}>
+                <button className={give.includes(c.id) ? "" : "ghost"} onClick={() => toggle(give, c.id, setGive)}>
+                  <BrandLogo id={c.id} label={c.name} />
+                  {c.name}
+                </button>
+              </li>
+            ))}
+            {!yours.length && <li>You own nothing yet</li>}
+          </ul>
+        </div>
+        <div>
+          <small>You get from {other.name}</small>
+          <label className="cash-line">
+            $
+            <input
+              type="number"
+              min={0}
+              value={getCash}
+              onChange={(e) => setGetCash(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={getMove} onChange={(e) => setGetMove(e.target.checked)} />
+            1 move
+          </label>
+          <ul className="deal-cos">
+            {theirs.map((c) => (
+              <li key={c.id}>
+                <button className={get.includes(c.id) ? "" : "ghost"} onClick={() => toggle(get, c.id, setGet)}>
+                  <BrandLogo id={c.id} label={c.name} />
+                  {c.name}
+                </button>
+              </li>
+            ))}
+            {!theirs.length && <li>{other.name} owns nothing yet</li>}
+          </ul>
+        </div>
+      </div>
+      {problem ? <p className="deal-warn">{problem}</p> : <p>Ready to swap.</p>}
+      <div className="row">
+        <button disabled={!!problem} onClick={() => onDeal(action)}>
+          Make deal
+        </button>
+        <button className="ghost" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </>
   );
 }
 

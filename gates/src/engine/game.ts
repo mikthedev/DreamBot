@@ -39,6 +39,7 @@ export type Player = {
   note: boolean;
   noteUsed: boolean;
   freeAlley: boolean;
+  freeTrade: boolean;
   quiet: number;
   insurance: boolean;
   nudge: boolean;
@@ -124,6 +125,7 @@ export function createGame(
       note: false,
       noteUsed: false,
       freeAlley: false,
+      freeTrade: false,
       quiet: 0,
       insurance: false,
       nudge: false,
@@ -199,6 +201,41 @@ export function anySet(state: State, playerId: string) {
   return (["social", "music", "watch", "cloud", "ai", "ride", "chips", "giants"] as SetId[]).some((s) =>
     hasSet(state, playerId, s),
   );
+}
+
+export function tradeFee(state: State, p: Player) {
+  if (p.freeTrade) return 0;
+  if (hasSet(state, p.id, "watch")) return 0;
+  return 20;
+}
+
+export function onMarket(state: State) {
+  const p = actor(state);
+  return !!p && spaceId(p) === "market";
+}
+
+export function tradeProblem(state: State, action: Extract<Action, { type: "trade" }>): string | null {
+  const p = actor(state);
+  if (!p || state.phase !== "extra") return "Trade after you land.";
+  const other = state.players.find((x) => x.id === action.to);
+  if (!other || other.out || other.id === p.id) return "Pick someone to trade with.";
+  const fee = tradeFee(state, p);
+  if (action.giveCash < 0 || action.getCash < 0) return "Cash cannot be negative.";
+  if (p.moves - (action.giveMove ? 1 : 0) + (action.getMove ? 1 : 0) < 1) return "You would have no moves left.";
+  if (other.moves - (action.getMove ? 1 : 0) + (action.giveMove ? 1 : 0) < 1) return `${other.name} would have no moves left.`;
+  if (p.cash < action.giveCash + fee) return "Not enough cash for this deal.";
+  if (other.cash < action.getCash) return `${other.name} cannot pay that.`;
+  for (const id of action.giveCompanies) if (state.companies[id]?.owner !== p.id) return "You do not own that company.";
+  for (const id of action.getCompanies) if (state.companies[id]?.owner !== other.id) return `${other.name} does not own that company.`;
+  const empty =
+    !action.giveCompanies.length &&
+    !action.getCompanies.length &&
+    !action.giveCash &&
+    !action.getCash &&
+    !action.giveMove &&
+    !action.getMove;
+  if (empty) return "Put cash, a company, or a move in the deal.";
+  return null;
 }
 
 function spaceId(p: Player) {
@@ -495,15 +532,13 @@ export function apply(prev: State, action: Action): State {
       return state;
     }
     if (action.type === "trade") {
+      const problem = tradeProblem(state, action);
+      if (problem) {
+        say(state, problem);
+        return state;
+      }
       const other = player(state, action.to);
-      if (!other || other.out) return state;
-      const fee = hasSet(state, p.id, "watch") ? 0 : 20;
-      if (p.moves - (action.giveMove ? 1 : 0) + (action.getMove ? 1 : 0) < 1) return state;
-      if (other.moves - (action.getMove ? 1 : 0) + (action.giveMove ? 1 : 0) < 1) return state;
-      if (state.mode === "moves" && (p.cash - action.giveCash - fee < 80 || other.cash - action.getCash < 80)) return state;
-      if (p.cash < action.giveCash + fee || other.cash < action.getCash) return state;
-      for (const id of action.giveCompanies) if (state.companies[id]?.owner !== p.id) return state;
-      for (const id of action.getCompanies) if (state.companies[id]?.owner !== other.id) return state;
+      const fee = tradeFee(state, p);
       p.cash -= action.giveCash + fee;
       other.cash += action.giveCash;
       other.cash -= action.getCash;
@@ -518,7 +553,13 @@ export function apply(prev: State, action: Action): State {
       }
       for (const id of action.giveCompanies) state.companies[id].owner = other.id;
       for (const id of action.getCompanies) state.companies[id].owner = p.id;
-      say(state, `${p.name} trades with ${other.name}.`);
+      p.freeTrade = false;
+      say(
+        state,
+        fee
+          ? `${p.name} trades with ${other.name} (−$${fee} desk).`
+          : `${p.name} trades with ${other.name} at the Market.`,
+      );
       return state;
     }
     if (action.type === "end") {
@@ -644,7 +685,8 @@ function resolveLanding(state: State, p: Player, id: string) {
     return;
   }
   if (id === "market") {
-    say(state, `${p.name}: next trade is free.`);
+    p.freeTrade = true;
+    say(state, `${p.name} opens the Market. This trade is free.`);
     restOnSpace(state, p);
     return;
   }
@@ -697,6 +739,8 @@ function labelOf(id: string) {
 }
 
 function finishTurn(state: State) {
+  const ending = actor(state);
+  if (ending) ending.freeTrade = false;
   const live = living(state);
   state.turn += 1;
   if (state.turn % live.length === 0) state.round += 1;
@@ -718,6 +762,7 @@ export function describePhase(state: State): string {
   const here = labelOf(spaceId(p));
   if (state.phase === "home") return "GO — cash or a move";
   if (state.phase === "store") return `Buy ${here}?`;
+  if (state.phase === "extra" && onMarket(state)) return "Market is open — trade free this turn";
   if (state.phase === "card") return "Casino card";
   if (state.phase === "path") return "Roll two dice";
   if (state.phase === "land") return state.land ? `Buy ${company(state.land).name}?` : "Buy?";

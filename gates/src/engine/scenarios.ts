@@ -19,7 +19,15 @@ function four() {
 }
 
 export function runScenarios(): ScenarioResult[] {
-  return [fullBotTable(), homeIsAChoice(), fuelGetsExpensive(), cloudPaysChips(), stayOnLandedTile(), outOfMovesFreesBoard()];
+  return [
+    fullBotTable(),
+    homeIsAChoice(),
+    fuelGetsExpensive(),
+    cloudPaysChips(),
+    stayOnLandedTile(),
+    outOfMovesFreesBoard(),
+    marketLetsYouTradeFree(),
+  ];
 }
 
 function fullBotTable(): ScenarioResult {
@@ -116,6 +124,48 @@ function stayOnLandedTile(): ScenarioResult {
     name: "You stay on the tile you rolled onto",
     ok,
     detail: ok ? "Reddit +2 stays on App Store" : `stand ${s.players[0].stand} phase ${s.phase}`,
+  };
+}
+
+function marketLetsYouTradeFree(): ScenarioResult {
+  let s = createGame(
+    [
+      { id: "you", name: "You", bot: false },
+      { id: "nova", name: "Nova", bot: false },
+    ],
+    { seed: 8 },
+  );
+  s.phase = "path";
+  s.players[0].stand = 6;
+  s.forcedRoll = [1, 1];
+  s.companies.discord = { owner: "you", level: 0 };
+  s.companies.uber = { owner: "nova", level: 0 };
+  s = apply(s, { type: "path", pick: "walk" });
+  if (!s.players[0].freeTrade || s.phase !== "extra") {
+    return { id: "market", name: "Market lets you trade free", ok: false, detail: `phase ${s.phase} free ${s.players[0].freeTrade}` };
+  }
+  const cash = s.players[0].cash;
+  s = apply(s, {
+    type: "trade",
+    to: "nova",
+    giveCompanies: ["discord"],
+    getCompanies: ["uber"],
+    giveCash: 0,
+    getCash: 0,
+    giveMove: false,
+    getMove: false,
+  });
+  const you = s.players[0];
+  const ok =
+    s.companies.uber.owner === "you" &&
+    s.companies.discord.owner === "nova" &&
+    you.cash === cash &&
+    !you.freeTrade;
+  return {
+    id: "market",
+    name: "Market lets you trade free",
+    ok,
+    detail: ok ? "Swapped Discord for Uber with no desk fee" : `uber ${s.companies.uber.owner} cash ${you.cash}`,
   };
 }
 

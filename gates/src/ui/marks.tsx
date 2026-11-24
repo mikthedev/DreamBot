@@ -243,13 +243,25 @@ export function CornerArt({ id }: { id: string }) {
     );
   }
   return (
-    <svg className="corner-art" viewBox="0 0 80 80" aria-hidden>
-      <path fill="#1b140c" d="M40 16v28M24 44h32" stroke="#1b140c" strokeWidth="3" />
-      <path d="M40 18v26" stroke="#1b140c" strokeWidth="3" />
-      <path d="M22 46h36" stroke="#1b140c" strokeWidth="3" strokeLinecap="round" />
-      <path d="M18 46c6 8 10 10 22 10s16-2 22-10" fill="none" stroke="#1b140c" strokeWidth="3" />
-      <circle cx="24" cy="52" r="7" fill="none" stroke="#1b140c" strokeWidth="3" />
-      <circle cx="56" cy="52" r="7" fill="none" stroke="#1b140c" strokeWidth="3" />
+    <svg className="corner-art" viewBox="0 0 80 80" aria-hidden shapeRendering="crispEdges">
+      <rect x="8" y="28" width="64" height="8" fill="#f59e0b" />
+      <rect x="8" y="20" width="8" height="8" fill="#b45309" />
+      <rect x="24" y="20" width="8" height="8" fill="#fbbf24" />
+      <rect x="40" y="20" width="8" height="8" fill="#b45309" />
+      <rect x="56" y="20" width="8" height="8" fill="#fbbf24" />
+      <rect x="72" y="20" width="0" height="8" fill="#b45309" />
+      <rect x="16" y="20" width="8" height="8" fill="#fbbf24" />
+      <rect x="32" y="20" width="8" height="8" fill="#f59e0b" />
+      <rect x="48" y="20" width="8" height="8" fill="#f59e0b" />
+      <rect x="64" y="20" width="8" height="8" fill="#b45309" />
+      <rect x="14" y="36" width="6" height="28" fill="#7c2d12" />
+      <rect x="60" y="36" width="6" height="28" fill="#7c2d12" />
+      <rect x="14" y="52" width="52" height="12" fill="#92400e" />
+      <rect x="22" y="44" width="10" height="8" fill="#fde68a" />
+      <rect x="36" y="40" width="10" height="12" fill="#fb7185" />
+      <rect x="50" y="46" width="8" height="6" fill="#38bdf8" />
+      <rect x="34" y="10" width="12" height="10" fill="#f8fafc" />
+      <rect x="36" y="12" width="8" height="6" fill="#f59e0b" />
     </svg>
   );
 }

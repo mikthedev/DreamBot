@@ -244,50 +244,124 @@ function buttonsFor(state: State, mine: boolean): { label: string; action: Actio
   return [];
 }
 
+type Side = "bottom" | "right" | "top" | "left";
+
+const TRACK: { id: string; col: number; row: number; side: Side }[] = [
+  { id: "home", col: 1, row: 9, side: "bottom" },
+  { id: "discord", col: 2, row: 9, side: "bottom" },
+  { id: "reddit", col: 3, row: 9, side: "bottom" },
+  { id: "instagram", col: 4, row: 9, side: "bottom" },
+  { id: "app", col: 5, row: 9, side: "bottom" },
+  { id: "spotify", col: 6, row: 9, side: "bottom" },
+  { id: "applemusic", col: 7, row: 9, side: "bottom" },
+  { id: "soundcloud", col: 8, row: 9, side: "bottom" },
+  { id: "market", col: 9, row: 9, side: "right" },
+  { id: "youtube", col: 9, row: 8, side: "right" },
+  { id: "netflix", col: 9, row: 7, side: "right" },
+  { id: "disney", col: 9, row: 6, side: "right" },
+  { id: "play", col: 9, row: 5, side: "right" },
+  { id: "aws", col: 9, row: 4, side: "right" },
+  { id: "azure", col: 9, row: 3, side: "right" },
+  { id: "gcloud", col: 9, row: 2, side: "right" },
+  { id: "dream", col: 9, row: 1, side: "top" },
+  { id: "openai", col: 8, row: 1, side: "top" },
+  { id: "anthropic", col: 7, row: 1, side: "top" },
+  { id: "xai", col: 6, row: 1, side: "top" },
+  { id: "steam", col: 5, row: 1, side: "top" },
+  { id: "uber", col: 4, row: 1, side: "top" },
+  { id: "tesla", col: 3, row: 1, side: "top" },
+  { id: "waymo", col: 2, row: 1, side: "top" },
+  { id: "rest", col: 1, row: 1, side: "left" },
+  { id: "intel", col: 1, row: 2, side: "left" },
+  { id: "amd", col: 1, row: 3, side: "left" },
+  { id: "nvidia", col: 1, row: 4, side: "left" },
+  { id: "epic", col: 1, row: 5, side: "left" },
+  { id: "samsung", col: 1, row: 6, side: "left" },
+  { id: "microsoft", col: 1, row: 7, side: "left" },
+  { id: "apple", col: 1, row: 8, side: "left" },
+];
+
 function rows(state: State) {
-  const lines = [
-    ["home", "discord", "reddit", "instagram", "app", "spotify", "applemusic", "soundcloud"],
-    ["market", "youtube", "netflix", "disney", "play", "aws", "azure", "gcloud"],
-    ["dream", "openai", "anthropic", "xai", "steam", "uber", "tesla", "waymo"],
-    ["rest", "intel", "amd", "nvidia", "epic", "samsung", "microsoft", "apple"],
-  ];
-  return lines.map((line, i) => (
-    <div className="side" key={i}>
-      {line.map((id) => (
-        <Cell key={id} id={id} state={state} />
+  return (
+    <>
+      <div className="center">
+        <div>
+          <div className="logo">GATES</div>
+          <div className="logo-sub">PASS HOME · COLLECT $200</div>
+        </div>
+      </div>
+      {TRACK.map((space) => (
+        <Tile key={space.id} space={space} state={state} />
       ))}
-    </div>
-  ));
+    </>
+  );
 }
 
-function Cell({ id, state }: { id: string; state: State }) {
-  const stand = STANDS.find((s) => s.id === id);
-  const co = COMPANIES.find((c) => c.id === id);
+function Tile({
+  space,
+  state,
+}: {
+  space: (typeof TRACK)[number];
+  state: State;
+}) {
+  const stand = STANDS.find((s) => s.id === space.id);
+  const co = COMPANIES.find((c) => c.id === space.id);
   const here = actor(state);
-  const occupied = state.players.filter((p) => !p.out && STANDS[p.stand]?.id === id);
-  if (stand) {
+  const onStand = state.players.filter((p) => !p.out && STANDS[p.stand]?.id === space.id && !(p.id === here?.id && state.land));
+  const onLand = state.land === space.id ? state.players.filter((p) => p.id === here?.id && !p.out) : [];
+  const people = [...onStand, ...onLand];
+  const hot = state.land === space.id || (here && STANDS[here.stand]?.id === space.id && !state.land);
+
+  if (co) {
+    const own = state.companies[co.id];
+    const owner = state.players.find((p) => p.id === own.owner);
+    const set = setOf(co.set);
     return (
-      <div className={`cell gate ${here && STANDS[here.stand]?.id === id ? "hot" : ""}`}>
-        <small>{stand.label}</small>
-        <strong>{stand.store ? "$150" : stand.id === "home" ? "$200" : ""}</strong>
-        {occupied.map((p, i) => (
-          <i key={p.id} className="mark" style={{ background: p.color, right: 4 + i * 16 }} title={p.name} />
-        ))}
+      <div
+        className={`tile ${space.side} ${hot ? "hot" : ""}`}
+        style={{ gridColumn: space.col, gridRow: space.row, outlineColor: owner?.color }}
+      >
+        <i className="band" style={{ background: set.color }} />
+        {own.level > 0 && (
+          <span className="houses">
+            {Array.from({ length: own.level }, (_, i) => (
+              <i key={i} />
+            ))}
+          </span>
+        )}
+        <b>{co.name}</b>
+        <em>{owner ? `$${co.rent[own.level]}` : `$${co.price}`}</em>
+        <Tokens people={people} side={space.side} />
       </div>
     );
   }
-  if (!co) return <div className="cell" />;
-  const own = state.companies[co.id];
-  const owner = state.players.find((p) => p.id === own.owner);
-  const set = setOf(co.set);
-  const hot = state.land === co.id;
+
+  const corner = stand && !stand.store;
   return (
-    <div className={`cell ${hot ? "hot" : ""}`} style={{ boxShadow: `inset 0 3px 0 ${set.color}` }}>
-      <small>{set.label}</small>
-      <strong>{co.name}</strong>
-      <div className="ownerline" style={{ background: owner?.color || "transparent" }} />
-      {own.level > 0 && <small>Built {own.level}</small>}
+    <div
+      className={`tile ${space.side} ${corner ? "corner" : "rail"} ${space.id} ${hot ? "hot" : ""}`}
+      style={{ gridColumn: space.col, gridRow: space.row }}
+    >
+      <b>{stand?.label}</b>
+      <em>{stand?.store ? "$150" : space.id === "home" ? "$200" : ""}</em>
+      <Tokens people={people} side={space.side} />
     </div>
+  );
+}
+
+function Tokens({ people, side }: { people: { id: string; name: string; color: string; avatar: string | null }[]; side: Side }) {
+  return (
+    <span className={`tokens ${side}`}>
+      {people.map((p) =>
+        p.avatar ? (
+          <img key={p.id} src={p.avatar} alt={p.name} title={p.name} />
+        ) : (
+          <i key={p.id} title={p.name} style={{ background: p.color }}>
+            {p.name.slice(0, 1)}
+          </i>
+        ),
+      )}
+    </span>
   );
 }
 

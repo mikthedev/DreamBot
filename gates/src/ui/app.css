@@ -57,6 +57,7 @@ body {
   text-shadow: 2px 2px 0 #1a1208;
 }
 .play {
+  position: relative;
   min-height: 0;
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
@@ -886,13 +887,13 @@ button:disabled { opacity: 0.4; cursor: default; }
   animation: card-in 0.32s steps(6) both;
 }
 .board-close {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  z-index: 2;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
+  position: fixed;
+  top: 58px;
+  right: 16px;
+  z-index: 40;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
   padding: 0;
   display: grid;
   place-items: center;
@@ -901,7 +902,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   border: 3px dashed #6a6058;
   box-shadow: 3px 3px 0 #0a080c;
   font-family: "Pixelify Sans", Outfit, sans-serif;
-  font-size: 20px;
+  font-size: 18px;
 }
 .board-close:hover:not(:disabled) {
   background: #1c1822;
@@ -1002,6 +1003,27 @@ button:disabled { opacity: 0.4; cursor: default; }
   gap: 6px;
   max-height: 132px;
   overflow: auto;
+}
+.leave-link {
+  margin-top: 10px;
+  padding: 0;
+  min-width: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.leave-link:hover:not(:disabled) {
+  background: none;
+  box-shadow: none;
+  color: #fff4cc;
+  transform: none;
 }
 .leave-warn {
   position: absolute;
@@ -2002,7 +2024,7 @@ input {
 
 @media (max-width: 760px) {
   .stall-grid { grid-template-columns: 1fr 1fr; }
-  .board-close { top: 10px; right: 10px; }
+  .board-close { top: 52px; right: 10px; }
   .stall-deeds li { grid-template-columns: 28px 1fr; }
   .stall-deeds .deed-act { justify-self: start; }
   .center-actions { width: 100%; }

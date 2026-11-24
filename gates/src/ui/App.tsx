@@ -480,13 +480,13 @@ export function App() {
         </div>
       )}
 
+      {sheet === "more" ? (
+        <button type="button" className="board-close" title="Back to the board" onClick={() => setSheet(null)}>
+          ◀
+        </button>
+      ) : null}
       {sheet && (
         <div className={`sheet ${sheet === "more" ? "is-stall" : ""}`} onClick={() => setSheet(null)}>
-          {sheet === "more" ? (
-            <button type="button" className="board-close" title="Back to the board" onClick={() => setSheet(null)}>
-              ◀
-            </button>
-          ) : null}
           <article className={sheet === "more" ? "stall-menu" : ""} onClick={(e) => e.stopPropagation()}>
             {sheet === "more" && state && me && (
               <MoreStall
@@ -628,11 +628,6 @@ function MoreStall({
           <b>Recent</b>
           <span>Log</span>
         </button>
-        <button className="stall-act leave" onClick={() => setWarnLeave(true)}>
-          <small>Leave</small>
-          <b>◀ Menu</b>
-          <span>Drop table</span>
-        </button>
       </div>
       <h3 className="stall-deeds-title">Your companies</h3>
       {owned.length ? (
@@ -656,6 +651,9 @@ function MoreStall({
       ) : (
         <p className="stall-empty">No deeds yet.</p>
       )}
+      <button type="button" className="leave-link" onClick={() => setWarnLeave(true)}>
+        Leave table
+      </button>
       {warnLeave ? (
         <div className="leave-warn" role="alertdialog" aria-labelledby="leave-warn-title">
           <p className="start-kicker">Warning</p>

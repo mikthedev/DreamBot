@@ -129,6 +129,10 @@ export function App() {
     setTrading(true);
   }, [mine, walking, diceSpin, state?.phase, me?.freeTrade, state?.rollTick, state?.offer]);
 
+  useEffect(() => {
+    if (trading) sfx("market");
+  }, [trading]);
+
   function act(action: Action) {
     setState((s) => {
       if (!s) return s;
@@ -140,7 +144,7 @@ export function App() {
 
   function rollThen(action: Action) {
     if (diceSpin != null || !me) return;
-    sfx("click");
+    sfx("dice");
     setHeld({ cash: me.cash, moves: me.moves });
     let n = 0;
     const spin = window.setInterval(() => {
@@ -475,7 +479,7 @@ export function App() {
                   </button>
                 ))}
                 {mine && state.phase === "extra" && !walking && !diceSpin ? (
-                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => { sfx("click"); setTrading(true); }}>
+                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => setTrading(true)}>
                     {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
                   </button>
                 ) : null}
@@ -594,7 +598,6 @@ export function App() {
                 mine={mine}
                 onAct={(action) => act(action)}
                 onTrade={() => {
-                  sfx("click");
                   setSheet(null);
                   setTrading(true);
                 }}
@@ -1128,14 +1131,16 @@ function samePay(a: State["lastPay"], b: State["lastPay"]) {
 
 function cuePlay(prev: State, next: State, action: Action) {
   const you = prev.players[0]?.id;
+  if (action.type === "path" && actor(prev)?.bot) sfx("dice");
   if (action.type === "build") sfx("upgrade");
   if (action.type === "fuel" || action.type === "license" || (action.type === "store" && action.pick === "buy") || (action.type === "land" && action.pick === "buy")) {
     sfx("pay");
   }
+  if ((action.type === "land" && action.pick === "buy") || (action.type === "store" && action.pick === "buy")) sfx("confirm");
   if (action.type === "note" || action.type === "home" || action.type === "sell") sfx("received");
-  if (action.type === "offer" && action.pick === "accept") sfx("enter");
+  if (action.type === "offer" && action.pick === "accept") sfx("confirm");
   if (action.type === "offer" && action.pick === "decline") sfx("back");
-  if (action.type === "trade") sfx("enter");
+  if (action.type === "trade") sfx("confirm");
   if (!samePay(prev.lastPay, next.lastPay) && next.lastPay && you) {
     if (next.lastPay.to === you) sfx("received");
     else if (actor(prev)?.id === you) sfx("pay");

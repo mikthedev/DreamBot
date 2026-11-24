@@ -77,13 +77,13 @@ export type StoreId = (typeof STORES)[number]["id"];
 
 /** Stands you wait on. Leaving a stand walks the paired set, then you stop on the next stand. */
 export const STANDS: { id: string; label: string; set: SetId; store?: StoreId }[] = [
-  { id: "home", label: "Home", set: "social" },
+  { id: "home", label: "GO", set: "social" },
   { id: "app", label: "App Store", set: "music", store: "app" },
   { id: "market", label: "Market", set: "watch" },
   { id: "play", label: "Play Store", set: "cloud", store: "play" },
-  { id: "dream", label: "Dream", set: "ai" },
+  { id: "dream", label: "Casino", set: "ai" },
   { id: "steam", label: "Steam", set: "ride", store: "steam" },
-  { id: "rest", label: "Rest", set: "chips" },
+  { id: "rest", label: "Jail", set: "chips" },
   { id: "epic", label: "Epic", set: "giants", store: "epic" },
 ];
 

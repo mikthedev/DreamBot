@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { COMPANIES, STANDS, setOf } from "../engine/data";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CARD_LABEL, COMPANIES, STANDS, STORES, setOf } from "../engine/data";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
 import {
@@ -11,9 +11,12 @@ import {
   type Action,
   type State,
 } from "../engine/game";
+import { CornerArt, DieFace, Mark } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const ID_KEY = "gates-discord-id";
+const CORNER = 1.7;
+const TRACK_SUM = CORNER * 2 + 7;
 
 type Profile = { id: string; username: string; avatar: string | null; linked: boolean };
 
@@ -42,7 +45,7 @@ export function App() {
     if (state.phase === "over") return;
     const who = actor(state);
     if (!who?.bot) return;
-    const t = window.setTimeout(() => setState((s) => stepBot(s)), 500);
+    const t = window.setTimeout(() => setState((s) => stepBot(s)), 720);
     return () => window.clearTimeout(t);
   }, [state]);
 
@@ -61,58 +64,87 @@ export function App() {
   }
 
   const primary = useMemo(() => buttonsFor(state, mine), [state, mine]);
+  const card = state.phase === "card" ? state.pendingCard : null;
 
   return (
     <div className="app">
-      <div className="top">
-        {state.players.map((p) => (
-          <div key={p.id} className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""}`}>
-            <Face name={p.name} avatar={p.avatar} color={p.color} />
-            <b>{p.name}</b>
-            <span>{p.out ? "out" : state.mode === "moves" ? `${p.moves} moves` : `$${p.cash}`}</span>
-          </div>
-        ))}
-      </div>
+      <header className="top">
+        <div className="brand">DreamPoly</div>
+        <div className="seats">
+          {state.players.map((p) => (
+            <div key={p.id} className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""}`}>
+              <Face name={p.name} avatar={p.avatar} color={p.color} />
+              <b>{p.name}</b>
+              <span>{p.out ? "out" : state.mode === "moves" ? `${p.moves} moves` : `$${p.cash}`}</span>
+            </div>
+          ))}
+        </div>
+        <button className="ghost tiny" onClick={() => setSheet("test")}>
+          {testOn ? "Test tools" : "Test off"}
+        </button>
+      </header>
 
       <div className="stage">
-        <div className="board" aria-label="Gates board">
-          {rows(state)}
+        <div className="board" aria-label="DreamPoly board">
+          <div className={`center ${card ? "dealing" : ""}`}>
+            <div className="brand-lockup">
+              {card ? (
+                <article className="chance" key={card}>
+                  <span>Casino</span>
+                  <b>{CARD_LABEL[card]}</b>
+                </article>
+              ) : (
+                <>
+                  <div className="logo">DreamPoly</div>
+                  <div className="logo-rule" />
+                  <div className="logo-sub">Pass GO · collect $200</div>
+                </>
+              )}
+              {state.lastRoll != null && (
+                <div key={state.rollTick} className={`die ${card ? "away" : ""}`} aria-hidden>
+                  <DieFace n={state.lastRoll} />
+                </div>
+              )}
+            </div>
+          </div>
+          {TRACK.map((space) => (
+            <Tile key={space.id} space={space} state={state} />
+          ))}
+          <Pawns state={state} />
         </div>
       </div>
 
-      <div className="dock">
-        <div className="you">
-          <Face name={me.name} avatar={me.avatar} color={me.color} big />
-          <div className="stats">
-            <b>${me.cash}</b>
-            <span>{me.moves} moves {me.moves <= 4 && !me.out ? "· running thin" : ""}</span>
+      <footer className="foot">
+        {me.moves <= 4 && !me.out && state.mode === "moves" && (
+          <div className="banner">
+            Under 5 moves. At GO, take a move if you own a full set, or buy one from More. Next buy is ${fuelPrice(me)}.
+          </div>
+        )}
+        <div className="dock">
+          <div className="you">
+            <Face name={me.name} avatar={me.avatar} color={me.color} big />
+            <div className="stats">
+              <b>${me.cash}</b>
+              <span>{me.moves} moves {me.moves <= 4 && !me.out ? "· running thin" : ""}</span>
+            </div>
+          </div>
+          <div className="prompt">
+            {state.phase === "over"
+              ? `Winner: ${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.name).join(", ") || "—"}`
+              : mine
+                ? describePhase(state)
+                : `${who?.name || "Someone"} is playing`}
+          </div>
+          <div className="actions">
+            {primary.map((b) => (
+              <button key={b.label} className={b.ghost ? "ghost" : b.warn ? "warn" : "go"} disabled={!mine && b.needsYou} onClick={() => act(b.action)}>
+                {b.label}
+              </button>
+            ))}
+            <button className="ghost" onClick={() => setSheet("more")}>More</button>
           </div>
         </div>
-        <div className="prompt">
-          {state.phase === "over"
-            ? `Winner: ${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.name).join(", ") || "—"}`
-            : mine
-              ? describePhase(state)
-              : `${who?.name || ""} is playing`}
-          {state.land && mine && state.phase === "land" ? ` · ${COMPANIES.find((c) => c.id === state.land)?.name}` : ""}
-        </div>
-        <div className="actions">
-          {primary.map((b) => (
-            <button key={b.label} className={b.ghost ? "ghost" : b.warn ? "warn" : ""} disabled={!mine && b.needsYou} onClick={() => act(b.action)}>
-              {b.label}
-            </button>
-          ))}
-          <button className="ghost" onClick={() => setSheet("more")}>More</button>
-        </div>
-      </div>
-
-      {me.moves <= 4 && !me.out && state.mode === "moves" && (
-        <div className="banner">Under 5 moves. At Home, take a move if you own a full set, or buy one from More. Next buy is ${fuelPrice(me)}.</div>
-      )}
-
-      <button className="corner" onClick={() => setSheet("test")}>
-        {testOn ? "Test tools" : "Test off"}
-      </button>
+      </footer>
 
       {sheet && (
         <div className="sheet" onClick={() => setSheet(null)}>
@@ -132,7 +164,8 @@ export function App() {
                 </div>
                 <h2>Your companies</h2>
                 {COMPANIES.filter((c) => state.companies[c.id].owner === me.id).map((c) => (
-                  <div className="row" key={c.id}>
+                  <div className="row company" key={c.id}>
+                    <Mark id={c.id} />
                     <span>{c.name} · L{state.companies[c.id].level}</span>
                     <button className="ghost" disabled={!mine || state.phase !== "extra"} onClick={() => act({ type: "build", companyId: c.id })}>Build</button>
                     <button className="ghost" disabled={!mine || state.phase !== "extra"} onClick={() => act({ type: "sell", companyId: c.id })}>Sell</button>
@@ -281,36 +314,18 @@ const TRACK: { id: string; col: number; row: number; side: Side }[] = [
   { id: "apple", col: 1, row: 8, side: "left" },
 ];
 
-function rows(state: State) {
-  return (
-    <>
-      <div className="center">
-        <div>
-          <div className="logo">GATES</div>
-          <div className="logo-sub">PASS HOME · COLLECT $200</div>
-        </div>
-      </div>
-      {TRACK.map((space) => (
-        <Tile key={space.id} space={space} state={state} />
-      ))}
-    </>
-  );
-}
+const SPECIAL: Record<string, { title: string; kicker: string }> = {
+  home: { title: "GO", kicker: "Collect $200" },
+  market: { title: "Market", kicker: "Free trade" },
+  dream: { title: "Casino", kicker: "Draw a card" },
+  rest: { title: "Jail", kicker: "Just visiting" },
+};
 
-function Tile({
-  space,
-  state,
-}: {
-  space: (typeof TRACK)[number];
-  state: State;
-}) {
+function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State }) {
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
   const here = actor(state);
-  const onStand = state.players.filter((p) => !p.out && STANDS[p.stand]?.id === space.id && !(p.id === here?.id && state.land));
-  const onLand = state.land === space.id ? state.players.filter((p) => p.id === here?.id && !p.out) : [];
-  const people = [...onStand, ...onLand];
-  const hot = state.land === space.id || (here && STANDS[here.stand]?.id === space.id && !state.land);
+  const hot = state.land === space.id || (!!here && STANDS[here.stand]?.id === space.id && !state.land);
 
   if (co) {
     const own = state.companies[co.id];
@@ -318,8 +333,9 @@ function Tile({
     const set = setOf(co.set);
     return (
       <div
-        className={`tile ${space.side} ${hot ? "hot" : ""}`}
-        style={{ gridColumn: space.col, gridRow: space.row, outlineColor: owner?.color }}
+        className={`tile prop ${space.side} id-${space.id} ${hot ? "hot" : ""}`}
+        style={{ gridColumn: space.col, gridRow: space.row, boxShadow: owner ? `inset 0 0 0 3px ${owner.color}` : undefined }}
+        title={`${co.name} · ${owner ? `rent $${co.rent[own.level]} · ${owner.name}` : `$${co.price}`}`}
       >
         <i className="band" style={{ background: set.color }} />
         {own.level > 0 && (
@@ -329,44 +345,121 @@ function Tile({
             ))}
           </span>
         )}
-        <b>{co.name}</b>
-        <em>{owner ? `$${co.rent[own.level]}` : `$${co.price}`}</em>
-        <Tokens people={people} side={space.side} />
+        <span className="deed">
+          <Mark id={co.id} />
+          <b>{co.name}</b>
+          <em>{owner ? `$${co.rent[own.level]}` : `$${co.price}`}</em>
+        </span>
       </div>
     );
   }
 
-  const corner = stand && !stand.store;
+  if (stand && !stand.store) {
+    const spec = SPECIAL[space.id];
+    return (
+      <div className={`tile special id-${space.id} ${space.side} ${hot ? "hot" : ""}`} style={{ gridColumn: space.col, gridRow: space.row }}>
+        <CornerArt id={space.id} />
+        <span className="special-copy">
+          <b>{spec.title}</b>
+          <em>{spec.kicker}</em>
+        </span>
+      </div>
+    );
+  }
+
+  const ownerId = stand?.store ? state.stores[stand.store] : null;
+  const owner = state.players.find((p) => p.id === ownerId);
+  const rent = ownerId ? storeRent(state, ownerId) : null;
   return (
     <div
-      className={`tile ${space.side} ${corner ? "corner" : "rail"} ${space.id} ${hot ? "hot" : ""}`}
-      style={{ gridColumn: space.col, gridRow: space.row }}
+      className={`tile rail ${space.side} id-${space.id} ${hot ? "hot" : ""}`}
+      style={{ gridColumn: space.col, gridRow: space.row, boxShadow: owner ? `inset 0 0 0 3px ${owner.color}` : undefined }}
+      title={`${stand?.label ?? ""} · ${owner ? `${owner.name} · rent $${rent}` : "$150"}`}
     >
-      <b>{stand?.label}</b>
-      <em>{stand?.store ? "$150" : space.id === "home" ? "$200" : ""}</em>
-      <Tokens people={people} side={space.side} />
+      <span className="deed">
+        <Mark id={space.id} />
+        <b>{stand?.label}</b>
+        <em>{rent != null ? `$${rent}` : "$150"}</em>
+      </span>
     </div>
   );
 }
 
-function Tokens({ people, side }: { people: { id: string; name: string; color: string; avatar: string | null }[]; side: Side }) {
-  return (
-    <span className={`tokens ${side}`}>
-      {people.map((p) =>
-        p.avatar ? (
-          <img key={p.id} src={p.avatar} alt={p.name} title={p.name} />
-        ) : (
-          <i key={p.id} title={p.name} style={{ background: p.color }}>
-            {p.name.slice(0, 1)}
-          </i>
-        ),
-      )}
-    </span>
-  );
+function storeRent(state: State, ownerId: string) {
+  const n = STORES.filter((s) => state.stores[s.id] === ownerId).length;
+  return [25, 50, 75, 100][n - 1] ?? 25;
+}
+
+function Pawns({ state }: { state: State }) {
+  const here = actor(state);
+  const living = state.players.filter((p) => !p.out);
+  const groups = new Map<string, typeof living>();
+  for (const p of living) {
+    const id = p.id === here?.id && state.land ? state.land : STANDS[p.stand].id;
+    const list = groups.get(id) ?? [];
+    list.push(p);
+    groups.set(id, list);
+  }
+  const pawns: ReactNode[] = [];
+  for (const [id, group] of groups) {
+    const space = TRACK.find((t) => t.id === id);
+    if (!space) continue;
+    const box = cellBox(space.col, space.row);
+    const base = anchor(space);
+    group.forEach((p, i) => {
+      const [ox, oy] = slotOffset(i, group.length);
+      pawns.push(
+        <span
+          key={p.id}
+          className={`pawn ${p.id === here?.id ? "acting" : ""}`}
+          title={p.name}
+          style={{
+            left: `${(box.x + box.w * (base.cx + ox)) * 100}%`,
+            top: `${(box.y + box.h * (base.cy + oy)) * 100}%`,
+            background: p.avatar ? undefined : p.color,
+            zIndex: p.id === here?.id ? 2 : 1,
+          }}
+        >
+          {p.avatar ? <img src={p.avatar} alt="" /> : p.name.slice(0, 1)}
+        </span>,
+      );
+    });
+  }
+  return <div className="pawns">{pawns}</div>;
+}
+
+function cellBox(col: number, row: number) {
+  const along = (index: number) => {
+    let start = 0;
+    for (let i = 1; i < index; i++) start += i === 1 || i === 9 ? CORNER : 1;
+    const size = index === 1 || index === 9 ? CORNER : 1;
+    return { start: start / TRACK_SUM, size: size / TRACK_SUM };
+  };
+  const x = along(col);
+  const y = along(row);
+  return { x: x.start, y: y.start, w: x.size, h: y.size };
+}
+
+function anchor(space: (typeof TRACK)[number]) {
+  if (space.id === "home") return { cx: 0.55, cy: 0.34 };
+  if (space.id === "market") return { cx: 0.32, cy: 0.34 };
+  if (space.id === "dream") return { cx: 0.32, cy: 0.68 };
+  if (space.id === "rest") return { cx: 0.62, cy: 0.68 };
+  if (space.side === "bottom") return { cx: 0.5, cy: 0.34 };
+  if (space.side === "top") return { cx: 0.5, cy: 0.66 };
+  if (space.side === "left") return { cx: 0.66, cy: 0.5 };
+  return { cx: 0.34, cy: 0.5 };
+}
+
+function slotOffset(index: number, count: number): [number, number] {
+  if (count <= 1) return [0, 0];
+  const radius = count > 4 ? 0.12 : 0.09;
+  const angle = (Math.PI * 2 * index) / count - Math.PI / 2;
+  return [Math.cos(angle) * radius, Math.sin(angle) * radius];
 }
 
 function Face({ name, avatar, color, big }: { name: string; avatar: string | null; color: string; big?: boolean }) {
-  if (avatar) return <img className="avatar" src={avatar} alt="" />;
+  if (avatar) return <img className={`avatar ${big ? "big" : ""}`} src={avatar} alt="" />;
   return (
     <div className={`avatar ph ${big ? "big" : ""}`} style={{ background: color }}>
       {name.slice(0, 1)}

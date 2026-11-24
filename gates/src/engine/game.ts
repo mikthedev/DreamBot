@@ -62,6 +62,8 @@ export type State = {
   pendingCard: CardId | null;
   land: string | null;
   forcedRoll: 1 | 2 | 3 | null;
+  lastRoll: 1 | 2 | 3 | null;
+  rollTick: number;
   log: string[];
   winnerIds: string[];
   movesBoughtThisTurn: boolean;
@@ -133,6 +135,8 @@ export function createGame(
     pendingCard: null,
     land: null,
     forcedRoll: null,
+    lastRoll: null,
+    rollTick: 0,
     log: ["Table open."],
     winnerIds: [],
     movesBoughtThisTurn: false,
@@ -219,7 +223,7 @@ function beginTurn(state: State) {
   const here = stand()[p.stand];
   if (here.id === "home" && p.leftHome) {
     state.phase = "home";
-    say(state, `${p.name}: Home — cash or a move.`);
+    say(state, `${p.name}: GO — cash or a move.`);
     return;
   }
   arrive(state, p);
@@ -229,7 +233,7 @@ function arrive(state: State, p: Player) {
   const here = stand()[p.stand];
   if (here.id === "home" && !p.leftHome) {
     p.leftHome = true;
-    say(state, `${p.name} leaves Home.`);
+    say(state, `${p.name} leaves GO.`);
   }
   if (here.store) {
     const owner = state.stores[here.store];
@@ -254,6 +258,9 @@ function arrive(state: State, p: Player) {
   if (here.id === "market") {
     say(state, `${p.name}: next trade is free.`);
   }
+  if (here.id === "rest") {
+    say(state, `${p.name} is just visiting Jail.`);
+  }
   state.phase = "path";
 }
 
@@ -266,7 +273,7 @@ function drawCard(state: State, p: Player) {
   const card = state.deck.shift()!;
   state.pendingCard = card;
   state.phase = "card";
-  say(state, `${p.name} draws ${CARD_LABEL[card]}.`);
+  say(state, `${p.name} draws a Casino card — ${CARD_LABEL[card]}.`);
 }
 
 function spark(state: State, p: Player) {
@@ -403,6 +410,8 @@ export function apply(prev: State, action: Action): State {
     state.forcedRoll = null;
     const die = (p.nudge && roll !== 2 ? 2 : roll) as 1 | 2 | 3;
     p.nudge = false;
+    state.lastRoll = die;
+    state.rollTick += 1;
     const co = companiesIn(set).find((c) => c.die === die)!;
     state.land = co.id;
     say(state, `${p.name} rolls ${die} → ${co.name}.`);
@@ -622,11 +631,11 @@ export function company(id: string) {
 export function describePhase(state: State): string {
   const p = actor(state);
   if (!p || state.phase === "over") return state.winnerIds.length ? "Game over" : "";
-  if (state.phase === "home") return "Home";
+  if (state.phase === "home") return "You're on GO";
   if (state.phase === "store") return `Buy ${STANDS[p.stand].label}?`;
-  if (state.phase === "card") return "Card";
-  if (state.phase === "path") return setOf(STANDS[p.stand].set).label;
-  if (state.phase === "land") return state.land ? company(state.land).name : "Buy?";
-  if (state.phase === "extra") return "Your move";
+  if (state.phase === "card") return "Casino card";
+  if (state.phase === "path") return `${setOf(STANDS[p.stand].set).label} — walk or alley`;
+  if (state.phase === "land") return state.land ? `Buy ${company(state.land).name}?` : "Buy?";
+  if (state.phase === "extra") return "Build, buy a move, or end";
   return "";
 }

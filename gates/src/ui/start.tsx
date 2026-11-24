@@ -80,11 +80,7 @@ export function StartMenu({
           <span>DreamPoly</span>
         </h1>
         <p className="start-lead">Buy the brands. Spend your moves. Stack rent until the last fortune standing.</p>
-        <div
-          className="start-picks"
-          onMouseEnter={() => onMuffle(true)}
-          onMouseLeave={() => { if (!leaving) onMuffle(false); }}
-        >
+        <div className="start-picks">
           <button className="mode-card main" style={{ "--i": 0 } as CSSProperties} onMouseEnter={sfxHover} onClick={() => pick("moves")}>
             <small>Main game</small>
             <b>DreamPoly</b>
@@ -112,7 +108,6 @@ export function Lobby({
   onBack,
   onSeatBots,
   onPlayBots,
-  onMuffle,
 }: {
   mode: Mode;
   youId: string;
@@ -124,7 +119,6 @@ export function Lobby({
   onBack: () => void;
   onSeatBots: () => void;
   onPlayBots: () => void;
-  onMuffle: (on: boolean) => void;
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
   const inTable = joined.some((p) => p.id === youId);
@@ -189,11 +183,7 @@ export function Lobby({
           {inTable ? " Hit − to watch from the spectator rail." : " You are watching. Hit + to sit."}
         </p>
         <WaitingBooth />
-        <div
-          className="lobby-actions"
-          onMouseEnter={() => onMuffle(true)}
-          onMouseLeave={() => onMuffle(false)}
-        >
+        <div className="lobby-actions">
           <button className="stall-btn primary" disabled={!ready} onMouseEnter={sfxHover} onClick={() => { sfx("enter"); onStart(); }}>
             <b>Start</b>
             <small>{ready ? "The stall is open" : `${MIN_PLAYERS - joined.length} more to open`}</small>
@@ -206,7 +196,7 @@ export function Lobby({
             <b>Play with bots</b>
             <small>You plus three</small>
           </button>
-          <button className="stall-btn back" onMouseEnter={sfxHover} onClick={() => { sfx("back"); onMuffle(false); onBack(); }}>
+          <button className="stall-btn back" onMouseEnter={sfxHover} onClick={() => { sfx("back"); onBack(); }}>
             <b>◀ Back</b>
             <small>Leave table</small>
           </button>

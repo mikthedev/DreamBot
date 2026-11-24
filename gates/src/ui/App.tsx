@@ -186,7 +186,6 @@ export function App() {
     setSpectators([]);
     setScreen("lobby");
     setState(null);
-    setMenuMuffle(false);
   }
 
   function joinSeat(id?: string) {
@@ -294,8 +293,8 @@ export function App() {
   }, [pregame]);
 
   useEffect(() => {
-    muffleMusic(dive !== "idle" || menuMuffle || (!pregame && peeking));
-  }, [pregame, peeking, dive, menuMuffle]);
+    muffleMusic(dive !== "idle" || screen === "lobby" || menuMuffle || (!pregame && peeking));
+  }, [pregame, peeking, dive, menuMuffle, screen]);
 
   useEffect(() => {
     if (!seatHover) return;
@@ -338,7 +337,6 @@ export function App() {
             onSpectate={spectateSeat}
             onStart={() => startTable()}
             onBack={() => { setMenuMuffle(false); setScreen("menu"); }}
-            onMuffle={setMenuMuffle}
             onSeatBots={seatBots}
             onPlayBots={playWithBots}
           />

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CARD_LABEL, COMPANIES, HARD_STOP_ROUNDS, MAX_PLAYERS, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, START_CASH, START_MOVES, STORES, companiesIn, setOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
-import { stepBot } from "../engine/bot";
+import { botAction, stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
 import {
   actor,
@@ -91,8 +91,9 @@ export function App() {
       () =>
         setState((s) => {
           if (!s) return s;
-          const next = stepBot(s);
-          cuePlay(s, next, { type: "end" });
+          const action = botAction(s);
+          const next = apply(s, action);
+          cuePlay(s, next, action);
           return next;
         }),
       offerBot ? 900 : 720,
@@ -1150,16 +1151,17 @@ function samePay(a: State["lastPay"], b: State["lastPay"]) {
 
 function cuePlay(prev: State, next: State, action: Action) {
   const you = prev.players[0]?.id;
+  const mine = actor(prev)?.id === you;
   if (action.type === "path" && actor(prev)?.bot) sfx("dice");
   if (action.type === "build") sfx("upgrade");
   if (action.type === "fuel" || action.type === "license" || (action.type === "store" && action.pick === "buy") || (action.type === "land" && action.pick === "buy")) {
     sfx("pay");
   }
-  if (action.type === "end") sfx("confirm");
+  if (action.type === "end" && mine) sfx("confirm");
   if (action.type === "note" || action.type === "home" || action.type === "sell") sfx("received");
-  if (action.type === "offer" && action.pick === "accept") sfx("confirm");
+  if (action.type === "offer" && action.pick === "accept" && prev.offer?.to === you) sfx("confirm");
   if (action.type === "offer" && action.pick === "decline") sfx("back");
-  if (action.type === "trade") sfx("enter");
+  if (action.type === "trade" && mine) sfx("enter");
   if (!samePay(prev.lastPay, next.lastPay) && next.lastPay && you) {
     if (next.lastPay.to === you) sfx("received");
     else if (actor(prev)?.id === you) sfx("pay");

@@ -11,7 +11,9 @@ import {
   type Action,
   type State,
 } from "../engine/game";
-import { CornerArt, DieFace, Mark } from "./marks";
+import { TRACK } from "../engine/track";
+import { BrandLogo } from "./brandLogos";
+import { CornerArt, DieFace } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const ID_KEY = "gates-discord-id";
@@ -29,6 +31,7 @@ export function App() {
     createGame(seats("You", null, true), { seed: Date.now() % 100000 }),
   );
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
+  const [diceSpin, setDiceSpin] = useState<1 | 2 | 3 | null>(null);
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
   }, [testOn]);
@@ -57,14 +60,30 @@ export function App() {
     setState((s) => apply(s, action));
   }
 
+  function rollThen(action: Action) {
+    if (diceSpin != null) return;
+    let n = 0;
+    const spin = window.setInterval(() => {
+      setDiceSpin((1 + Math.floor(Math.random() * 3)) as 1 | 2 | 3);
+      n += 1;
+      if (n >= 10) {
+        window.clearInterval(spin);
+        setDiceSpin(null);
+        act(action);
+      }
+    }, 65);
+  }
+
   function restart(withBots: boolean) {
     const name = profile?.username || "You";
     setState(createGame(seats(name, profile?.avatar ?? null, withBots), { seed: Date.now() % 100000 }));
     setSheet(null);
   }
 
-  const primary = useMemo(() => buttonsFor(state, mine), [state, mine]);
+  const primary = useMemo(() => buttonsFor(state, mine, !!diceSpin), [state, mine, diceSpin]);
   const card = state.phase === "card" ? state.pendingCard : null;
+  const centerDie = diceSpin ?? state.lastRoll;
+  const rolling = diceSpin != null;
 
   return (
     <div className="app">
@@ -86,13 +105,18 @@ export function App() {
 
       <div className="stage">
         <div className="board" aria-label="DreamPoly board">
-          <div className={`center ${card ? "dealing" : ""}`}>
+          <div className={`center ${card ? "dealing" : ""} ${state.phase === "path" && mine ? "rolling-ready" : ""}`}>
             <div className="brand-lockup">
               {card ? (
                 <article className="chance" key={card}>
                   <span>Casino</span>
                   <b>{CARD_LABEL[card]}</b>
                 </article>
+              ) : state.phase === "path" && mine ? (
+                <div className="roll-callout">
+                  <span>Your roll</span>
+                  <b>{rolling ? "Rolling…" : "Tap Roll dice"}</b>
+                </div>
               ) : (
                 <>
                   <div className="logo">DreamPoly</div>
@@ -100,9 +124,13 @@ export function App() {
                   <div className="logo-sub">Pass GO · collect $200</div>
                 </>
               )}
-              {state.lastRoll != null && (
-                <div key={state.rollTick} className={`die ${card ? "away" : ""}`} aria-hidden>
-                  <DieFace n={state.lastRoll} />
+              {centerDie != null && !card && (
+                <div
+                  key={rolling ? "spin" : state.rollTick}
+                  className={`die ${rolling ? "spinning" : ""} ${card ? "away" : ""}`}
+                  aria-hidden
+                >
+                  <DieFace n={centerDie} />
                 </div>
               )}
             </div>
@@ -137,7 +165,12 @@ export function App() {
           </div>
           <div className="actions">
             {primary.map((b) => (
-              <button key={b.label} className={b.ghost ? "ghost" : b.warn ? "warn" : "go"} disabled={!mine && b.needsYou} onClick={() => act(b.action)}>
+              <button
+                key={b.label}
+                className={b.ghost ? "ghost" : b.warn ? "warn" : "go"}
+                disabled={(!mine && b.needsYou) || !!diceSpin}
+                onClick={() => (b.roll ? rollThen(b.action) : act(b.action))}
+              >
                 {b.label}
               </button>
             ))}
@@ -165,7 +198,7 @@ export function App() {
                 <h2>Your companies</h2>
                 {COMPANIES.filter((c) => state.companies[c.id].owner === me.id).map((c) => (
                   <div className="row company" key={c.id}>
-                    <Mark id={c.id} />
+                    <BrandLogo id={c.id} label={c.name} />
                     <span>{c.name} · L{state.companies[c.id].level}</span>
                     <button className="ghost" disabled={!mine || state.phase !== "extra"} onClick={() => act({ type: "build", companyId: c.id })}>Build</button>
                     <button className="ghost" disabled={!mine || state.phase !== "extra"} onClick={() => act({ type: "sell", companyId: c.id })}>Sell</button>
@@ -243,7 +276,11 @@ function seats(name: string, avatar: string | null, withBots: boolean) {
   ];
 }
 
-function buttonsFor(state: State, mine: boolean): { label: string; action: Action; ghost?: boolean; warn?: boolean; needsYou: boolean }[] {
+function buttonsFor(
+  state: State,
+  mine: boolean,
+  busy: boolean,
+): { label: string; action: Action; ghost?: boolean; warn?: boolean; needsYou: boolean; roll?: boolean }[] {
   if (state.phase === "over") return [];
   if (!mine) return [];
   if (state.phase === "home") {
@@ -261,8 +298,9 @@ function buttonsFor(state: State, mine: boolean): { label: string; action: Actio
   if (state.phase === "card") return [{ label: "Continue", action: { type: "card" }, needsYou: true }];
   if (state.phase === "path") {
     const set = setOf(STANDS[state.players.find((p) => p.id === actor(state)?.id)?.stand ?? 0].set);
+    if (busy) return [];
     return [
-      { label: `Walk ${set.label}`, action: { type: "path", pick: "walk" }, needsYou: true },
+      { label: "Roll dice", action: { type: "path", pick: "walk" }, needsYou: true, roll: true },
       { label: `Alley $${set.alley}`, action: { type: "path", pick: "alley" }, ghost: true, needsYou: true },
     ];
   }
@@ -277,43 +315,6 @@ function buttonsFor(state: State, mine: boolean): { label: string; action: Actio
   return [];
 }
 
-type Side = "bottom" | "right" | "top" | "left";
-
-const TRACK: { id: string; col: number; row: number; side: Side }[] = [
-  { id: "home", col: 1, row: 9, side: "bottom" },
-  { id: "discord", col: 2, row: 9, side: "bottom" },
-  { id: "reddit", col: 3, row: 9, side: "bottom" },
-  { id: "instagram", col: 4, row: 9, side: "bottom" },
-  { id: "app", col: 5, row: 9, side: "bottom" },
-  { id: "spotify", col: 6, row: 9, side: "bottom" },
-  { id: "applemusic", col: 7, row: 9, side: "bottom" },
-  { id: "soundcloud", col: 8, row: 9, side: "bottom" },
-  { id: "market", col: 9, row: 9, side: "right" },
-  { id: "youtube", col: 9, row: 8, side: "right" },
-  { id: "netflix", col: 9, row: 7, side: "right" },
-  { id: "disney", col: 9, row: 6, side: "right" },
-  { id: "play", col: 9, row: 5, side: "right" },
-  { id: "aws", col: 9, row: 4, side: "right" },
-  { id: "azure", col: 9, row: 3, side: "right" },
-  { id: "gcloud", col: 9, row: 2, side: "right" },
-  { id: "dream", col: 9, row: 1, side: "top" },
-  { id: "openai", col: 8, row: 1, side: "top" },
-  { id: "anthropic", col: 7, row: 1, side: "top" },
-  { id: "xai", col: 6, row: 1, side: "top" },
-  { id: "steam", col: 5, row: 1, side: "top" },
-  { id: "uber", col: 4, row: 1, side: "top" },
-  { id: "tesla", col: 3, row: 1, side: "top" },
-  { id: "waymo", col: 2, row: 1, side: "top" },
-  { id: "rest", col: 1, row: 1, side: "left" },
-  { id: "intel", col: 1, row: 2, side: "left" },
-  { id: "amd", col: 1, row: 3, side: "left" },
-  { id: "nvidia", col: 1, row: 4, side: "left" },
-  { id: "epic", col: 1, row: 5, side: "left" },
-  { id: "samsung", col: 1, row: 6, side: "left" },
-  { id: "microsoft", col: 1, row: 7, side: "left" },
-  { id: "apple", col: 1, row: 8, side: "left" },
-];
-
 const SPECIAL: Record<string, { title: string; kicker: string }> = {
   home: { title: "GO", kicker: "Collect $200" },
   market: { title: "Market", kicker: "Free trade" },
@@ -325,7 +326,8 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
   const here = actor(state);
-  const hot = state.land === space.id || (!!here && STANDS[here.stand]?.id === space.id && !state.land);
+  const hot = state.land === space.id;
+  const standHere = !!here && STANDS[here.stand]?.id === space.id && !state.land && state.phase !== "path";
 
   if (co) {
     const own = state.companies[co.id];
@@ -333,7 +335,7 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
     const set = setOf(co.set);
     return (
       <div
-        className={`tile prop ${space.side} id-${space.id} ${hot ? "hot" : ""}`}
+        className={`tile prop ${space.side} id-${space.id} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
         style={{ gridColumn: space.col, gridRow: space.row, boxShadow: owner ? `inset 0 0 0 3px ${owner.color}` : undefined }}
         title={`${co.name} · ${owner ? `rent $${co.rent[own.level]} · ${owner.name}` : `$${co.price}`}`}
       >
@@ -346,7 +348,7 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
           </span>
         )}
         <span className="deed">
-          <Mark id={co.id} />
+          <BrandLogo id={co.id} label={co.name} />
           <b>{co.name}</b>
           <em>{owner ? `$${co.rent[own.level]}` : `$${co.price}`}</em>
         </span>
@@ -357,7 +359,10 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
   if (stand && !stand.store) {
     const spec = SPECIAL[space.id];
     return (
-      <div className={`tile special id-${space.id} ${space.side} ${hot ? "hot" : ""}`} style={{ gridColumn: space.col, gridRow: space.row }}>
+      <div
+        className={`tile special id-${space.id} ${space.side} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
+        style={{ gridColumn: space.col, gridRow: space.row }}
+      >
         <CornerArt id={space.id} />
         <span className="special-copy">
           <b>{spec.title}</b>
@@ -372,12 +377,12 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
   const rent = ownerId ? storeRent(state, ownerId) : null;
   return (
     <div
-      className={`tile rail ${space.side} id-${space.id} ${hot ? "hot" : ""}`}
+      className={`tile rail ${space.side} id-${space.id} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
       style={{ gridColumn: space.col, gridRow: space.row, boxShadow: owner ? `inset 0 0 0 3px ${owner.color}` : undefined }}
       title={`${stand?.label ?? ""} · ${owner ? `${owner.name} · rent $${rent}` : "$150"}`}
     >
       <span className="deed">
-        <Mark id={space.id} />
+        <BrandLogo id={space.id} label={stand?.label} />
         <b>{stand?.label}</b>
         <em>{rent != null ? `$${rent}` : "$150"}</em>
       </span>

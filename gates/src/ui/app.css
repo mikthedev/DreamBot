@@ -140,6 +140,22 @@ body {
 .center.dealing .logo,
 .center.dealing .logo-sub,
 .center.dealing .logo-rule { display: none; }
+.center.rolling-ready .brand-lockup { min-height: 120px; }
+.roll-callout span {
+  display: block;
+  letter-spacing: 0.18em;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #245c34;
+}
+.roll-callout b {
+  display: block;
+  margin-top: 6px;
+  font-size: clamp(16px, 2vw, 22px);
+  font-family: Georgia, "Iowan Old Style", Palatino, serif;
+  color: #b42318;
+}
 
 .chance {
   width: min(300px, 92%);
@@ -172,19 +188,21 @@ body {
   position: absolute;
   left: 50%;
   top: calc(100% + 12px);
-  width: 48px;
-  height: 48px;
-  margin-left: -24px;
+  width: 56px;
+  height: 56px;
+  margin-left: -28px;
   animation: toss 0.7s cubic-bezier(.2, .7, .2, 1) forwards;
   pointer-events: none;
 }
+.die.spinning { animation: wobble 0.18s ease-in-out infinite; }
 .die.away { opacity: 0; animation: none; }
 .die-svg { width: 100%; height: 100%; filter: drop-shadow(0 8px 8px rgba(0,0,0,.25)); }
 
 .tile {
   position: relative;
   container-type: size;
-  background: linear-gradient(#fffdf8, var(--cream));
+  background:
+    linear-gradient(155deg, #fffdf8 0%, var(--cream) 52%, #efe4d0 100%);
   color: var(--ink);
   box-shadow: inset 0 0 0 1px #1b140c;
   min-width: 0;
@@ -201,6 +219,11 @@ body {
   animation: hotpulse 1.1s ease-in-out infinite;
   outline: 3px solid #f5c518;
   outline-offset: -3px;
+}
+.tile.stand {
+  z-index: 2;
+  outline: 2px solid rgba(88, 101, 242, .45);
+  outline-offset: -2px;
 }
 .deed {
   display: flex;
@@ -229,10 +252,31 @@ body {
   font-size: clamp(7px, 15cqmin, 11px);
   font-weight: 800;
 }
-.mark {
-  width: clamp(12px, 30cqmin, 22px);
-  height: clamp(12px, 30cqmin, 22px);
+.brand-logo {
+  width: clamp(14px, 34cqmin, 26px);
+  height: clamp(14px, 34cqmin, 26px);
   display: block;
+  flex: none;
+  object-fit: contain;
+  padding: 2px;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, .12);
+}
+.brand-logo.img.dark {
+  filter: none;
+  padding: 3px 4px;
+}
+.brand-fallback {
+  width: clamp(14px, 34cqmin, 26px);
+  height: clamp(14px, 34cqmin, 26px);
+  border-radius: 6px;
+  background: #fff;
+  display: grid;
+  place-items: center;
+  font-size: clamp(8px, 16cqmin, 11px);
+  font-weight: 900;
+  color: var(--ink);
   flex: none;
 }
 .tile .band { position: absolute; }
@@ -414,7 +458,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 .sheet h2 { margin: 0 0 8px; font-size: 18px; }
 .sheet p, .log li { color: var(--muted); font-size: 14px; line-height: 1.4; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
-.row.company .mark { width: 18px; height: 18px; }
+.row.company .brand-logo,
+.row.company .brand-fallback { width: 20px; height: 20px; }
 .row.company span { flex: 1; min-width: 120px; }
 input {
   width: 100%;
@@ -441,6 +486,9 @@ input {
   0% { transform: rotate(-180deg) scale(.4); opacity: 0; }
   45% { transform: rotate(14deg) scale(1.08); opacity: 1; }
   100% { transform: none; opacity: 1; }
+}
+@keyframes wobble {
+  50% { transform: rotate(8deg) scale(1.05); }
 }
 @keyframes deal {
   from { transform: translateY(18px) rotate(-2deg); opacity: 0; }

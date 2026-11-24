@@ -16,6 +16,7 @@ import {
   type SetId,
   type StoreId,
 } from "./data";
+import { stepAlongTrack } from "./track";
 
 export type Mode = "moves" | "classic";
 
@@ -412,16 +413,23 @@ export function apply(prev: State, action: Action): State {
     p.nudge = false;
     state.lastRoll = die;
     state.rollTick += 1;
-    const co = companiesIn(set).find((c) => c.die === die)!;
-    state.land = co.id;
-    say(state, `${p.name} rolls ${die} → ${co.name}.`);
+    const landId = stepAlongTrack(stand()[p.stand].id, die);
+    const co = COMPANIES.find((c) => c.id === landId);
+    state.land = co ? co.id : null;
+    if (co) {
+      say(state, `${p.name} rolled ${die} and landed on ${co.name}.`);
+    } else {
+      say(state, `${p.name} rolled ${die} → ${landId} (no property).`);
+      advance(state, p);
+      return state;
+    }
     const own = state.companies[co.id];
     if (own.owner && own.owner !== p.id) {
       if (p.openHouse) {
         p.openHouse = null;
         say(state, "Open house — no rent.");
       } else {
-        payCash(state, p, player(state, own.owner), rentOf(state, co), true, set);
+        payCash(state, p, player(state, own.owner), rentOf(state, co), true, co.set);
       }
       spark(state, p);
       if (!p.out) advance(state, p);
@@ -634,7 +642,7 @@ export function describePhase(state: State): string {
   if (state.phase === "home") return "You're on GO";
   if (state.phase === "store") return `Buy ${STANDS[p.stand].label}?`;
   if (state.phase === "card") return "Casino card";
-  if (state.phase === "path") return `${setOf(STANDS[p.stand].set).label} — walk or alley`;
+  if (state.phase === "path") return "Roll the dice — 1, 2, or 3 spaces";
   if (state.phase === "land") return state.land ? `Buy ${company(state.land).name}?` : "Buy?";
   if (state.phase === "extra") return "Build, buy a move, or end";
   return "";

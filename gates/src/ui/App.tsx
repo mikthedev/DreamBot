@@ -888,21 +888,27 @@ function MoreStall({
       <h3 className="stall-deeds-title">Your companies</h3>
       {owned.length ? (
         <ul className="stall-deeds">
-          {owned.map((c) => (
+          {owned.map((c) => {
+            const own = state.companies[c.id];
+            const grade = own.level === 0 ? "Unbuilt" : own.level === 1 ? "Office" : "Built";
+            return (
             <li key={c.id}>
-              <BrandLogo id={c.id} label={c.name} />
-              <div>
+              <span className="stall-deed-mark">
+                <BrandLogo id={c.id} label={c.name} />
+              </span>
+              <div className="stall-deed-copy">
                 <b>{c.name}</b>
-                <small>L{state.companies[c.id].level}</small>
+                <small>{grade} · ${c.rent[own.level]} rent</small>
               </div>
-              <button className="deed-act" disabled={!extra} onClick={() => onAct({ type: "build", companyId: c.id })}>
-                Build
+              <button className="deed-act" disabled={!extra || own.level >= 2} onClick={() => onAct({ type: "build", companyId: c.id })}>
+                {own.level >= 2 ? "Built" : "Build"}
               </button>
               <button className="deed-act sell" disabled={!extra} onClick={() => onAct({ type: "sell", companyId: c.id })}>
                 Sell
               </button>
             </li>
-          ))}
+            );
+          })}
         </ul>
       ) : (
         <p className="stall-empty">No deeds yet.</p>
@@ -1029,8 +1035,9 @@ function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
           <h3>Buy, rent, build</h3>
           <p>Grey tiles are unowned. Buy them when you land. Owned tiles wash in the owner’s color.</p>
           <p>
-            Rent is the printed number. Own all three in a set to <b>build</b> (More). Each brand has two build steps.
-            Social set makes building <b>$20</b> cheaper. Sell in More for half the buy price — that also breaks the set.
+            Rent is the printed number. Own all three in a set to <b>build</b> in More. Each brand goes{" "}
+            <b>Unbuilt → Office → Built</b>. There is nothing past Built. Social set makes building <b>$20</b> cheaper.
+            Sell in More for half the buy price — that also breaks the set.
           </p>
         </section>
 

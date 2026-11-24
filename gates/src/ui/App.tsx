@@ -678,61 +678,93 @@ function AudioMix({
   mix: ReturnType<typeof getMix>;
   onMix: (next: ReturnType<typeof getMix>) => void;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="mix" onPointerDown={() => armAudio()}>
-      <div className="mix-row">
-        <button
-          type="button"
-          className={`mix-icon ${mix.musicOn ? "on" : "off"}`}
-          title={mix.musicOn ? "Mute music" : "Unmute music"}
-          onClick={() => {
-            armAudio();
-            toggleMusic();
-            onMix(getMix());
-          }}
-        >
-          {mix.musicOn ? <NoteIcon /> : <NoteOffIcon />}
-        </button>
-        <input
-          className="mix-slide"
-          type="range"
-          min={0}
-          max={100}
-          value={Math.round(mix.musicLevel * 100)}
-          aria-label="Music volume"
-          onChange={(e) => {
-            armAudio();
-            setMusicLevel(Number(e.target.value) / 100);
-            onMix(getMix());
-          }}
-        />
-      </div>
-      <div className="mix-row">
-        <button
-          type="button"
-          className={`mix-icon ${mix.sfxOn ? "on" : "off"}`}
-          title={mix.sfxOn ? "Mute sounds" : "Unmute sounds"}
-          onClick={() => {
-            const next = toggleSfx();
-            onMix(getMix());
-            if (next) sfx("click");
-          }}
-        >
-          {mix.sfxOn ? <WaveIcon /> : <WaveOffIcon />}
-        </button>
-        <input
-          className="mix-slide"
-          type="range"
-          min={0}
-          max={100}
-          value={Math.round(mix.sfxLevel * 100)}
-          aria-label="Sound volume"
-          onChange={(e) => {
-            setSfxLevel(Number(e.target.value) / 100);
-            onMix(getMix());
-          }}
-        />
-      </div>
+    <div className={`mix ${open ? "is-open" : ""}`} onPointerDown={() => armAudio()}>
+      <button
+        type="button"
+        className={`mix-icon ${mix.musicOn || mix.sfxOn ? "on" : "off"}`}
+        title="Sound"
+        aria-expanded={open}
+        onClick={() => {
+          sfx("click");
+          setOpen((v) => !v);
+        }}
+      >
+        {mix.musicOn || mix.sfxOn ? <WaveIcon /> : <WaveOffIcon />}
+      </button>
+      {open ? (
+        <>
+          <button type="button" className="mix-scrim" aria-label="Close sound" onClick={() => setOpen(false)} />
+          <div className="mix-desk" role="dialog" aria-label="Sound">
+            <header className="mix-head">
+              <p className="start-kicker">Desk</p>
+              <h2>Sound</h2>
+            </header>
+            <div className="mix-line">
+              <button
+                type="button"
+                className={`mix-icon ${mix.musicOn ? "on" : "off"}`}
+                title={mix.musicOn ? "Mute music" : "Unmute music"}
+                onClick={() => {
+                  armAudio();
+                  toggleMusic();
+                  onMix(getMix());
+                }}
+              >
+                {mix.musicOn ? <NoteIcon /> : <NoteOffIcon />}
+              </button>
+              <div className="mix-meta">
+                <b>Music</b>
+                <span>{mix.musicOn ? `${Math.round(mix.musicLevel * 100)}%` : "Muted"}</span>
+              </div>
+              <input
+                className="mix-slide"
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(mix.musicLevel * 100)}
+                aria-label="Music volume"
+                onChange={(e) => {
+                  armAudio();
+                  setMusicLevel(Number(e.target.value) / 100);
+                  onMix(getMix());
+                }}
+              />
+            </div>
+            <div className="mix-line">
+              <button
+                type="button"
+                className={`mix-icon ${mix.sfxOn ? "on" : "off"}`}
+                title={mix.sfxOn ? "Mute sounds" : "Unmute sounds"}
+                onClick={() => {
+                  const next = toggleSfx();
+                  onMix(getMix());
+                  if (next) sfx("click");
+                }}
+              >
+                {mix.sfxOn ? <WaveIcon /> : <WaveOffIcon />}
+              </button>
+              <div className="mix-meta">
+                <b>SFX</b>
+                <span>{mix.sfxOn ? `${Math.round(mix.sfxLevel * 100)}%` : "Muted"}</span>
+              </div>
+              <input
+                className="mix-slide"
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(mix.sfxLevel * 100)}
+                aria-label="Sound volume"
+                onChange={(e) => {
+                  setSfxLevel(Number(e.target.value) / 100);
+                  onMix(getMix());
+                }}
+              />
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

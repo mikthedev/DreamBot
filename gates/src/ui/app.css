@@ -45,10 +45,62 @@ body {
   justify-content: space-between;
   min-width: 0;
   padding: 6px 4px;
+  position: relative;
+  z-index: 26;
 }
 .top-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-.mix { display: flex; gap: 10px; align-items: center; }
-.mix-row { display: flex; align-items: center; gap: 6px; }
+.mix { position: relative; }
+.mix-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  min-width: 0;
+}
+.mix-scrim:hover:not(:disabled) { background: transparent; box-shadow: none; transform: none; }
+.mix-desk {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 25;
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px 14px 14px;
+  background: #1c1822;
+  border: 3px solid #c9b48a;
+  box-shadow: 6px 6px 0 #0a080c;
+  animation: card-in 0.24s steps(5) both;
+}
+.mix-head { margin: 0 0 12px; }
+.mix-head .start-kicker { margin: 0 0 2px; animation: none; }
+.mix-head h2 {
+  margin: 0;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 22px;
+  color: #fff4cc;
+  text-shadow: 2px 2px 0 #1a1208;
+}
+.mix-line {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 72px) 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.mix-meta { display: flex; flex-direction: column; min-width: 0; }
+.mix-meta b {
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 14px;
+  color: #fff4cc;
+  line-height: 1;
+}
+.mix-meta span {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 700;
+}
 .mix-icon {
   width: 32px;
   height: 32px;
@@ -71,8 +123,8 @@ body {
 .mix-slide {
   -webkit-appearance: none;
   appearance: none;
-  width: 72px;
-  height: 10px;
+  width: 100%;
+  height: 12px;
   margin: 0;
   padding: 0;
   border-radius: 0;

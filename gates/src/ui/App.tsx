@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, STANDS, STORES, setOf } from "../engine/data";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { CARD_LABEL, COMPANIES, STANDS, STORES, STORE_BAND, setOf } from "../engine/data";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
 import {
@@ -91,10 +91,14 @@ export function App() {
         <div className="brand">DreamPoly</div>
         <div className="seats">
           {state.players.map((p) => (
-            <div key={p.id} className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""}`}>
+            <div
+              key={p.id}
+              className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""}`}
+              style={{ "--player": p.color } as CSSProperties}
+            >
               <Face name={p.name} avatar={p.avatar} color={p.color} />
               <b>{p.name}</b>
-              <span>{p.out ? "out" : state.mode === "moves" ? `${p.moves} moves` : `$${p.cash}`}</span>
+              <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
             </div>
           ))}
         </div>
@@ -322,6 +326,16 @@ const SPECIAL: Record<string, { title: string; kicker: string }> = {
   rest: { title: "Jail", kicker: "Just visiting" },
 };
 
+type BoardPlayer = { id: string; name: string; avatar: string | null; color: string };
+
+function OwnerMark({ owner }: { owner: BoardPlayer }) {
+  return (
+    <span className="owner-mark" style={{ "--player": owner.color } as CSSProperties} title={owner.name}>
+      {owner.avatar ? <img src={owner.avatar} alt="" /> : owner.name.slice(0, 1)}
+    </span>
+  );
+}
+
 function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State }) {
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
@@ -334,25 +348,18 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
     const owner = state.players.find((p) => p.id === own.owner);
     const set = setOf(co.set);
     return (
-      <div
-        className={`tile prop ${space.side} id-${space.id} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
-        style={{ gridColumn: space.col, gridRow: space.row, boxShadow: owner ? `inset 0 0 0 3px ${owner.color}` : undefined }}
+      <DeedTile
+        space={space}
+        hot={hot}
+        standHere={standHere}
+        band={set.color}
+        name={co.name}
+        logoId={co.id}
+        price={owner ? `$${co.rent[own.level]}` : `$${co.price}`}
+        owner={owner}
+        level={own.level}
         title={`${co.name} · ${owner ? `rent $${co.rent[own.level]} · ${owner.name}` : `$${co.price}`}`}
-      >
-        <i className="band" style={{ background: set.color }} />
-        {own.level > 0 && (
-          <span className="houses">
-            {Array.from({ length: own.level }, (_, i) => (
-              <i key={i} />
-            ))}
-          </span>
-        )}
-        <span className="deed">
-          <BrandLogo id={co.id} label={co.name} />
-          <b>{co.name}</b>
-          <em>{owner ? `$${co.rent[own.level]}` : `$${co.price}`}</em>
-        </span>
-      </div>
+      />
     );
   }
 
@@ -360,11 +367,11 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
     const spec = SPECIAL[space.id];
     return (
       <div
-        className={`tile special id-${space.id} ${space.side} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
+        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
         style={{ gridColumn: space.col, gridRow: space.row }}
       >
         <CornerArt id={space.id} />
-        <span className="special-copy">
+        <span className="corner-copy">
           <b>{spec.title}</b>
           <em>{spec.kicker}</em>
         </span>
@@ -376,16 +383,75 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
   const owner = state.players.find((p) => p.id === ownerId);
   const rent = ownerId ? storeRent(state, ownerId) : null;
   return (
-    <div
-      className={`tile rail ${space.side} id-${space.id} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
-      style={{ gridColumn: space.col, gridRow: space.row, boxShadow: owner ? `inset 0 0 0 3px ${owner.color}` : undefined }}
+    <DeedTile
+      space={space}
+      hot={hot}
+      standHere={standHere}
+      band={STORE_BAND}
+      name={stand?.label ?? ""}
+      logoId={space.id}
+      price={rent != null ? `$${rent}` : "$150"}
+      owner={owner}
+      level={0}
+      store
       title={`${stand?.label ?? ""} · ${owner ? `${owner.name} · rent $${rent}` : "$150"}`}
+    />
+  );
+}
+
+function DeedTile({
+  space,
+  hot,
+  standHere,
+  band,
+  name,
+  logoId,
+  price,
+  owner,
+  level,
+  store,
+  title,
+}: {
+  space: (typeof TRACK)[number];
+  hot: boolean;
+  standHere: boolean;
+  band: string;
+  name: string;
+  logoId: string;
+  price: string;
+  owner?: BoardPlayer;
+  level: number;
+  store?: boolean;
+  title: string;
+}) {
+  return (
+    <div
+      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${standHere ? "stand" : ""} ${owner ? "owned" : ""} ${store ? "store" : ""}`}
+      style={
+        {
+          gridColumn: space.col,
+          gridRow: space.row,
+          "--band": band,
+          "--player": owner?.color,
+        } as CSSProperties
+      }
+      title={title}
     >
-      <span className="deed">
-        <BrandLogo id={space.id} label={stand?.label} />
-        <b>{stand?.label}</b>
-        <em>{rent != null ? `$${rent}` : "$150"}</em>
-      </span>
+      <i className="band" aria-hidden />
+      {owner && <OwnerMark owner={owner} />}
+      {store && <span className="store-tag">Store</span>}
+      {level > 0 && (
+        <span className="houses">
+          {Array.from({ length: level }, (_, i) => (
+            <i key={i} />
+          ))}
+        </span>
+      )}
+      <div className="deed-body">
+        <BrandLogo id={logoId} label={name} />
+        <b>{name}</b>
+        <em>{price}</em>
+      </div>
     </div>
   );
 }

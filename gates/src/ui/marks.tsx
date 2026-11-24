@@ -254,6 +254,49 @@ export function CornerArt({ id }: { id: string }) {
   );
 }
 
+const DICE_FACE: Record<number, string> = {
+  1: "rotateX(0deg) rotateY(0deg)",
+  2: "rotateX(0deg) rotateY(-90deg)",
+  3: "rotateX(-90deg) rotateY(0deg)",
+  4: "rotateX(90deg) rotateY(0deg)",
+  5: "rotateX(0deg) rotateY(90deg)",
+  6: "rotateX(0deg) rotateY(180deg)",
+};
+
+function Pips({ n }: { n: number }) {
+  const map: Record<number, string[]> = {
+    1: ["c"],
+    2: ["tl", "br"],
+    3: ["tl", "c", "br"],
+    4: ["tl", "tr", "bl", "br"],
+    5: ["tl", "tr", "c", "bl", "br"],
+    6: ["tl", "tr", "ml", "mr", "bl", "br"],
+  };
+  return (
+    <span className="pips">
+      {map[n].map((p) => (
+        <i key={p} className={p} />
+      ))}
+    </span>
+  );
+}
+
+export function CubeDie({ n, spinning }: { n: number; spinning?: boolean }) {
+  const face = Math.min(6, Math.max(1, Math.round(n)));
+  return (
+    <span className={`cube-wrap ${spinning ? "is-spin" : ""}`}>
+      <span className="cube" style={{ transform: spinning ? undefined : `${DICE_FACE[face]} rotateX(-16deg) rotateY(14deg)` }}>
+        <span className="f f1"><Pips n={1} /></span>
+        <span className="f f2"><Pips n={2} /></span>
+        <span className="f f3"><Pips n={3} /></span>
+        <span className="f f4"><Pips n={4} /></span>
+        <span className="f f5"><Pips n={5} /></span>
+        <span className="f f6"><Pips n={6} /></span>
+      </span>
+    </span>
+  );
+}
+
 export function DieFace({ n }: { n: number }) {
   const face = Math.min(6, Math.max(1, Math.round(n)));
   const pips: Record<number, [number, number][]> = {

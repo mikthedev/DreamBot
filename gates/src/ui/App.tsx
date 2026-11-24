@@ -14,13 +14,13 @@ import {
 } from "../engine/game";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
-import { CornerArt, DieFace } from "./marks";
+import { CornerArt, CubeDie } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const ID_KEY = "gates-discord-id";
 const CORNER = 1.12;
 const TRACK_SUM = CORNER * 2 + 7;
-const STEP_MS = 280;
+const STEP_MS = 220;
 
 type Profile = { id: string; username: string; avatar: string | null; linked: boolean };
 
@@ -35,6 +35,7 @@ export function App() {
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
   const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
   const [walk, setWalk] = useState<Record<string, number>>({});
+  const [held, setHeld] = useState<{ cash: number; moves: number } | null>(null);
   const walking = Object.keys(walk).length > 0;
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
@@ -67,17 +68,24 @@ export function App() {
 
   function rollThen(action: Action) {
     if (diceSpin != null) return;
+    setHeld({ cash: me.cash, moves: me.moves });
     let n = 0;
     const spin = window.setInterval(() => {
       setDiceSpin([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
       n += 1;
-      if (n >= 10) {
+      if (n >= 12) {
         window.clearInterval(spin);
         setDiceSpin(null);
         act(action);
       }
-    }, 65);
+    }, 70);
   }
+
+  useEffect(() => {
+    if (walking || diceSpin) return;
+    const t = window.setTimeout(() => setHeld(null), 140);
+    return () => window.clearTimeout(t);
+  }, [walking, diceSpin]);
 
   function restart(withBots: boolean) {
     const name = profile?.username || "You";
@@ -86,9 +94,11 @@ export function App() {
   }
 
   const primary = useMemo(() => buttonsFor(state, mine, !!diceSpin || walking), [state, mine, diceSpin, walking]);
-  const card = state.phase === "card" ? state.pendingCard : null;
+  const card = !held && !walking && state.phase === "card" ? state.pendingCard : null;
   const centerDie = diceSpin ?? state.lastRoll;
   const rolling = diceSpin != null;
+  const shownCash = held?.cash ?? me.cash;
+  const shownMoves = held?.moves ?? me.moves;
 
   return (
     <div className="app">
@@ -114,8 +124,15 @@ export function App() {
 
       <div className="stage">
         <div className="board" aria-label="DreamPoly board">
-          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${!mine && !walking ? "idle" : ""}`}>
+          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${!mine && !walking ? "idle" : "live"}`}>
             <div className="table-core">
+              <div className="dash">
+                <TokenFace name={me.name} avatar={me.avatar} color={me.color} size={34} />
+                <div className="stats">
+                  <b>${shownCash}</b>
+                  <span>{shownMoves} moves</span>
+                </div>
+              </div>
               {card ? (
                 <article className="chance" key={card}>
                   <span>Casino</span>
@@ -123,26 +140,15 @@ export function App() {
                 </article>
               ) : mine || walking || rolling ? (
                 <>
-                  <div className="dash">
-                    <TokenFace name={me.name} avatar={me.avatar} color={me.color} size={36} />
-                    <div className="stats">
-                      <b>${me.cash}</b>
-                      <span>{me.moves} moves</span>
-                    </div>
-                  </div>
                   <div className="dice-row" key={rolling ? "spin" : state.rollTick}>
-                    <span className={`die ${rolling ? "spinning" : ""}`} aria-hidden>
-                      <DieFace n={centerDie?.[0] ?? 6} />
-                    </span>
-                    <span className={`die ${rolling ? "spinning" : ""}`} aria-hidden>
-                      <DieFace n={centerDie?.[1] ?? 5} />
-                    </span>
+                    <CubeDie n={centerDie?.[0] ?? 6} spinning={rolling} />
+                    <CubeDie n={centerDie?.[1] ?? 5} spinning={rolling} />
                   </div>
-                  {state.lastPay && mine && state.phase === "extra" ? (
-                    <div className="pay-chip">Paid ${state.lastPay.amount}</div>
+                  {state.lastPay && mine && state.phase === "extra" && !walking && !held ? (
+                    <div className="pay-chip" key={`${state.rollTick}-pay`}>−${state.lastPay.amount}</div>
                   ) : null}
                   <p className="center-prompt">
-                    {walking ? "Moving…" : describePhase(state)}
+                    {walking ? "Moving" : describePhase(state)}
                   </p>
                 </>
               ) : (
@@ -167,7 +173,7 @@ export function App() {
             </div>
           </div>
           {TRACK.map((space) => (
-            <Tile key={space.id} space={space} state={state} />
+            <Tile key={space.id} space={space} state={state} walk={walk} />
           ))}
           <Pawns state={state} walk={walk} setWalk={setWalk} />
         </div>
@@ -329,13 +335,12 @@ function OwnerMark({ owner }: { owner: BoardPlayer }) {
   );
 }
 
-function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State }) {
+function Tile({ space, state, walk }: { space: (typeof TRACK)[number]; state: State; walk: Record<string, number> }) {
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
   const here = actor(state);
-  const hereId = here ? TRACK_ORDER[here.stand] : null;
-  const hot = hereId === space.id;
-  const standHere = false;
+  const vis = here ? (walk[here.id] ?? here.stand) : null;
+  const hot = vis != null && TRACK_ORDER[vis] === space.id;
 
   if (co) {
     const own = state.companies[co.id];
@@ -345,7 +350,6 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
       <DeedTile
         space={space}
         hot={hot}
-        standHere={standHere}
         band={set.color}
         name={co.name}
         logoId={co.id}
@@ -361,7 +365,7 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
     const spec = SPECIAL[space.id];
     return (
       <div
-        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""} ${standHere ? "stand" : ""}`}
+        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""}`}
         style={{ gridColumn: space.col, gridRow: space.row }}
       >
         <CornerArt id={space.id} />
@@ -380,7 +384,6 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
     <DeedTile
       space={space}
       hot={hot}
-      standHere={standHere}
       band={STORE_BAND}
       name={stand?.label ?? ""}
       logoId={space.id}
@@ -396,7 +399,6 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
 function DeedTile({
   space,
   hot,
-  standHere,
   band,
   name,
   logoId,
@@ -408,7 +410,6 @@ function DeedTile({
 }: {
   space: (typeof TRACK)[number];
   hot: boolean;
-  standHere: boolean;
   band: string;
   name: string;
   logoId: string;
@@ -420,7 +421,7 @@ function DeedTile({
 }) {
   return (
     <div
-      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${standHere ? "stand" : ""} ${owner ? "owned" : ""} ${store ? "store" : ""}`}
+      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${owner ? "owned" : ""} ${store ? "store" : ""}`}
       style={
         {
           gridColumn: space.col,
@@ -549,9 +550,12 @@ function Pawns({
             top: `${(box.y + box.h * (base.cy + oy)) * 100}%`,
             zIndex: p.id === here?.id ? 2 : 1,
             transitionDuration: `${STEP_MS}ms`,
+            transitionTimingFunction: "cubic-bezier(.22,.8,.28,1)",
           }}
         >
-          <TokenFace name={p.name} avatar={p.avatar} color={p.color} size={18} />
+          <span className={walk[p.id] != null ? "hop-inner" : ""} key={`${p.id}-${i}`}>
+            <TokenFace name={p.name} avatar={p.avatar} color={p.color} size={18} />
+          </span>
         </span>,
       );
     });
@@ -588,23 +592,13 @@ function slotOffset(index: number, count: number): [number, number] {
 
 function TokenFace({ name, avatar, color, size }: { name: string; avatar: string | null; color: string; size: number }) {
   return (
-    <span className="token" style={{ width: size, height: size * 1.28, "--player": color } as CSSProperties} title={name}>
-      <svg viewBox="0 0 32 40" aria-hidden>
-        <ellipse cx="16" cy="36" rx="9" ry="2.4" fill="rgba(0,0,0,.28)" />
-        <path d="M8 34c0-4 3.2-6.2 8-6.2s8 2.2 8 6.2v1.2H8V34z" fill="currentColor" />
-        <path d="M11.2 21.4c-1.4 2.6-.6 6.2 4.8 6.4 5.4-.2 6.2-3.8 4.8-6.4-.8-1.6-3-2.4-4.8-2.4s-4 .8-4.8 2.4z" fill="currentColor" />
-        <circle cx="16" cy="12.4" r="7.2" fill="currentColor" />
-        <circle cx="16" cy="11.6" r="5.4" fill="#fff7ec" />
-        {avatar ? (
-          <foreignObject x="10.6" y="6.2" width="10.8" height="10.8">
-            <img src={avatar} alt="" style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />
-          </foreignObject>
-        ) : (
-          <text x="16" y="14.2" textAnchor="middle" fontSize="7.2" fontWeight="800" fill="#1a1510">
-            {name.slice(0, 1)}
-          </text>
-        )}
-      </svg>
+    <span className="meeple" style={{ width: size, height: size * 1.35, "--player": color } as CSSProperties} title={name}>
+      <i className="m-shadow" />
+      <i className="m-base" />
+      <i className="m-body" />
+      <i className="m-head">
+        {avatar ? <img src={avatar} alt="" /> : <em>{name.slice(0, 1)}</em>}
+      </i>
     </span>
   );
 }

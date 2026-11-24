@@ -68,7 +68,7 @@ function fuelGetsExpensive(): ScenarioResult {
   const first = fuelPrice(s.players[0]);
   s = apply(s, { type: "fuel" });
   const second = fuelPrice(s.players[0]);
-  const ok = first === 150 && second === 300 && s.players[0].moves === 5;
+  const ok = first === 100 && second === 200 && s.players[0].moves === 5;
   return { id: "fuel", name: "Buying moves gets more expensive", ok, detail: `$${first} then $${second}` };
 }
 

@@ -93,7 +93,7 @@ export type Action =
       getMove: boolean;
     };
 
-const COLORS = ["#5865f2", "#57f287", "#fee75c", "#eb459e", "#ed4245", "#f0b232", "#1abc9c", "#9b59b6"];
+const COLORS = ["#3b5bdb", "#2b8a6e", "#c4922a", "#b44d7a", "#b54a4a", "#c56e2d", "#2f8f9a", "#6b5b95"];
 
 export function createGame(
   people: { id: string; name: string; avatar?: string | null; bot?: boolean; test?: boolean }[],
@@ -179,7 +179,13 @@ function shuffle<T>(list: T[], seed: number) {
 }
 
 export function fuelPrice(p: Player) {
-  return 150 * (p.fuelBuys + 1);
+  return 100 * (p.fuelBuys + 1);
+}
+
+function grantMove(state: State, p: Player, why: string) {
+  if (state.mode !== "moves" || p.moves >= MOVE_CAP) return;
+  p.moves += 1;
+  say(state, `${p.name} +1 move (${why}).`);
 }
 
 export function hasSet(state: State, playerId: string, set: SetId) {
@@ -249,10 +255,9 @@ function drawCard(state: State, p: Player) {
 
 function spark(state: State, p: Player) {
   p.sparks += 1;
-  if (p.sparks >= 5) {
+  if (p.sparks >= 4) {
     p.sparks = 0;
-    p.cash += 80;
-    say(state, `${p.name} sparks → $80.`);
+    grantMove(state, p, "pace");
   }
 }
 
@@ -271,6 +276,7 @@ function payCash(state: State, from: Player, to: Player | null, printed: number,
   }
   from.cash -= due;
   if (!to) return;
+  if (due > 0) spark(state, to);
   let lowerCut = 0;
   if (stackSplit && set) {
     const dep = STACK[set];
@@ -379,6 +385,7 @@ export function apply(prev: State, action: Action): State {
     if (passedGo(from, steps) && p.leftHome) {
       p.cash += 200;
       p.lapKey += 1;
+      grantMove(state, p, "passed GO");
       say(state, `${p.name} passed GO (+$200).`);
     }
     p.stand = wrapIndex(from + steps);
@@ -602,6 +609,7 @@ function resolveLanding(state: State, p: Player, id: string) {
     return;
   }
   if (id === "rest") {
+    grantMove(state, p, "jail rest");
     say(state, `${p.name} is just visiting Jail.`);
     restOnSpace(state, p);
     return;

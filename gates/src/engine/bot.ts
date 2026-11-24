@@ -1,11 +1,11 @@
-import { COMPANIES, companiesIn } from "./data";
+import { COMPANIES, MOVE_CAP, companiesIn } from "./data";
 import { actor, anySet, apply, fuelPrice, type Action, type State } from "./game";
 
 export function botAction(state: State): Action {
   const p = actor(state);
   if (!p) return { type: "end" };
   if (state.phase === "home") {
-    if (p.moves <= 4 && anySet(state, p.id) && p.moves < 12) return { type: "home", pick: "move" };
+    if (p.moves <= 4 && anySet(state, p.id) && p.moves < MOVE_CAP) return { type: "home", pick: "move" };
     return { type: "home", pick: "cash" };
   }
   if (state.phase === "store") {
@@ -20,7 +20,7 @@ export function botAction(state: State): Action {
     return { type: "land", pick: "skip" };
   }
   const price = fuelPrice(p);
-  if (state.mode === "moves" && p.moves <= 3 && p.cash - price >= 250 && p.moves < 12 && !state.movesBoughtThisTurn) {
+  if (state.mode === "moves" && p.moves <= 5 && p.cash - price >= 200 && p.moves < MOVE_CAP && !state.movesBoughtThisTurn) {
     return { type: "fuel" };
   }
   const build = COMPANIES.find((co) => {

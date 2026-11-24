@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, STANDS, STORES, setOf } from "../engine/data";
+import { CARD_LABEL, COMPANIES, MOVE_CAP, STANDS, STORES, setOf } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
@@ -116,6 +116,7 @@ export function App() {
               <Face name={p.name} avatar={p.avatar} color={p.color} size={26} />
               <b>{p.name}</b>
               <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
+              <Holdings state={state} player={p} />
             </div>
           ))}
         </div>
@@ -200,7 +201,7 @@ export function App() {
 
       {me.moves <= 4 && !me.out && state.mode === "moves" && (
         <div className="banner">
-          Under 5 moves. At GO, take a move if you own a full set, or buy one from More. Next buy is ${fuelPrice(me)}.
+          Low on moves. Pass GO or collect rent to earn more, rest in Jail, or buy one for ${fuelPrice(me)}.
         </div>
       )}
 
@@ -333,7 +334,15 @@ function buttonsFor(
       { label: "Leave it", action: { type: "land", pick: "skip" }, ghost: true, needsYou: true },
     ];
   }
-  if (state.phase === "extra") return [{ label: "End turn", action: { type: "end" }, needsYou: true }];
+  if (state.phase === "extra") {
+    const who = actor(state);
+    const out: { label: string; action: Action; ghost?: boolean; warn?: boolean; needsYou: boolean; roll?: boolean }[] = [];
+    if (state.mode === "moves" && who && who.moves < MOVE_CAP) {
+      out.push({ label: `Buy move $${fuelPrice(who)}`, action: { type: "fuel" }, needsYou: true });
+    }
+    out.push({ label: "End turn", action: { type: "end" }, ghost: true, needsYou: true });
+    return out;
+  }
   return [];
 }
 
@@ -790,6 +799,34 @@ function slotOffset(index: number, count: number, side: (typeof TRACK)[number]["
   const t = (index - (count - 1) / 2) * 0.14;
   if (side === "bottom" || side === "top") return [t, 0];
   return [0, t];
+}
+
+function Holdings({ state, player }: { state: State; player: { id: string; name: string } }) {
+  const companies = COMPANIES.filter((c) => state.companies[c.id].owner === player.id);
+  const stores = STORES.filter((s) => state.stores[s.id] === player.id);
+  return (
+    <div className="holdings" role="tooltip">
+      <div className="holdings-title">{player.name}</div>
+      {companies.length === 0 && stores.length === 0 ? (
+        <p>No companies yet</p>
+      ) : (
+        <ul>
+          {companies.map((c) => (
+            <li key={c.id}>
+              <BrandLogo id={c.id} label={c.name} />
+              <span>{c.name}</span>
+            </li>
+          ))}
+          {stores.map((s) => (
+            <li key={s.id}>
+              <BrandLogo id={s.id} label={s.name} />
+              <span>{s.name}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function Face({ name, avatar, color, size }: { name: string; avatar: string | null; color: string; size: number }) {

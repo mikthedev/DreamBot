@@ -147,7 +147,7 @@ export function companiesIn(set: SetId) {
   return COMPANIES.filter((co) => co.set === set);
 }
 
-export const MOVE_CAP = 12;
+export const MOVE_CAP = 14;
 export const START_CASH = 1500;
 export const START_MOVES = 10;
 export const HARD_STOP_ROUNDS = 24;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, STANDS, STORES, STORE_BAND, setOf } from "../engine/data";
+import { CARD_LABEL, COMPANIES, STANDS, STORES, setOf } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
@@ -36,6 +36,8 @@ export function App() {
   const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
   const [walk, setWalk] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<{ cash: number; moves: number } | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const walking = Object.keys(walk).length > 0;
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
@@ -123,7 +125,14 @@ export function App() {
       </header>
 
       <div className="stage">
-        <div className="board" aria-label="DreamPoly board">
+        <div
+          className="board"
+          aria-label="DreamPoly board"
+          onClick={(e) => {
+            const t = e.target as HTMLElement;
+            if (!t.closest(".tile, .float-card")) setOpenId(null);
+          }}
+        >
           <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${!mine && !walking ? "idle" : "live"}`}>
             <div className="table-core">
               <div className="dash">
@@ -173,8 +182,17 @@ export function App() {
             </div>
           </div>
           {TRACK.map((space) => (
-            <Tile key={space.id} space={space} state={state} walk={walk} />
+            <Tile
+              key={space.id}
+              space={space}
+              state={state}
+              walk={walk}
+              open={openId === space.id}
+              onHover={setHoverId}
+              onOpen={(id) => setOpenId((cur) => (cur === id ? null : id))}
+            />
           ))}
+          <TileFloat id={openId ?? hoverId} mode={openId ? "inspect" : "owner"} state={state} />
           <Pawns state={state} walk={walk} setWalk={setWalk} />
         </div>
       </div>
@@ -335,28 +353,51 @@ function OwnerMark({ owner }: { owner: BoardPlayer }) {
   );
 }
 
-function Tile({ space, state, walk }: { space: (typeof TRACK)[number]; state: State; walk: Record<string, number> }) {
+function Tile({
+  space,
+  state,
+  walk,
+  open,
+  onHover,
+  onOpen,
+}: {
+  space: (typeof TRACK)[number];
+  state: State;
+  walk: Record<string, number>;
+  open: boolean;
+  onHover: (id: string | null) => void;
+  onOpen: (id: string) => void;
+}) {
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
   const here = actor(state);
   const vis = here ? (walk[here.id] ?? here.stand) : null;
   const hot = vis != null && TRACK_ORDER[vis] === space.id;
+  const facts = spaceFacts(space, state);
 
-  if (co) {
+  const bind = {
+    onMouseEnter: () => onHover(space.id),
+    onMouseLeave: () => onHover(null),
+    onClick: (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      onOpen(space.id);
+    },
+  };
+
+  if (co && facts) {
     const own = state.companies[co.id];
-    const owner = state.players.find((p) => p.id === own.owner);
-    const set = setOf(co.set);
     return (
       <DeedTile
         space={space}
         hot={hot}
-        band={set.color}
+        open={open}
+        band={setOf(co.set).color}
         name={co.name}
         logoId={co.id}
-        price={owner ? `$${co.rent[own.level]}` : `$${co.price}`}
-        owner={owner}
+        price={facts.price}
+        owner={facts.owner}
         level={own.level}
-        setLabel={set.label}
+        bind={bind}
       />
     );
   }
@@ -365,8 +406,9 @@ function Tile({ space, state, walk }: { space: (typeof TRACK)[number]; state: St
     const spec = SPECIAL[space.id];
     return (
       <div
-        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""}`}
+        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""} ${open ? "open" : ""}`}
         style={{ gridColumn: space.col, gridRow: space.row }}
+        {...bind}
       >
         <CornerArt id={space.id} />
         <span className="corner-copy">
@@ -377,51 +419,151 @@ function Tile({ space, state, walk }: { space: (typeof TRACK)[number]; state: St
     );
   }
 
-  const ownerId = stand?.store ? state.stores[stand.store] : null;
-  const owner = state.players.find((p) => p.id === ownerId);
-  const rent = ownerId ? storeRent(state, ownerId) : null;
+  if (!facts) return null;
   return (
-    <DeedTile
+    <StoreTile
       space={space}
       hot={hot}
-      band={STORE_BAND}
-      name={stand?.label ?? ""}
+      open={open}
+      name={facts.name}
       logoId={space.id}
-      price={rent != null ? `$${rent}` : "$150"}
-      owner={owner}
-      level={0}
-      store
-      setLabel="Store"
+      price={facts.price}
+      owner={facts.owner}
+      bind={bind}
     />
+  );
+}
+
+type TileBind = {
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  onClick: (e: { stopPropagation: () => void }) => void;
+};
+
+function spaceFacts(space: (typeof TRACK)[number], state: State) {
+  const stand = STANDS.find((s) => s.id === space.id);
+  const co = COMPANIES.find((c) => c.id === space.id);
+  if (co) {
+    const own = state.companies[co.id];
+    const owner = state.players.find((p) => p.id === own.owner);
+    const set = setOf(co.set);
+    return {
+      name: co.name,
+      setLabel: set.label,
+      logoId: co.id,
+      price: owner ? `$${co.rent[own.level]}` : `$${co.price}`,
+      owner,
+      store: false,
+    };
+  }
+  if (stand?.store) {
+    const ownerId = state.stores[stand.store];
+    const owner = state.players.find((p) => p.id === ownerId);
+    const rent = ownerId ? storeRent(state, ownerId) : null;
+    return {
+      name: stand.label,
+      setLabel: "Store",
+      logoId: space.id,
+      price: rent != null ? `$${rent}` : "$150",
+      owner,
+      store: true,
+    };
+  }
+  const spec = SPECIAL[space.id];
+  if (!spec) return null;
+  return {
+    name: spec.title,
+    setLabel: spec.kicker,
+    logoId: space.id,
+    price: "",
+    owner: undefined,
+    store: false,
+  };
+}
+
+function popStyle(space: (typeof TRACK)[number]) {
+  const box = cellBox(space.col, space.row);
+  const midX = (box.x + box.w / 2) * 100;
+  const midY = (box.y + box.h / 2) * 100;
+  if (space.side === "bottom") return { left: `${midX}%`, top: `${box.y * 100}%`, ["--pop" as string]: "up" };
+  if (space.side === "top") return { left: `${midX}%`, top: `${(box.y + box.h) * 100}%`, ["--pop" as string]: "down" };
+  if (space.side === "left") return { left: `${(box.x + box.w) * 100}%`, top: `${midY}%`, ["--pop" as string]: "right" };
+  return { left: `${box.x * 100}%`, top: `${midY}%`, ["--pop" as string]: "left" };
+}
+
+function TileFloat({
+  id,
+  mode,
+  state,
+}: {
+  id: string | null;
+  mode: "owner" | "inspect";
+  state: State;
+}) {
+  if (!id) return null;
+  const space = TRACK.find((t) => t.id === id);
+  if (!space) return null;
+  const facts = spaceFacts(space, state);
+  if (!facts) return null;
+  return (
+    <div
+      className={`float-card ${mode} ${space.side}`}
+      style={popStyle(space)}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {mode === "owner" ? (
+        facts.owner ? (
+          <>
+            <Face name={facts.owner.name} avatar={facts.owner.avatar} color={facts.owner.color} size={28} />
+            <div>
+              <small>Owned by</small>
+              <b>{facts.owner.name}</b>
+            </div>
+          </>
+        ) : (
+          <div>
+            <small>Owner</small>
+            <b>Unowned</b>
+          </div>
+        )
+      ) : (
+        <>
+          <small className="cat">{facts.setLabel}</small>
+          <BrandLogo id={facts.logoId} label={facts.name} />
+          <b>{facts.name}</b>
+          {facts.price ? <em>{facts.price}</em> : null}
+        </>
+      )}
+    </div>
   );
 }
 
 function DeedTile({
   space,
   hot,
+  open,
   band,
   name,
   logoId,
   price,
   owner,
   level,
-  store,
-  setLabel,
+  bind,
 }: {
   space: (typeof TRACK)[number];
   hot: boolean;
+  open: boolean;
   band: string;
   name: string;
   logoId: string;
   price: string;
   owner?: BoardPlayer;
   level: number;
-  store?: boolean;
-  setLabel: string;
+  bind: TileBind;
 }) {
   return (
     <div
-      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${owner ? "owned" : ""} ${store ? "store" : ""}`}
+      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${owner ? "owned" : ""}`}
       style={
         {
           gridColumn: space.col,
@@ -430,10 +572,10 @@ function DeedTile({
           "--player": owner?.color,
         } as CSSProperties
       }
+      {...bind}
     >
       <i className="band" aria-hidden />
       {owner && <OwnerMark owner={owner} />}
-      {store && <span className="store-dot" aria-hidden />}
       {level > 0 && (
         <span className="houses">
           {Array.from({ length: level }, (_, i) => (
@@ -446,10 +588,49 @@ function DeedTile({
         <strong className="deed-name">{shortName(name)}</strong>
         <em>{price}</em>
       </div>
-      <div className="tip" role="tooltip">
-        <b>{name}</b>
-        <span>{setLabel}</span>
-        <span>{owner ? `${owner.name} · ${price}` : `Unowned · ${price}`}</span>
+    </div>
+  );
+}
+
+function StoreTile({
+  space,
+  hot,
+  open,
+  name,
+  logoId,
+  price,
+  owner,
+  bind,
+}: {
+  space: (typeof TRACK)[number];
+  hot: boolean;
+  open: boolean;
+  name: string;
+  logoId: string;
+  price: string;
+  owner?: BoardPlayer;
+  bind: TileBind;
+}) {
+  return (
+    <div
+      className={`tile store-tile ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${owner ? "owned" : ""}`}
+      style={
+        {
+          gridColumn: space.col,
+          gridRow: space.row,
+          "--player": owner?.color,
+        } as CSSProperties
+      }
+      {...bind}
+    >
+      {owner && <OwnerMark owner={owner} />}
+      <div className="deed-body">
+        <span className="kiosk">Store</span>
+        <span className="store-mark">
+          <BrandLogo id={logoId} label={name} />
+        </span>
+        <strong className="deed-name">{name}</strong>
+        <em>{price}</em>
       </div>
     </div>
   );
@@ -557,9 +738,9 @@ function Pawns({
     const space = TRACK.find((t) => t.id === id);
     if (!space) continue;
     const box = cellBox(space.col, space.row);
-    const base = anchor(space);
+    const base = lane(space);
     group.forEach((p, i) => {
-      const [ox, oy] = slotOffset(i, group.length);
+      const [ox, oy] = slotOffset(i, group.length, space.side);
       pawns.push(
         <span
           key={p.id}
@@ -595,19 +776,22 @@ function cellBox(col: number, row: number) {
   return { x: x.start, y: y.start, w: x.size, h: y.size };
 }
 
-function anchor(space: (typeof TRACK)[number]) {
-  if (space.id === "home") return { cx: 0.52, cy: 0.42 };
-  if (space.id === "market") return { cx: 0.48, cy: 0.42 };
-  if (space.id === "dream") return { cx: 0.48, cy: 0.58 };
-  if (space.id === "rest") return { cx: 0.52, cy: 0.58 };
-  return { cx: 0.5, cy: 0.5 };
+function lane(space: (typeof TRACK)[number]) {
+  if (space.id === "home") return { cx: 0.62, cy: 0.38 };
+  if (space.id === "market") return { cx: 0.38, cy: 0.38 };
+  if (space.id === "dream") return { cx: 0.38, cy: 0.62 };
+  if (space.id === "rest") return { cx: 0.62, cy: 0.62 };
+  if (space.side === "bottom") return { cx: 0.5, cy: 0.38 };
+  if (space.side === "top") return { cx: 0.5, cy: 0.62 };
+  if (space.side === "left") return { cx: 0.62, cy: 0.5 };
+  return { cx: 0.38, cy: 0.5 };
 }
 
-function slotOffset(index: number, count: number): [number, number] {
+function slotOffset(index: number, count: number, side: (typeof TRACK)[number]["side"]): [number, number] {
   if (count <= 1) return [0, 0];
-  const radius = count > 4 ? 0.12 : 0.09;
-  const angle = (Math.PI * 2 * index) / count - Math.PI / 2;
-  return [Math.cos(angle) * radius, Math.sin(angle) * radius];
+  const t = (index - (count - 1) / 2) * 0.14;
+  if (side === "bottom" || side === "top") return [t, 0];
+  return [0, t];
 }
 
 function Face({ name, avatar, color, size }: { name: string; avatar: string | null; color: string; size: number }) {

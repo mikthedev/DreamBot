@@ -291,6 +291,37 @@ export function PixelDie({ n, spinning }: { n: number; spinning?: boolean }) {
   );
 }
 
+export function PixelBill({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? "pixel-bill"} viewBox="0 0 24 14" shapeRendering="crispEdges" aria-hidden>
+      <rect width="24" height="14" fill="#14532d" />
+      <rect x="1" y="1" width="22" height="12" fill="#22c55e" />
+      <rect x="2" y="2" width="20" height="10" fill="#166534" />
+      <rect x="8" y="3" width="8" height="8" fill="#4ade80" />
+      <rect x="10" y="5" width="4" height="4" fill="#14532d" />
+      <rect x="11" y="6" width="2" height="2" fill="#bbf7d0" />
+      <rect x="3" y="3" width="2" height="2" fill="#86efac" />
+      <rect x="19" y="9" width="2" height="2" fill="#86efac" />
+    </svg>
+  );
+}
+
+export function PixelCaution({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? "pixel-caution"} viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
+      <rect x="7" y="1" width="2" height="2" fill="#fbbf24" />
+      <rect x="6" y="3" width="4" height="2" fill="#fbbf24" />
+      <rect x="5" y="5" width="6" height="2" fill="#fbbf24" />
+      <rect x="4" y="7" width="8" height="2" fill="#fbbf24" />
+      <rect x="3" y="9" width="10" height="2" fill="#fbbf24" />
+      <rect x="2" y="11" width="12" height="2" fill="#fbbf24" />
+      <rect x="1" y="13" width="14" height="2" fill="#fbbf24" />
+      <rect x="7" y="6" width="2" height="4" fill="#1a1208" />
+      <rect x="7" y="11" width="2" height="2" fill="#1a1208" />
+    </svg>
+  );
+}
+
 export function PixelPawn({ color }: { color: string }) {
   return (
     <svg className="pixel-pawn" viewBox="0 0 16 20" shapeRendering="crispEdges" aria-hidden>

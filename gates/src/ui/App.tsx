@@ -24,7 +24,7 @@ import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from ".
 import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
-import { CornerArt, PixelDie, PixelPawn } from "./marks";
+import { CornerArt, PixelBill, PixelCaution, PixelDie, PixelPawn } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const ID_KEY = "gates-discord-id";
@@ -357,10 +357,25 @@ export function App() {
             <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
           </div>
         ))}
-        <div className="wallet">
-          <small>Cash</small>
-          <b>${shownCash}</b>
-          {state.mode === "moves" ? <span>{shownMoves} moves</span> : <span>Classic table</span>}
+        <div className={`wallet ${me && state.lastPay?.to === me.id ? "is-paid" : ""}`}>
+          <div className="till-head">
+            <PixelBill />
+            <small>Cash</small>
+          </div>
+          <div className="till-readout">
+            <b>${shownCash}</b>
+            {me && state.lastPay?.to === me.id ? (
+              <em className="till-plus" key={`${state.rollTick}-got`}>+${state.lastPay.amount}</em>
+            ) : null}
+            {me && state.lastPay?.to === me.id ? (
+              <span className="till-fly" aria-hidden>
+                <i style={{ "--i": 0 } as CSSProperties}><PixelBill /></i>
+                <i style={{ "--i": 1 } as CSSProperties}><PixelBill /></i>
+                <i style={{ "--i": 2 } as CSSProperties}><PixelBill /></i>
+              </span>
+            ) : null}
+          </div>
+          {state.mode === "moves" ? <span className="till-fuel">{shownMoves} moves</span> : <span className="till-fuel">Classic table</span>}
           <ul>
             {state.players.filter((p) => !p.out).map((p) => (
               <li key={p.id} style={{ "--player": p.color } as CSSProperties}>
@@ -448,9 +463,9 @@ export function App() {
                     <PixelDie n={centerDie?.[0] ?? 6} spinning={rolling} />
                     <PixelDie n={centerDie?.[1] ?? 5} spinning={rolling} />
                   </div>
-                  {state.lastPay && mine && state.phase === "extra" && !walking && !held ? (
+                  {state.lastPay && mine && state.lastPay.to !== me.id && state.phase === "extra" && !walking && !held ? (
                     <div className="pay-chip" key={`${state.rollTick}-pay`}>
-                      −${state.lastPay.amount}
+                      -${state.lastPay.amount}
                       {state.lastPay.viaAmount ? (
                         <em>
                           {state.players.find((p) => p.id === state.lastPay?.via)?.name} stack ${state.lastPay.viaAmount}
@@ -543,8 +558,9 @@ export function App() {
       )}
 
       {state && me && me.moves <= 4 && !me.out && state.mode === "moves" && (
-        <div className="banner">
-          Low on moves. Pass GO or collect rent to earn more, rest in Jail, or buy one for ${fuelPrice(me)}.
+        <div className="banner warn-banner">
+          <PixelCaution />
+          <span>Low on moves. Pass GO or collect rent, rest in Jail, or buy one for ${fuelPrice(me)}.</span>
         </div>
       )}
 
@@ -557,10 +573,11 @@ export function App() {
       ) : null}
       {leaveWarn ? (
         <div className="sheet is-stall" onClick={() => { sfx("back"); setLeaveWarn(false); }}>
-          <article className="stall-menu leave-box" onClick={(e) => e.stopPropagation()}>
-            <p className="start-kicker">Warning</p>
+          <article className="warn-card" onClick={(e) => e.stopPropagation()}>
+            <PixelCaution className="warn-mark" />
+            <p className="start-kicker">Caution</p>
             <h2>Leave this table?</h2>
-            <p className="stall-empty">The game is still going. You’ll drop the board and go back to the menu.</p>
+            <p>The game is still going. You’ll drop the board and go back to the menu.</p>
             <div className="leave-warn-act">
               <button
                 className="stall-act leave"

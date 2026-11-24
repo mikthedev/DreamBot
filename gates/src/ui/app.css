@@ -399,32 +399,94 @@ body {
 .dash .stats { text-align: left; }
 .dash .stats span { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .wallet {
+  position: relative;
   margin-top: 6px;
-  background: var(--panel);
-  border: 2px solid var(--line);
-  box-shadow: 2px 2px 0 #0a080c;
-  padding: 10px 10px 8px;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(10, 8, 12, .18) 2px 3px),
+    linear-gradient(180deg, #1a2418 0%, #12180f 100%);
+  border: 3px solid #86c46a;
+  box-shadow: 4px 4px 0 #0a080c, inset 0 0 0 2px #14532d;
+  padding: 8px 8px 8px;
+  image-rendering: pixelated;
 }
-.wallet small {
+.till-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.till-head small {
   display: block;
-  font-size: 10px;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: #86efac;
   font-weight: 700;
 }
-.wallet > b {
+.pixel-bill {
+  width: 28px;
+  height: 16px;
   display: block;
-  font-size: 22px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-  margin: 2px 0 2px;
+  flex: none;
+  image-rendering: pixelated;
 }
-.wallet > span {
+.till-readout {
+  position: relative;
+  margin: 6px 0 4px;
+  padding: 6px 8px 5px;
+  background: #07140c;
+  border: 2px solid #14532d;
+  box-shadow: inset 2px 2px 0 #022c16;
+  overflow: hidden;
+}
+.till-readout b {
   display: block;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #bbf7d0;
+  text-shadow: 2px 2px 0 #022c16;
+}
+.till-fuel {
+  display: block;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
   font-size: 11px;
-  color: var(--muted);
+  letter-spacing: 0.08em;
+  color: #4ade80;
   margin-bottom: 8px;
+}
+.till-plus {
+  position: absolute;
+  right: 6px;
+  top: 4px;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-style: normal;
+  font-size: 13px;
+  color: #fde68a;
+  text-shadow: 2px 2px 0 #0a080c;
+  animation: till-plus 0.7s steps(6) both;
+  pointer-events: none;
+}
+.till-fly {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.till-fly i {
+  position: absolute;
+  left: 8px;
+  top: 4px;
+  animation: till-bill 0.62s steps(7) both;
+  animation-delay: calc(var(--i) * 0.07s);
+}
+.till-fly .pixel-bill { width: 22px; height: 13px; }
+.wallet.is-paid {
+  animation: till-flash 0.55s steps(6);
+}
+.wallet.is-paid .till-readout b {
+  color: #fef08a;
 }
 .wallet ul {
   list-style: none;
@@ -447,10 +509,13 @@ body {
   background: var(--player);
   box-shadow: 1px 1px 0 #0a080c;
 }
+.wallet li span { color: #d8f3dc; }
 .wallet li em {
   font-style: normal;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  color: #fde68a;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
 }
 .help-go {
   margin-top: 8px;
@@ -513,14 +578,17 @@ body {
 }
 .center-actions button { min-width: 7.5rem; }
 .pay-chip {
-  background: #e11d48;
-  color: #fff;
-  border-radius: 8px;
-  padding: 5px 12px;
-  font-size: 13px;
+  background: #7f1d1d;
+  color: #fecaca;
+  border: 2px solid #fda4af;
+  box-shadow: 3px 3px 0 #0a080c;
+  border-radius: 0;
+  padding: 4px 10px;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  animation: pay-pop 0.55s cubic-bezier(.2,.8,.2,1);
+  animation: pay-pop 0.45s steps(6) both;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1040,6 +1108,12 @@ button:disabled { opacity: 0.4; cursor: default; }
   border: 3px solid #c9b48a;
   box-shadow: 8px 8px 0 #0a080c;
   animation: card-in 0.32s steps(6) both;
+}
+.sheet.is-stall article.warn-card {
+  width: min(420px, calc(100vw - 48px));
+  max-height: none;
+  overflow: hidden;
+  background: #1a1208;
 }
 .overlay-close {
   position: absolute;
@@ -1593,16 +1667,26 @@ input {
 }
 .log { padding-left: 18px; }
 .banner {
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-  color: var(--accent);
-  border: 1px solid var(--accent-dim);
-  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #1a1408;
+  color: #fde68a;
+  border: 3px solid #fbbf24;
+  box-shadow: 4px 4px 0 #0a080c;
+  border-radius: 0;
   padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.35;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 13px;
+  line-height: 1.3;
   margin: 0 auto;
   max-width: 720px;
   width: 100%;
+}
+.warn-banner .pixel-caution {
+  width: 22px;
+  height: 22px;
+  flex: none;
 }
 
 @keyframes die-shake {
@@ -1623,8 +1707,22 @@ input {
   to { opacity: 1; }
 }
 @keyframes pay-pop {
-  from { transform: translateY(8px) scale(0.86); opacity: 0; }
+  from { transform: translate(0, 8px); opacity: 0; }
   to { transform: none; opacity: 1; }
+}
+@keyframes till-plus {
+  0% { transform: translate(6px, 8px); opacity: 0; }
+  40% { transform: translate(0, 0); opacity: 1; }
+  100% { transform: translate(0, -10px); opacity: 0; }
+}
+@keyframes till-bill {
+  0% { transform: translate(28px, -16px) rotate(-12deg); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translate(2px, 2px) rotate(0); opacity: 0; }
+}
+@keyframes till-flash {
+  0%, 100% { box-shadow: 4px 4px 0 #0a080c, inset 0 0 0 2px #14532d; }
+  40% { box-shadow: 4px 4px 0 #0a080c, inset 0 0 0 2px #fde68a; border-color: #fde68a; }
 }
 @keyframes deal {
   from { transform: translateY(16px); opacity: 0; }
@@ -2366,6 +2464,59 @@ input {
   color: #fff4cc;
 }
 .leave-box .leave-warn-act { margin-top: 12px; }
+.warn-card {
+  position: relative;
+  width: min(420px, calc(100vw - 48px));
+  overflow: hidden;
+  padding: 28px 18px 26px;
+  background: #1a1208;
+  color: #fff4cc;
+  border: 4px solid #fbbf24;
+  box-shadow: 8px 8px 0 #0a080c;
+  animation: card-in 0.28s steps(6) both;
+}
+.warn-card::before,
+.warn-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  background: repeating-linear-gradient(45deg, #fbbf24 0 8px, #1a1208 8px 16px);
+}
+.warn-card::before { top: 0; }
+.warn-card::after {
+  bottom: 0;
+  background: repeating-linear-gradient(45deg, #1a1208 0 8px, #fbbf24 8px 16px);
+}
+.warn-card .warn-mark {
+  width: 36px;
+  height: 36px;
+  display: block;
+  margin: 10px 0 8px;
+  filter: drop-shadow(2px 2px 0 #0a080c);
+}
+.warn-card .start-kicker {
+  color: #fbbf24;
+  animation: insert-blink 1.15s steps(1) infinite;
+}
+.warn-card h2 {
+  margin: 0 0 8px;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 28px;
+  line-height: 0.95;
+  color: #fff4cc;
+  text-shadow: 3px 3px 0 #0a080c;
+}
+.warn-card p {
+  margin: 0;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
+  color: #e8dcc8;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.warn-card .leave-warn-act { margin-top: 14px; }
+.pixel-caution { image-rendering: pixelated; }
 .sheet.is-stall .overlay-close { pointer-events: auto; }
 @media (max-width: 760px) {
   .how-grid { grid-template-columns: 1fr; }
@@ -2386,6 +2537,7 @@ input {
 }
 @media (prefers-reduced-motion: reduce) {
   .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk,
+  .till-plus, .till-fly i, .wallet.is-paid, .warn-card, .warn-banner,
   .menu-vault, .menu-bill, .menu-stamp, .menu-chip, .menu-mascot, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
   .lobby.is-in, .join-rail, .waiting-booth, .stall-btn, .stall-menu, .how-card, .dive-bars i, .dive-word, .app.is-open .play { animation: none; transition: none; }
 }

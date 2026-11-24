@@ -40,7 +40,7 @@ const MUSIC_MUTE_KEY = "gates-music";
 const SFX_MUTE_KEY = "gates-sfx";
 const MUSIC_VOL_KEY = "gates-music-vol";
 const SFX_VOL_KEY = "gates-sfx-vol";
-const MUSIC_MAX = 0.42;
+const MUSIC_MAX = 0.2;
 const OPEN_HZ = 18000;
 const MUFFLE_HZ = 720;
 
@@ -55,7 +55,7 @@ let track: "menu" | "play" | null = null;
 let muffled = false;
 let musicOn = localStorage.getItem(MUSIC_MUTE_KEY) !== "off";
 let sfxOn = localStorage.getItem(SFX_MUTE_KEY) !== "off";
-let musicLevel = readLevel(MUSIC_VOL_KEY, 0.72);
+let musicLevel = readLevel(MUSIC_VOL_KEY, 0.4);
 let sfxLevel = readLevel(SFX_VOL_KEY, 0.8);
 let armed = false;
 

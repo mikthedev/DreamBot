@@ -152,7 +152,15 @@ export function App() {
                 <h2>Test tools</h2>
                 <p>Tied to this browser. Turn them off before a real table with friends. The host bot is not involved.</p>
                 <div className="row">
-                  <button className={testOn ? "warn" : ""} onClick={() => setTestOn((v) => !v)}>
+                  <button
+                    className={testOn ? "warn" : ""}
+                    onClick={() => {
+                      if (testOn) {
+                        setTestOn(false);
+                        restart(false);
+                      } else setTestOn(true);
+                    }}
+                  >
                     {testOn ? "Turn test tools off" : "Turn test tools on"}
                   </button>
                 </div>

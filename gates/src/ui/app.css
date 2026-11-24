@@ -108,14 +108,13 @@ body {
   aspect-ratio: 1;
   position: relative;
   background:
-  radial-gradient(circle at 42% 38%, #a8c499 0%, var(--felt) 42%, var(--felt-deep) 100%);
-  border: 1px solid var(--accent);
-  border-radius: 6px;
+    radial-gradient(ellipse at 50% 46%, #b8cfa8 0%, var(--felt) 48%, var(--felt-deep) 100%);
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--frame));
+  border-radius: 10px;
   box-shadow:
-    0 0 0 7px var(--frame),
-    0 0 0 8px #1a120c,
-    0 0 0 10px color-mix(in srgb, var(--accent) 55%, #5a4028),
-    0 28px 60px rgba(0, 0, 0, .55);
+    0 0 0 8px var(--frame),
+    0 0 0 9px #120e0b,
+    0 24px 50px rgba(0, 0, 0, .5);
   display: grid;
   grid-template-columns: 1.7fr repeat(7, 1fr) 1.7fr;
   grid-template-rows: 1.7fr repeat(7, 1fr) 1.7fr;
@@ -211,12 +210,11 @@ body {
   z-index: 1;
   color: var(--ink);
   background: var(--tile-face);
-  box-shadow: inset 0 0 0 1px var(--ink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 55%, var(--tile-edge));
 }
 
 .tile.deed {
-  background:
-    linear-gradient(168deg, #fffdf9 0%, var(--tile-face) 55%, #ebe4d8 100%);
+  background: var(--tile-face);
 }
 .tile.deed.owned {
   background:
@@ -239,61 +237,48 @@ body {
   background: var(--band, #6d6458);
   z-index: 1;
 }
-.tile.bottom { padding: 2px 2px 14%; }
-.tile.top { padding: 14% 2px 2px; }
-.tile.left { padding: 2px 2px 2px 14%; }
-.tile.right { padding: 2px 14% 2px 2px; }
-.tile.bottom .band { left: 0; right: 0; bottom: 0; height: 13%; }
-.tile.top .band { left: 0; right: 0; top: 0; height: 13%; }
-.tile.left .band { top: 0; bottom: 0; left: 0; width: 13%; }
-.tile.right .band { top: 0; bottom: 0; right: 0; width: 13%; }
+.tile.bottom { padding: 4px 3px 12%; }
+.tile.top { padding: 12% 3px 4px; }
+.tile.left { padding: 3px 3px 3px 12%; }
+.tile.right { padding: 3px 12% 3px 3px; }
+.tile.bottom .band { left: 0; right: 0; bottom: 0; height: 8%; }
+.tile.top .band { left: 0; right: 0; top: 0; height: 8%; }
+.tile.left .band { top: 0; bottom: 0; left: 0; width: 8%; }
+.tile.right .band { top: 0; bottom: 0; right: 0; width: 8%; }
 
 .deed-body {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
   width: 100%;
   min-width: 0;
-  padding: 2px;
+  padding: 4px 2px;
   position: relative;
   z-index: 3;
 }
-.deed-body b {
-  font-size: clamp(7px, 16cqmin, 11px);
-  line-height: 1.08;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  max-width: 100%;
-  padding: 0 2px;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
 .deed-body em {
   font-style: normal;
-  font-size: clamp(6.5px, 14cqmin, 10px);
+  font-size: clamp(8px, 16cqmin, 12px);
   font-weight: 750;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--ink) 78%, #666);
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--ink) 70%, #666);
 }
 
-.store-tag {
+.store-dot {
   position: absolute;
   z-index: 3;
-  font-size: clamp(5px, 9cqmin, 7px);
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--ink) 55%, #fff);
-  opacity: 0.85;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--band, #5c554c);
 }
-.tile.bottom .store-tag { top: 3px; }
-.tile.top .store-tag { bottom: 3px; }
-.tile.left .store-tag { right: 4px; }
-.tile.right .store-tag { left: 4px; }
+.tile.bottom .store-dot { top: 5px; }
+.tile.top .store-dot { bottom: 5px; }
+.tile.left .store-dot { right: 6px; }
+.tile.right .store-dot { left: 6px; }
 
 .owner-mark {
   position: absolute;
@@ -318,18 +303,25 @@ body {
 .tile.right .owner-mark { left: 3px; top: 3px; }
 
 .brand-logo {
-  width: clamp(22px, 48cqmin, 40px);
-  height: clamp(22px, 48cqmin, 40px);
+  width: clamp(28px, 58cqmin, 48px);
+  height: clamp(28px, 58cqmin, 48px);
   display: block;
   object-fit: contain;
   flex: none;
+  filter: drop-shadow(0 1px 1px rgba(26, 21, 16, .12));
+}
+.brand-logo.img.invert {
+  background: #111;
+  border-radius: 8px;
+  padding: 4px;
+  box-sizing: border-box;
 }
 .brand-fallback {
-  width: clamp(22px, 48cqmin, 40px);
-  height: clamp(22px, 48cqmin, 40px);
+  width: clamp(28px, 58cqmin, 48px);
+  height: clamp(28px, 58cqmin, 48px);
   display: grid;
   place-items: center;
-  font-size: clamp(12px, 22cqmin, 16px);
+  font-size: clamp(14px, 24cqmin, 18px);
   font-weight: 800;
   color: var(--ink);
 }
@@ -348,7 +340,7 @@ body {
 
 /* Corners — same cream base, thin accent only */
 .tile.corner {
-  background: linear-gradient(168deg, #fffdf9, var(--tile-face) 70%, #ebe4d8);
+  background: var(--tile-face);
 }
 .tile.corner::after {
   content: "";

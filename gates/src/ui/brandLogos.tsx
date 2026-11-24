@@ -26,7 +26,7 @@ import {
   siYoutube,
 } from "simple-icons";
 
-type LogoSpec = { kind: "si"; icon: SimpleIcon } | { kind: "img"; src: string };
+type LogoSpec = { kind: "si"; icon: SimpleIcon } | { kind: "img"; src: string; invert?: boolean };
 
 const LOGOS: Record<string, LogoSpec> = {
   discord: { kind: "si", icon: siDiscord },
@@ -46,7 +46,7 @@ const LOGOS: Record<string, LogoSpec> = {
   xai: { kind: "img", src: "/brands/xai.svg" },
   uber: { kind: "si", icon: siUber },
   tesla: { kind: "si", icon: siTesla },
-  waymo: { kind: "img", src: "https://www.google.com/s2/favicons?domain=waymo.com&sz=128" },
+  waymo: { kind: "img", src: "https://www.google.com/s2/favicons?domain=waymo.com&sz=128", invert: true },
   intel: { kind: "si", icon: siIntel },
   amd: { kind: "si", icon: siAmd },
   nvidia: { kind: "si", icon: siNvidia },
@@ -58,8 +58,6 @@ const LOGOS: Record<string, LogoSpec> = {
   steam: { kind: "si", icon: siSteam },
   epic: { kind: "si", icon: siEpicgames },
 };
-
-const INK = "#1a1510";
 
 export function BrandLogo({ id, label }: { id: string; label?: string }) {
   const spec = LOGOS[id];
@@ -76,14 +74,14 @@ export function BrandLogo({ id, label }: { id: string; label?: string }) {
   if (spec.kind === "si") {
     return (
       <svg className="brand-logo" viewBox="0 0 24 24" role="img" aria-label={label || spec.icon.title}>
-        <path d={spec.icon.path} fill={INK} />
+        <path d={spec.icon.path} fill={`#${spec.icon.hex}`} />
       </svg>
     );
   }
 
   return (
     <img
-      className="brand-logo img"
+      className={`brand-logo img ${spec.invert ? "invert" : ""}`}
       src={spec.src}
       alt=""
       loading="lazy"

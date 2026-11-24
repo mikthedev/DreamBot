@@ -445,7 +445,7 @@ function DeedTile({
     >
       <i className="band" aria-hidden />
       {owner && <OwnerMark owner={owner} />}
-      {store && <span className="store-tag">Store</span>}
+      {store && <span className="store-dot" aria-hidden />}
       {level > 0 && (
         <span className="houses">
           {Array.from({ length: level }, (_, i) => (
@@ -455,7 +455,6 @@ function DeedTile({
       )}
       <div className="deed-body">
         <BrandLogo id={logoId} label={name} />
-        <b>{name}</b>
         <em>{price}</em>
       </div>
     </div>

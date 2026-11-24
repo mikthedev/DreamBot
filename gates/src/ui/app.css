@@ -46,7 +46,9 @@ body {
   min-width: 0;
   padding: 6px 4px;
 }
-.top-tools { display: flex; gap: 8px; align-items: center; }
+.top-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.mute-btn.on { color: #fff4cc; border-color: #c9b48a; }
+.mute-btn.off { color: var(--faint); opacity: 0.85; }
 .brand {
   font-family: "Pixelify Sans", Outfit, sans-serif;
   font-weight: 700;

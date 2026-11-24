@@ -36,8 +36,25 @@ const VOL: Record<SfxName, number> = {
   warning: 0.55,
 };
 
+const MUSIC_KEY = "gates-music";
+const SFX_KEY = "gates-sfx";
+const MUSIC_VOL = 0.38;
+const MUFFLE_VOL = 0.22;
+const OPEN_HZ = 16000;
+const MUFFLE_HZ = 720;
+
 const cache = new Map<SfxName, HTMLAudioElement>();
 let hoverAt = 0;
+let ctx: AudioContext | null = null;
+let musicGain: GainNode | null = null;
+let filter: BiquadFilterNode | null = null;
+let menuEl: HTMLAudioElement | null = null;
+let playEl: HTMLAudioElement | null = null;
+let track: "menu" | "play" | null = null;
+let muffled = false;
+let musicOn = localStorage.getItem(MUSIC_KEY) !== "off";
+let sfxOn = localStorage.getItem(SFX_KEY) !== "off";
+let armed = false;
 
 function node(name: SfxName) {
   let a = cache.get(name);
@@ -50,6 +67,7 @@ function node(name: SfxName) {
 }
 
 export function sfx(name: SfxName) {
+  if (!sfxOn) return;
   const src = node(name);
   const shot = src.cloneNode(true) as HTMLAudioElement;
   shot.volume = VOL[name];
@@ -61,4 +79,103 @@ export function sfxHover() {
   if (now - hoverAt < 140) return;
   hoverAt = now;
   sfx("hover");
+}
+
+export function musicEnabled() {
+  return musicOn;
+}
+
+export function sfxEnabled() {
+  return sfxOn;
+}
+
+export function toggleMusic() {
+  musicOn = !musicOn;
+  localStorage.setItem(MUSIC_KEY, musicOn ? "on" : "off");
+  applyMusicGain();
+  if (musicOn) void startTrack(track ?? "menu");
+  else pauseAll();
+  return musicOn;
+}
+
+export function toggleSfx() {
+  sfxOn = !sfxOn;
+  localStorage.setItem(SFX_KEY, sfxOn ? "on" : "off");
+  return sfxOn;
+}
+
+export function armAudio() {
+  if (armed) return;
+  armed = true;
+  ensureGraph();
+  void ctx?.resume();
+  if (musicOn) void startTrack(track ?? "menu");
+}
+
+export function setSoundtrack(next: "menu" | "play") {
+  track = next;
+  if (!musicOn) return;
+  ensureGraph();
+  void startTrack(next);
+}
+
+export function muffleMusic(on: boolean) {
+  muffled = on;
+  if (!ctx || !filter || !musicGain) return;
+  const now = ctx.currentTime;
+  filter.frequency.cancelScheduledValues(now);
+  musicGain.gain.cancelScheduledValues(now);
+  filter.frequency.setTargetAtTime(on ? MUFFLE_HZ : OPEN_HZ, now, 0.09);
+  musicGain.gain.setTargetAtTime((musicOn ? (on ? MUFFLE_VOL : MUSIC_VOL) : 0), now, 0.09);
+}
+
+function ensureGraph() {
+  if (ctx) return;
+  const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return;
+  ctx = new AudioCtx();
+  filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = muffled ? MUFFLE_HZ : OPEN_HZ;
+  filter.Q.value = 0.7;
+  musicGain = ctx.createGain();
+  musicGain.gain.value = musicOn ? MUSIC_VOL : 0;
+  musicGain.connect(filter);
+  filter.connect(ctx.destination);
+  menuEl = new Audio("/music/menu.mp3");
+  playEl = new Audio("/music/play.mp3");
+  for (const el of [menuEl, playEl]) {
+    el.loop = true;
+    el.preload = "auto";
+    el.crossOrigin = "anonymous";
+    ctx.createMediaElementSource(el).connect(musicGain);
+  }
+}
+
+function applyMusicGain() {
+  if (!musicGain || !ctx) return;
+  musicGain.gain.setTargetAtTime(musicOn ? (muffled ? MUFFLE_VOL : MUSIC_VOL) : 0, ctx.currentTime, 0.05);
+}
+
+function pauseAll() {
+  menuEl?.pause();
+  playEl?.pause();
+}
+
+async function startTrack(kind: "menu" | "play") {
+  ensureGraph();
+  if (!ctx || !menuEl || !playEl || !musicOn) return;
+  await ctx.resume().catch(() => {});
+  const on = kind === "menu" ? menuEl : playEl;
+  const off = kind === "menu" ? playEl : menuEl;
+  if (!off.paused) {
+    off.pause();
+    off.currentTime = 0;
+  }
+  if (!on.paused) return;
+  void on.play().catch(() => {});
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pointerdown", armAudio, { once: true });
 }

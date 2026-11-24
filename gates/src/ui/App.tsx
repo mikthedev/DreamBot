@@ -21,7 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
-import { sfx } from "./sfx";
+import { armAudio, muffleMusic, musicEnabled, setSoundtrack, sfx, sfxEnabled, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -50,6 +50,8 @@ export function App() {
   const [dive, setDive] = useState<"idle" | "cover" | "open">("idle");
   const [helpOpen, setHelpOpen] = useState(false);
   const [leaveWarn, setLeaveWarn] = useState(false);
+  const [musicOn, setMusicOn] = useState(() => musicEnabled());
+  const [sfxOn, setSfxOn] = useState(() => sfxEnabled());
   const diveWait = useRef<number[]>([]);
   const [pickedMode, setPickedMode] = useState<Mode>("moves");
   const [joined, setJoined] = useState<SeatPerson[]>([]);
@@ -277,6 +279,25 @@ export function App() {
   const inDeal = !!(state && me && state.offer && (state.offer.from === me.id || state.offer.to === me.id));
   const stallOpen = trading || inDeal;
   const pregame = screen !== "play" || !state || !me;
+  const ownerHover = !!(state && hoverId && tileOwner(hoverId, state));
+  const muffled =
+    !pregame &&
+    (!!focusOwner ||
+      ownerHover ||
+      !!openGroup ||
+      stallOpen ||
+      !!sheet ||
+      helpOpen ||
+      leaveWarn ||
+      dive !== "idle");
+
+  useEffect(() => {
+    setSoundtrack(pregame ? "menu" : "play");
+  }, [pregame]);
+
+  useEffect(() => {
+    muffleMusic(muffled || dive !== "idle");
+  }, [muffled, dive]);
 
   return (
     <LookCtx.Provider value={look}>
@@ -284,6 +305,27 @@ export function App() {
       <header className="top">
         <div className="brand">DreamPoly</div>
         <div className="top-tools">
+          <button
+            className={`ghost tiny mute-btn ${musicOn ? "on" : "off"}`}
+            title={musicOn ? "Mute music" : "Unmute music"}
+            onClick={() => {
+              armAudio();
+              setMusicOn(toggleMusic());
+            }}
+          >
+            {musicOn ? "Music" : "Music off"}
+          </button>
+          <button
+            className={`ghost tiny mute-btn ${sfxOn ? "on" : "off"}`}
+            title={sfxOn ? "Mute sounds" : "Unmute sounds"}
+            onClick={() => {
+              const next = toggleSfx();
+              setSfxOn(next);
+              if (next) sfx("click");
+            }}
+          >
+            {sfxOn ? "SFX" : "SFX off"}
+          </button>
           <button className="ghost tiny" onClick={() => { sfx("click"); setLook((cur) => (cur === "pawn" ? "icon" : "pawn")); }}>
             {look === "pawn" ? "Characters" : "Discord icons"}
           </button>

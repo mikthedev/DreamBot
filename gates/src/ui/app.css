@@ -2075,9 +2075,11 @@ input {
 }
 .how-tag {
   margin: 8px 0 0;
-  color: #e8dcc8;
-  font-size: 16px;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
+  color: #f6eee4;
+  font-size: 17px;
   font-weight: 600;
+  line-height: 1.4;
 }
 .how-grid {
   display: grid;
@@ -2090,7 +2092,9 @@ input {
   background: #161218;
   border: 3px solid #3a3344;
   box-shadow: 4px 4px 0 #0a080c;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
 }
+.how-wide { grid-column: 1 / -1; }
 .how-panel.fuel { border-color: #f0d78c; background: linear-gradient(180deg, #2a2418, #161218); }
 .how-panel.note { border-color: #6a9a6e; }
 .how-panel.deal { border-color: #6a82b4; }
@@ -2099,8 +2103,9 @@ input {
 .how-panel.win { border-color: #e6c35a; background: linear-gradient(180deg, #2a2418, #161218); }
 .how-panel small {
   display: block;
-  font-size: 11px;
-  letter-spacing: 0.16em;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   font-weight: 800;
   color: var(--accent);
@@ -2109,25 +2114,46 @@ input {
 .how-panel h3 {
   margin: 0 0 8px;
   font-family: "Pixelify Sans", Outfit, sans-serif;
-  font-size: 26px;
-  line-height: 1;
+  font-size: 24px;
+  line-height: 1.1;
   color: #fff4cc;
 }
 .how-panel p {
   margin: 0 0 8px;
-  color: #f3eadf;
-  font-size: 16px;
-  line-height: 1.45;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
+  color: #f6eee4;
+  font-size: 17px;
+  line-height: 1.5;
   font-weight: 500;
 }
 .how-panel p:last-child { margin-bottom: 0; }
-.how-panel p b { color: #fff4cc; font-weight: 800; }
+.how-panel p b { color: #fff8e8; font-weight: 800; }
+.how-stack {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.how-stack li {
+  padding: 8px 10px;
+  background: #1c1822;
+  border: 2px solid #3a3344;
+  color: #f6eee4;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 500;
+}
+.how-stack li b { color: #fff8e8; }
 .how-ok {
   width: auto;
   min-width: 220px;
   margin-top: 16px;
   align-items: flex-start;
 }
+.how-ok b { font-family: "Pixelify Sans", Outfit, sans-serif; }
+.how-ok span { font-family: Outfit, "Segoe UI", system-ui, sans-serif; }
 .leave-box h2 {
   margin: 0 0 8px;
   font-family: "Pixelify Sans", Outfit, sans-serif;

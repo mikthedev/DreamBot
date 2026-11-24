@@ -742,12 +742,29 @@ function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
           <p>Grey brands are free. Owned ones wash in the owner’s color.</p>
           <p>Click a tile for the whole set. Hover a player for their deeds. Right-click someone else’s tile to peek.</p>
         </section>
-        <section className="how-panel license">
-          <small>04 · Stack</small>
-          <h3>Rent flows down</h3>
-          <p>Social, Music, Watch, AI → <b>Cloud</b>.</p>
-          <p>Cloud, Ride, Giants → <b>Chips</b>.</p>
-          <p>Full set: <b>1/{STACK_CUT}</b> of rent goes to the set below unless they buy a <b>$180 license</b> in More.</p>
+        <section className="how-panel license how-wide">
+          <small>04 · Dependencies</small>
+          <h3>Company stacks</h3>
+          <p>
+            Brands live in sets of three. Some sets <b>depend</b> on another set. Own a full set and
+            <b> 1/{STACK_CUT}</b> of that rent is paid to whoever owns the set below — not to you —
+            unless they buy a <b>$180 license</b> in More.
+          </p>
+          <ul className="how-stack">
+            <li>
+              <b>Social, Music, Watch, AI</b> depend on <b>Cloud</b>
+            </li>
+            <li>
+              <b>Cloud, Ride, Giants</b> depend on <b>Chips</b>
+            </li>
+            <li>
+              <b>Chips</b> is the bottom of the stack. It collects. It does not pay down.
+            </li>
+          </ul>
+          <p>
+            Example: you own all of Social. Someone else owns Cloud. They take 1/{STACK_CUT} of Social
+            rent until Cloud licenses you. If nobody owns the lower set, you keep the full rent.
+          </p>
         </section>
         <section className="how-panel log">
           <small>05 · Market</small>

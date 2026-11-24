@@ -12,7 +12,8 @@ export type SfxName =
   | "peek"
   | "confirm"
   | "market"
-  | "dice";
+  | "dice"
+  | "owner";
 
 const FILES: Record<SfxName, string> = {
   hover: "/sfx/hover.wav",
@@ -29,6 +30,7 @@ const FILES: Record<SfxName, string> = {
   confirm: "/sfx/confirm.mp3",
   market: "/sfx/market.wav",
   dice: "/sfx/dice.mp3",
+  owner: "/sfx/owner.wav",
 };
 
 const VOL: Record<SfxName, number> = {
@@ -46,6 +48,7 @@ const VOL: Record<SfxName, number> = {
   confirm: 0.5,
   market: 0.5,
   dice: 0.55,
+  owner: 0.5,
 };
 
 const MUSIC_MUTE_KEY = "gates-music";
@@ -58,6 +61,7 @@ const MUFFLE_HZ = 480;
 
 const cache = new Map<SfxName, HTMLAudioElement>();
 let hoverAt = 0;
+let playHoverAt = 0;
 type Kind = "menu" | "play";
 type BedGraph = {
   ver: 2;
@@ -113,6 +117,13 @@ export function sfxHover() {
   if (now - hoverAt < 140) return;
   hoverAt = now;
   sfx("hover");
+}
+
+export function sfxPlayHover() {
+  const now = performance.now();
+  if (now - playHoverAt < 140) return;
+  playHoverAt = now;
+  sfx("peek");
 }
 
 export function getMix() {

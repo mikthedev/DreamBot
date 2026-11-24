@@ -21,7 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
-import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, toggleMusic, toggleSfx } from "./sfx";
+import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -294,9 +294,9 @@ export function App() {
   }, [pregame, peeking, dive]);
 
   useEffect(() => {
-    if (!focusOwner) return;
-    sfx("peek");
-  }, [focusOwner]);
+    if (!seatHover) return;
+    sfxPlayHover();
+  }, [seatHover]);
 
   return (
     <LookCtx.Provider value={look}>
@@ -479,7 +479,7 @@ export function App() {
                   </button>
                 ))}
                 {mine && state.phase === "extra" && !walking && !diceSpin ? (
-                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => setTrading(true)}>
+                  <button className={me.freeTrade ? "go" : "ghost"} onMouseEnter={sfxPlayHover} onClick={() => setTrading(true)}>
                     {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
                   </button>
                 ) : null}
@@ -513,7 +513,8 @@ export function App() {
                 const oid = tileOwner(space.id, state);
                 if (!oid) return;
                 setOpenGroup(null);
-                setOwnerPeek((cur) => (cur === oid ? null : oid));
+                if (ownerPeek !== oid) sfx("owner");
+                setOwnerPeek(ownerPeek === oid ? null : oid);
               }}
             />
           ))}
@@ -862,7 +863,7 @@ function MoreStall({
           <b>{me.noteUsed ? "Note spent" : "Bank note"}</b>
           <span>{me.noteUsed ? "Already used" : "+$300 once"}</span>
         </button>
-        <button className="stall-act deal" disabled={!extra} onClick={onTrade}>
+        <button className="stall-act deal" disabled={!extra} onMouseEnter={sfxPlayHover} onClick={onTrade}>
           <small>Market</small>
           <b>{me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}</b>
           <span>Swap deeds</span>
@@ -887,29 +888,40 @@ function MoreStall({
       </div>
       <h3 className="stall-deeds-title">Your companies</h3>
       {owned.length ? (
-        <ul className="stall-deeds">
-          {owned.map((c) => {
-            const own = state.companies[c.id];
-            const grade = own.level === 0 ? "Unbuilt" : own.level === 1 ? "Office" : "Built";
+        <div className="stall-deeds">
+          {SETS.map((set) => {
+            const companies = owned.filter((c) => c.set === set.id);
+            if (!companies.length) return null;
             return (
-            <li key={c.id}>
-              <span className="stall-deed-mark">
-                <BrandLogo id={c.id} label={c.name} />
-              </span>
-              <div className="stall-deed-copy">
-                <b>{c.name}</b>
-                <small>{grade} · ${c.rent[own.level]} rent</small>
-              </div>
-              <button className="deed-act" disabled={!extra || own.level >= 2} onClick={() => onAct({ type: "build", companyId: c.id })}>
-                {own.level >= 2 ? "Built" : "Build"}
-              </button>
-              <button className="deed-act sell" disabled={!extra} onClick={() => onAct({ type: "sell", companyId: c.id })}>
-                Sell
-              </button>
-            </li>
+              <section className="stall-set" key={set.id} style={{ "--set": set.color } as CSSProperties}>
+                <h4>{set.label}</h4>
+                <ul>
+                  {companies.map((c) => {
+                    const own = state.companies[c.id];
+                    const grade = own.level === 0 ? "Unbuilt" : own.level === 1 ? "Office" : "Built";
+                    return (
+                      <li key={c.id}>
+                        <span className="stall-deed-mark">
+                          <BrandLogo id={c.id} label={c.name} />
+                        </span>
+                        <div className="stall-deed-copy">
+                          <b>{c.name}</b>
+                          <small>{grade} · ${c.rent[own.level]}</small>
+                        </div>
+                        <button className="deed-act" disabled={!extra || own.level >= 2} onClick={() => onAct({ type: "build", companyId: c.id })}>
+                          {own.level >= 2 ? "Built" : "Build"}
+                        </button>
+                        <button className="deed-act sell" disabled={!extra} onClick={() => onAct({ type: "sell", companyId: c.id })}>
+                          Sell
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
             );
           })}
-        </ul>
+        </div>
       ) : (
         <p className="stall-empty">No deeds yet.</p>
       )}
@@ -1143,11 +1155,11 @@ function cuePlay(prev: State, next: State, action: Action) {
   if (action.type === "fuel" || action.type === "license" || (action.type === "store" && action.pick === "buy") || (action.type === "land" && action.pick === "buy")) {
     sfx("pay");
   }
-  if ((action.type === "land" && action.pick === "buy") || (action.type === "store" && action.pick === "buy")) sfx("confirm");
+  if (action.type === "end") sfx("confirm");
   if (action.type === "note" || action.type === "home" || action.type === "sell") sfx("received");
   if (action.type === "offer" && action.pick === "accept") sfx("confirm");
   if (action.type === "offer" && action.pick === "decline") sfx("back");
-  if (action.type === "trade") sfx("confirm");
+  if (action.type === "trade") sfx("enter");
   if (!samePay(prev.lastPay, next.lastPay) && next.lastPay && you) {
     if (next.lastPay.to === you) sfx("received");
     else if (actor(prev)?.id === you) sfx("pay");
@@ -1442,13 +1454,13 @@ function MarketCard({
   const fee = tradeFee(state, you);
   const open = mine && state.phase === "extra";
   return (
-    <div className="group-card market-card" onClick={(e) => e.stopPropagation()}>
+    <div className="group-card market-card" onClick={(e) => e.stopPropagation()} onMouseEnter={sfxPlayHover}>
       <small>Corner</small>
       <b>Market</b>
       <p className="dep">
         Swap companies, cash, or a move. Land here and this turn’s trade is free. Anywhere else it costs ${fee || 20} unless you own Watch.
       </p>
-      <button className="go" disabled={!open} onClick={onTrade}>
+      <button className="go" disabled={!open} onMouseEnter={sfxPlayHover} onClick={onTrade}>
         {open ? (you.freeTrade ? "Open a free trade" : `Trade $${fee}`) : "Trade after you land"}
       </button>
     </div>
@@ -1857,7 +1869,7 @@ function OfferStall({
   const mineToSend = you.id === offer.from;
   if (!mineToTake && !mineToSend) return null;
   return (
-    <div className="trade-desk offer-stall">
+    <div className="trade-desk offer-stall" onMouseEnter={sfxPlayHover}>
       <div className="trade-banner">
         <b>Private stall</b>
         <em className={offer.fee ? "" : "free"}>{offer.fee ? `Desk $${offer.fee}` : "Free stall"}</em>
@@ -1891,10 +1903,10 @@ function OfferStall({
         <>
           <p className="deal-ok">Accept or decline. Nobody else sees this stall.</p>
           <div className="trade-actions">
-            <button className="go" onClick={() => onPick("accept")}>
+            <button className="go" onMouseEnter={sfxPlayHover} onClick={() => onPick("accept")}>
               Accept
             </button>
-            <button className="warn" onClick={() => onPick("decline")}>
+            <button className="warn" onMouseEnter={sfxPlayHover} onClick={() => onPick("decline")}>
               Decline
             </button>
           </div>
@@ -1958,7 +1970,7 @@ function TradeDesk({
   }
 
   return (
-    <div className="trade-desk">
+    <div className="trade-desk" onMouseEnter={sfxPlayHover}>
       <div className="trade-banner">
         <b>Market</b>
         <em className={you.freeTrade ? "free" : ""}>{you.freeTrade ? "Free stall" : `Desk $${fee}`}</em>
@@ -1969,6 +1981,7 @@ function TradeDesk({
             key={p.id}
             className={`trade-seat ${p.id === to ? "on" : ""}`}
             style={{ "--player": p.color } as CSSProperties}
+            onMouseEnter={sfxPlayHover}
             onClick={() => {
               setTo(p.id);
               setGet([]);
@@ -2015,10 +2028,10 @@ function TradeDesk({
         </div>
         <p className={problem ? "deal-warn" : "deal-ok"}>{problem || "Tap companies, cash, or a move — then seal it."}</p>
         <div className="trade-actions">
-          <button className="go" disabled={!!problem} onClick={() => onDeal(action)}>
+          <button className="go" disabled={!!problem} onMouseEnter={sfxPlayHover} onClick={() => onDeal(action)}>
             Seal deal
           </button>
-          <button className="ghost" onClick={onClose}>
+          <button className="ghost" onMouseEnter={sfxPlayHover} onClick={onClose}>
             Leave stall
           </button>
         </div>
@@ -2076,6 +2089,7 @@ function TradeCrate({
             key={c.id}
             type="button"
             className={`stock ${picked.includes(c.id) ? "on" : ""}`}
+            onMouseEnter={sfxPlayHover}
             onClick={() => onToggle(c.id)}
           >
             <BrandLogo id={c.id} label={c.name} />

@@ -1031,9 +1031,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 .sheet.is-stall article.stall-menu,
 .stall-menu {
   position: relative;
-  width: min(560px, calc(100vw - 48px));
+  width: min(640px, calc(100vw - 48px));
   height: auto;
-  max-height: min(72vh, 540px);
+  max-height: min(82vh, 720px);
   background: #1c1822;
   padding: 16px 16px 14px;
   overflow: auto;
@@ -1165,13 +1165,12 @@ button:disabled { opacity: 0.4; cursor: default; }
   color: #fff4cc;
 }
 .stall-deeds {
-  list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 132px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  max-height: min(42vh, 320px);
   overflow: auto;
 }
 .leave-link {
@@ -1221,29 +1220,52 @@ button:disabled { opacity: 0.4; cursor: default; }
   gap: 8px;
   margin-top: 8px;
 }
-.stall-deeds li {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto auto;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 10px;
-  background: #161218;
-  border: 2px solid #3a3344;
+.stall-set {
+  min-width: 0;
+  padding: 8px;
+  background: #141018;
+  border: 2px solid color-mix(in srgb, var(--set) 55%, #3a3344);
   box-shadow: 3px 3px 0 #0a080c;
 }
+.stall-set h4 {
+  margin: 0 0 6px;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--set) 70%, #fff4cc);
+}
+.stall-set ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.stall-deeds li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  background: #161218;
+  border: 2px solid #3a3344;
+  box-shadow: 2px 2px 0 #0a080c;
+}
 .stall-deed-mark {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   overflow: hidden;
 }
 .stall-deeds .brand-logo,
 .stall-deeds .brand-fallback {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  min-height: 28px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
 }
 .stall-deed-copy {
   min-width: 0;
@@ -2339,7 +2361,8 @@ input {
   .how-grid { grid-template-columns: 1fr; }
   .how-card { padding: 14px; }
   .stall-grid { grid-template-columns: 1fr 1fr; }
-  .stall-deeds li { grid-template-columns: 32px 1fr; }
+  .stall-deeds { grid-template-columns: 1fr; }
+  .stall-deeds li { grid-template-columns: 28px 1fr; }
   .stall-deeds .deed-act { justify-self: start; }
   .center-actions { width: 100%; }
   .center-actions button { flex: 1; min-width: 0; }

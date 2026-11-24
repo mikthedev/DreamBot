@@ -698,34 +698,69 @@ function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
   const moves = mode === "moves";
   return (
     <>
-      <header className="stall-head">
-        <p className="start-kicker">{moves ? "Main game" : "Classic"}</p>
+      <header className="how-head">
+        <p className="start-kicker">{moves ? "Main game" : "Classic table"}</p>
         <h2>How to play</h2>
+        <p className="how-tag">Read the stall. Then take the board.</p>
       </header>
-      <div className="how-body">
+      <div className="how-grid">
         {moves ? (
           <>
-            <h3>Moves</h3>
-            <p>You start with {START_MOVES} moves and ${START_CASH}. Each turn spends 1 move, then $12 upkeep per brand or store you own. Hit 0 moves and you are out. Cap is {MOVE_CAP}.</p>
-            <h3>Earn more moves</h3>
-            <p>Pass GO for $200 and +1 move. Collect or pay rent for +1. Rest in Jail for +1. Buy one in More — first costs $100, then $200, then $300.</p>
+            <section className="how-panel fuel">
+              <small>01 · Fuel</small>
+              <h3>Moves</h3>
+              <p>Start with <b>{START_MOVES} moves</b> and <b>${START_CASH}</b>. Each turn spends 1 move, then <b>$12</b> upkeep per brand or store you own.</p>
+              <p>Hit <b>0 moves</b> and you are out. Cap is {MOVE_CAP}.</p>
+            </section>
+            <section className="how-panel note">
+              <small>02 · Earn</small>
+              <h3>Get more moves</h3>
+              <p>Pass GO: <b>$200</b> and <b>+1 move</b>.</p>
+              <p>Collect or pay rent: <b>+1</b>. Rest in Jail: <b>+1</b>.</p>
+              <p>Buy one in More — $100, then $200, then $300.</p>
+            </section>
           </>
         ) : (
           <>
-            <h3>Cash</h3>
-            <p>You start with ${START_CASH}. There is no move meter. Miss a payment and the bank takes you. After {HARD_STOP_ROUNDS} rounds, most cash wins.</p>
-            <h3>GO</h3>
-            <p>Pass GO for $200. Stay standing until you land. Pay rent when you land on an owned brand.</p>
+            <section className="how-panel fuel">
+              <small>01 · Bank</small>
+              <h3>Cash</h3>
+              <p>Start with <b>${START_CASH}</b>. No move meter. Miss a payment and the bank takes you.</p>
+              <p>After <b>{HARD_STOP_ROUNDS} rounds</b>, most cash wins.</p>
+            </section>
+            <section className="how-panel note">
+              <small>02 · GO</small>
+              <h3>Walk and land</h3>
+              <p>Pass GO for <b>$200</b>. Stay on the tile you land on.</p>
+              <p>Pay rent when you land on an owned brand.</p>
+            </section>
           </>
         )}
-        <h3>The board</h3>
-        <p>Grey brands are free to buy. Once owned they wash in the owner’s color. Click a tile to see its whole set. Hover a player to see their deeds. Right-click someone else’s tile to peek their holdings.</p>
-        <h3>Stack rent</h3>
-        <p>Social, Music, Watch, and AI pay Cloud. Cloud, Ride, and Giants pay Chips. Own a full set and 1/{STACK_CUT} of that rent goes to the set below — unless they buy a $180 license in More.</p>
-        <h3>Trade</h3>
-        <p>Swap brands, cash, or a move from the center stall. It costs $20 unless you land on Market or you own the Watch set. The other player must accept.</p>
-        <h3>More</h3>
-        <p>Build or sell your brands, cash a one-time $300 bank note, buy a license, or open a trade. {moves ? "Last player with moves wins. Hard stop: most moves, then cash." : "Last player with cash wins. Hard stop: richest player."}</p>
+        <section className="how-panel deal">
+          <small>03 · Track</small>
+          <h3>The board</h3>
+          <p>Grey brands are free. Owned ones wash in the owner’s color.</p>
+          <p>Click a tile for the whole set. Hover a player for their deeds. Right-click someone else’s tile to peek.</p>
+        </section>
+        <section className="how-panel license">
+          <small>04 · Stack</small>
+          <h3>Rent flows down</h3>
+          <p>Social, Music, Watch, AI → <b>Cloud</b>.</p>
+          <p>Cloud, Ride, Giants → <b>Chips</b>.</p>
+          <p>Full set: <b>1/{STACK_CUT}</b> of rent goes to the set below unless they buy a <b>$180 license</b> in More.</p>
+        </section>
+        <section className="how-panel log">
+          <small>05 · Market</small>
+          <h3>Trades</h3>
+          <p>Swap brands, cash, or a move in the center stall.</p>
+          <p>Fee is <b>$20</b> unless you land on Market or own the Watch set. They must accept.</p>
+        </section>
+        <section className="how-panel win">
+          <small>06 · Stall</small>
+          <h3>More & winner</h3>
+          <p>Build or sell brands. Cash a one-time <b>$300</b> bank note. License a stack. Open a trade.</p>
+          <p>{moves ? "Last player with moves wins. Hard stop: most moves, then cash." : "Last player with cash wins. Hard stop: richest player."}</p>
+        </section>
       </div>
       <button type="button" className="stall-act fuel how-ok" onClick={onClose}>
         <b>Got it</b>

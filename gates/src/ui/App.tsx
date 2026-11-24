@@ -52,6 +52,7 @@ export function App() {
   const [leaveWarn, setLeaveWarn] = useState(false);
   const [brokeShake, setBrokeShake] = useState(0);
   const [menuMuffle, setMenuMuffle] = useState(false);
+  const [playHover, setPlayHover] = useState(false);
   const [mix, setMix] = useState(() => getMix());
   const diveWait = useRef<number[]>([]);
   const [pickedMode, setPickedMode] = useState<Mode>("moves");
@@ -293,8 +294,12 @@ export function App() {
   }, [pregame]);
 
   useEffect(() => {
-    muffleMusic(dive !== "idle" || screen === "lobby" || menuMuffle || (!pregame && peeking));
-  }, [pregame, peeking, dive, menuMuffle, screen]);
+    if (pregame) setPlayHover(false);
+  }, [pregame]);
+
+  useEffect(() => {
+    muffleMusic(dive !== "idle" || screen === "lobby" || menuMuffle || (!pregame && (peeking || playHover)));
+  }, [pregame, peeking, playHover, dive, menuMuffle, screen]);
 
   useEffect(() => {
     if (!seatHover) return;
@@ -303,7 +308,17 @@ export function App() {
 
   return (
     <LookCtx.Provider value={look}>
-    <div className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""}`}>
+    <div
+      className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""}`}
+      onPointerOver={(e) => {
+        if (pregame) return;
+        if (playMuffleHit(e.target)) setPlayHover(true);
+      }}
+      onPointerOut={(e) => {
+        if (pregame) return;
+        if (!playMuffleHit(e.relatedTarget)) setPlayHover(false);
+      }}
+    >
       <header className="top">
         <div className="brand">DreamPoly</div>
         <div className="top-tools">
@@ -1178,6 +1193,13 @@ function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
         <span>Back to the board</span>
       </button>
     </>
+  );
+}
+
+function playMuffleHit(node: EventTarget | null) {
+  if (!(node instanceof Element)) return false;
+  return !!node.closest(
+    "button, .seat, .sheet, .holdings, .group-card, .float-card, .mix-desk, .broke-sign, .trade-desk, .pay-chip, .chance",
   );
 }
 

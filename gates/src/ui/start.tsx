@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { MAX_PLAYERS, MIN_PLAYERS } from "../engine/data";
 import { COLORS, type Mode } from "../engine/game";
 import { PixelDie, PixelPawn } from "./marks";
-import { muffleMusic, sfx, sfxHover } from "./sfx";
+import { sfx, sfxHover } from "./sfx";
 
 const PIECE_KEY = "gates-piece-color";
 const BILLS = [20, 50, 100, 200, 500, 10, 50, 100, 20, 200, 50, 100];
@@ -42,7 +42,6 @@ export function StartMenu({
   function pick(mode: Mode) {
     if (leaving) return;
     sfx("enter");
-    muffleMusic(true);
     setLeaving(mode);
     window.setTimeout(() => onPick(mode), 340);
   }

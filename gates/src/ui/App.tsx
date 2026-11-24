@@ -21,7 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
-import { armAudio, muffleMusic, musicEnabled, setSoundtrack, sfx, sfxEnabled, toggleMusic, toggleSfx } from "./sfx";
+import { armAudio, getMix, muffleMusic, setMusicLevel, setSoundtrack, setSfxLevel, sfx, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -50,8 +50,7 @@ export function App() {
   const [dive, setDive] = useState<"idle" | "cover" | "open">("idle");
   const [helpOpen, setHelpOpen] = useState(false);
   const [leaveWarn, setLeaveWarn] = useState(false);
-  const [musicOn, setMusicOn] = useState(() => musicEnabled());
-  const [sfxOn, setSfxOn] = useState(() => sfxEnabled());
+  const [mix, setMix] = useState(() => getMix());
   const diveWait = useRef<number[]>([]);
   const [pickedMode, setPickedMode] = useState<Mode>("moves");
   const [joined, setJoined] = useState<SeatPerson[]>([]);
@@ -293,11 +292,9 @@ export function App() {
 
   useEffect(() => {
     setSoundtrack(pregame ? "menu" : "play");
-  }, [pregame]);
-
-  useEffect(() => {
-    muffleMusic(muffled || dive !== "idle");
-  }, [muffled, dive]);
+    if (pregame && dive === "idle") muffleMusic(false);
+    else muffleMusic(muffled || dive !== "idle");
+  }, [pregame, muffled, dive]);
 
   return (
     <LookCtx.Provider value={look}>
@@ -305,27 +302,7 @@ export function App() {
       <header className="top">
         <div className="brand">DreamPoly</div>
         <div className="top-tools">
-          <button
-            className={`ghost tiny mute-btn ${musicOn ? "on" : "off"}`}
-            title={musicOn ? "Mute music" : "Unmute music"}
-            onClick={() => {
-              armAudio();
-              setMusicOn(toggleMusic());
-            }}
-          >
-            {musicOn ? "Music" : "Music off"}
-          </button>
-          <button
-            className={`ghost tiny mute-btn ${sfxOn ? "on" : "off"}`}
-            title={sfxOn ? "Mute sounds" : "Unmute sounds"}
-            onClick={() => {
-              const next = toggleSfx();
-              setSfxOn(next);
-              if (next) sfx("click");
-            }}
-          >
-            {sfxOn ? "SFX" : "SFX off"}
-          </button>
+          <AudioMix mix={mix} onMix={setMix} />
           <button className="ghost tiny" onClick={() => { sfx("click"); setLook((cur) => (cur === "pawn" ? "icon" : "pawn")); }}>
             {look === "pawn" ? "Characters" : "Discord icons"}
           </button>
@@ -693,6 +670,114 @@ export function App() {
   );
 }
 
+
+function AudioMix({
+  mix,
+  onMix,
+}: {
+  mix: ReturnType<typeof getMix>;
+  onMix: (next: ReturnType<typeof getMix>) => void;
+}) {
+  return (
+    <div className="mix" onPointerDown={() => armAudio()}>
+      <div className="mix-row">
+        <button
+          type="button"
+          className={`mix-icon ${mix.musicOn ? "on" : "off"}`}
+          title={mix.musicOn ? "Mute music" : "Unmute music"}
+          onClick={() => {
+            armAudio();
+            toggleMusic();
+            onMix(getMix());
+          }}
+        >
+          {mix.musicOn ? <NoteIcon /> : <NoteOffIcon />}
+        </button>
+        <input
+          className="mix-slide"
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(mix.musicLevel * 100)}
+          aria-label="Music volume"
+          onChange={(e) => {
+            armAudio();
+            setMusicLevel(Number(e.target.value) / 100);
+            onMix(getMix());
+          }}
+        />
+      </div>
+      <div className="mix-row">
+        <button
+          type="button"
+          className={`mix-icon ${mix.sfxOn ? "on" : "off"}`}
+          title={mix.sfxOn ? "Mute sounds" : "Unmute sounds"}
+          onClick={() => {
+            const next = toggleSfx();
+            onMix(getMix());
+            if (next) sfx("click");
+          }}
+        >
+          {mix.sfxOn ? <WaveIcon /> : <WaveOffIcon />}
+        </button>
+        <input
+          className="mix-slide"
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(mix.sfxLevel * 100)}
+          aria-label="Sound volume"
+          onChange={(e) => {
+            setSfxLevel(Number(e.target.value) / 100);
+            onMix(getMix());
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function NoteIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+      <rect x="4" y="10" width="5" height="4" fill="currentColor" />
+      <rect x="8" y="3" width="2" height="9" fill="currentColor" />
+      <rect x="10" y="3" width="4" height="2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function NoteOffIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+      <rect x="4" y="10" width="5" height="4" fill="currentColor" />
+      <rect x="8" y="3" width="2" height="9" fill="currentColor" />
+      <rect x="2" y="7" width="12" height="2" fill="#e11d48" />
+    </svg>
+  );
+}
+
+function WaveIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+      <rect x="2" y="6" width="2" height="4" fill="currentColor" />
+      <rect x="5" y="3" width="2" height="10" fill="currentColor" />
+      <rect x="8" y="5" width="2" height="6" fill="currentColor" />
+      <rect x="11" y="2" width="2" height="12" fill="currentColor" />
+    </svg>
+  );
+}
+
+function WaveOffIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+      <rect x="2" y="6" width="2" height="4" fill="currentColor" />
+      <rect x="5" y="3" width="2" height="10" fill="currentColor" />
+      <rect x="8" y="5" width="2" height="6" fill="currentColor" />
+      <rect x="2" y="7" width="12" height="2" fill="#e11d48" />
+    </svg>
+  );
+}
 
 function MoreStall({
   state,

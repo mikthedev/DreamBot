@@ -47,8 +47,60 @@ body {
   padding: 6px 4px;
 }
 .top-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-.mute-btn.on { color: #fff4cc; border-color: #c9b48a; }
-.mute-btn.off { color: var(--faint); opacity: 0.85; }
+.mix { display: flex; gap: 10px; align-items: center; }
+.mix-row { display: flex; align-items: center; gap: 6px; }
+.mix-icon {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: #1c1822;
+  color: #fff4cc;
+  border: 2px solid #c9b48a;
+  box-shadow: 2px 2px 0 #0a080c;
+}
+.mix-icon.off { color: var(--faint); border-color: #3a3344; }
+.mix-icon:hover:not(:disabled) {
+  background: #2a2418;
+  color: #fff4cc;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 #0a080c;
+}
+.mix-slide {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 72px;
+  height: 10px;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, #3a3344 0 6px, #1c1822 6px 8px);
+  border: 2px solid #c9b48a;
+  box-shadow: 2px 2px 0 #0a080c;
+  cursor: pointer;
+}
+.mix-slide::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 16px;
+  background: #e6c35a;
+  border: 2px solid #1a1208;
+  box-shadow: 1px 1px 0 #0a080c;
+}
+.mix-slide::-moz-range-thumb {
+  width: 12px;
+  height: 16px;
+  background: #e6c35a;
+  border: 2px solid #1a1208;
+  border-radius: 0;
+}
+.mix-slide::-moz-range-track {
+  height: 6px;
+  background: transparent;
+  border: 0;
+}
 .brand {
   font-family: "Pixelify Sans", Outfit, sans-serif;
   font-weight: 700;

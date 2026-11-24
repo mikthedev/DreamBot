@@ -101,7 +101,7 @@ export function App() {
               className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""}`}
               style={{ "--player": p.color } as CSSProperties}
             >
-              <Face name={p.name} avatar={p.avatar} color={p.color} />
+              <TokenFace name={p.name} avatar={p.avatar} color={p.color} size={22} />
               <b>{p.name}</b>
               <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
             </div>
@@ -114,29 +114,22 @@ export function App() {
 
       <div className="stage">
         <div className="board" aria-label="DreamPoly board">
-          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""}`}>
+          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${!mine && !walking ? "idle" : ""}`}>
             <div className="table-core">
               {card ? (
+                <article className="chance" key={card}>
+                  <span>Casino</span>
+                  <b>{CARD_LABEL[card]}</b>
+                </article>
+              ) : mine || walking || rolling ? (
                 <>
-                  <article className="chance" key={card}>
-                    <span>Casino</span>
-                    <b>{CARD_LABEL[card]}</b>
-                  </article>
-                  <div className="center-actions">
-                    {primary.map((b) => (
-                      <button
-                        key={b.label}
-                        className={b.ghost ? "ghost" : "go"}
-                        disabled={(!mine && b.needsYou) || !!diceSpin || walking}
-                        onClick={() => act(b.action)}
-                      >
-                        {b.label}
-                      </button>
-                    ))}
+                  <div className="dash">
+                    <TokenFace name={me.name} avatar={me.avatar} color={me.color} size={36} />
+                    <div className="stats">
+                      <b>${me.cash}</b>
+                      <span>{me.moves} moves</span>
+                    </div>
                   </div>
-                </>
-              ) : (
-                <>
                   <div className="dice-row" key={rolling ? "spin" : state.rollTick}>
                     <span className={`die ${rolling ? "spinning" : ""}`} aria-hidden>
                       <DieFace n={centerDie?.[0] ?? 6} />
@@ -149,29 +142,28 @@ export function App() {
                     <div className="pay-chip">Paid ${state.lastPay.amount}</div>
                   ) : null}
                   <p className="center-prompt">
-                    {walking
-                      ? "Moving…"
-                      : state.phase === "over"
-                        ? `Winner: ${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.name).join(", ") || "—"}`
-                        : mine
-                          ? describePhase(state)
-                          : `${who?.name || "Someone"} is playing`}
+                    {walking ? "Moving…" : describePhase(state)}
                   </p>
-                  <div className="center-actions">
-                    {primary.map((b) => (
-                      <button
-                        key={b.label}
-                        className={b.ghost ? "ghost" : b.warn ? "warn" : "go"}
-                        disabled={(!mine && b.needsYou) || !!diceSpin || walking}
-                        onClick={() => (b.roll ? rollThen(b.action) : act(b.action))}
-                      >
-                        {b.label}
-                      </button>
-                    ))}
-                    <button className="ghost" onClick={() => setSheet("more")}>More</button>
-                  </div>
                 </>
+              ) : (
+                <div className="idle-mark">
+                  <div className="logo">DreamPoly</div>
+                  <div className="logo-sub">{who ? `${who.name} is playing` : "Table open"}</div>
+                </div>
               )}
+              <div className="center-actions">
+                {primary.map((b) => (
+                  <button
+                    key={b.label}
+                    className={b.ghost ? "ghost" : b.warn ? "warn" : "go"}
+                    disabled={(!mine && b.needsYou) || !!diceSpin || walking}
+                    onClick={() => (b.roll ? rollThen(b.action) : act(b.action))}
+                  >
+                    {b.label}
+                  </button>
+                ))}
+                <button className="ghost" onClick={() => setSheet("more")}>More</button>
+              </div>
             </div>
           </div>
           {TRACK.map((space) => (
@@ -181,22 +173,11 @@ export function App() {
         </div>
       </div>
 
-      <footer className="foot">
-        {me.moves <= 4 && !me.out && state.mode === "moves" && (
-          <div className="banner">
-            Under 5 moves. At GO, take a move if you own a full set, or buy one from More. Next buy is ${fuelPrice(me)}.
-          </div>
-        )}
-        <div className="dock">
-          <div className="you">
-            <Face name={me.name} avatar={me.avatar} color={me.color} big />
-            <div className="stats">
-              <b>${me.cash}</b>
-              <span>{me.moves} moves {me.moves <= 4 && !me.out ? "· running thin" : ""}</span>
-            </div>
-          </div>
+      {me.moves <= 4 && !me.out && state.mode === "moves" && (
+        <div className="banner">
+          Under 5 moves. At GO, take a move if you own a full set, or buy one from More. Next buy is ${fuelPrice(me)}.
         </div>
-      </footer>
+      )}
 
       {sheet && (
         <div className="sheet" onClick={() => setSheet(null)}>
@@ -566,12 +547,11 @@ function Pawns({
           style={{
             left: `${(box.x + box.w * (base.cx + ox)) * 100}%`,
             top: `${(box.y + box.h * (base.cy + oy)) * 100}%`,
-            background: p.avatar ? undefined : p.color,
             zIndex: p.id === here?.id ? 2 : 1,
             transitionDuration: `${STEP_MS}ms`,
           }}
         >
-          {p.avatar ? <img src={p.avatar} alt="" /> : p.name.slice(0, 1)}
+          <TokenFace name={p.name} avatar={p.avatar} color={p.color} size={18} />
         </span>,
       );
     });
@@ -606,11 +586,25 @@ function slotOffset(index: number, count: number): [number, number] {
   return [Math.cos(angle) * radius, Math.sin(angle) * radius];
 }
 
-function Face({ name, avatar, color, big }: { name: string; avatar: string | null; color: string; big?: boolean }) {
-  if (avatar) return <img className={`avatar ${big ? "big" : ""}`} src={avatar} alt="" />;
+function TokenFace({ name, avatar, color, size }: { name: string; avatar: string | null; color: string; size: number }) {
   return (
-    <div className={`avatar ph ${big ? "big" : ""}`} style={{ background: color }}>
-      {name.slice(0, 1)}
-    </div>
+    <span className="token" style={{ width: size, height: size * 1.28, "--player": color } as CSSProperties} title={name}>
+      <svg viewBox="0 0 32 40" aria-hidden>
+        <ellipse cx="16" cy="36" rx="9" ry="2.4" fill="rgba(0,0,0,.28)" />
+        <path d="M8 34c0-4 3.2-6.2 8-6.2s8 2.2 8 6.2v1.2H8V34z" fill="currentColor" />
+        <path d="M11.2 21.4c-1.4 2.6-.6 6.2 4.8 6.4 5.4-.2 6.2-3.8 4.8-6.4-.8-1.6-3-2.4-4.8-2.4s-4 .8-4.8 2.4z" fill="currentColor" />
+        <circle cx="16" cy="12.4" r="7.2" fill="currentColor" />
+        <circle cx="16" cy="11.6" r="5.4" fill="#fff7ec" />
+        {avatar ? (
+          <foreignObject x="10.6" y="6.2" width="10.8" height="10.8">
+            <img src={avatar} alt="" style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />
+          </foreignObject>
+        ) : (
+          <text x="16" y="14.2" textAnchor="middle" fontSize="7.2" fontWeight="800" fill="#1a1510">
+            {name.slice(0, 1)}
+          </text>
+        )}
+      </svg>
+    </span>
   );
 }

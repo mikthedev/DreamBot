@@ -36,7 +36,7 @@ body {
   max-width: 1180px;
   margin: 0 auto;
   padding: 12px 16px 14px;
-  gap: 12px;
+  gap: 10px;
 }
 
 /* —— Chrome —— */
@@ -81,18 +81,7 @@ body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--player, var(--accent)) 45%, transparent);
 }
 .seat.out { opacity: 0.35; }
-.avatar, .avatar.ph {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  object-fit: cover;
-  display: grid;
-  place-items: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--ink);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, .25);
-}
+.seat .token { flex: none; }
 .seat b { font-size: 12px; font-weight: 600; }
 .seat span { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 
@@ -133,11 +122,41 @@ body {
   z-index: 8;
 }
 .table-core {
-  width: min(88%, 360px);
+  width: min(90%, 340px);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
+}
+.dash {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: color-mix(in srgb, #fff 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  border-radius: 999px;
+  padding: 6px 14px 6px 8px;
+  box-shadow: 0 8px 20px rgba(26, 21, 16, .12);
+}
+.dash .stats { text-align: left; }
+.dash .stats b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+.dash .stats span { color: color-mix(in srgb, var(--ink) 55%, #666); font-size: 11px; }
+.idle-mark { padding: 8px 0 2px; }
+.logo {
+  font-family: Georgia, "Iowan Old Style", Palatino, serif;
+  font-size: clamp(28px, 4.4vw, 48px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #8b2f28;
+  line-height: 1;
+}
+.logo-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--felt-deep) 80%, var(--ink));
 }
 .dice-row { display: flex; gap: 10px; justify-content: center; }
 .center-prompt {
@@ -305,38 +324,26 @@ body {
 .tile.left .owner-mark { right: 3px; top: 3px; }
 .tile.right .owner-mark { left: 3px; top: 3px; }
 
-.mark {
-  --mark: #888;
-  width: clamp(34px, 62cqmin, 52px);
-  height: clamp(34px, 62cqmin, 52px);
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  flex: none;
-  background:
-    radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--mark) 22%, #fff) 0%, #fff 58%);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--mark) 28%, transparent),
-    0 4px 10px rgba(26, 21, 16, .12);
-}
-.mark.on-dark {
-  background: radial-gradient(circle at 40% 30%, #2a2a2a, #111);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12), 0 4px 10px rgba(0, 0, 0, .28);
-}
 .brand-logo {
-  width: 62%;
-  height: 62%;
+  width: clamp(30px, 64cqmin, 52px);
+  height: clamp(30px, 64cqmin, 52px);
   display: block;
   object-fit: contain;
+  flex: none;
+  filter: drop-shadow(0 2px 2px rgba(26, 21, 16, .12));
 }
 .brand-logo.img.invert {
-  background: transparent;
-  border-radius: 0;
-  padding: 0;
-  filter: none;
+  background: #111;
+  border-radius: 6px;
+  padding: 3px;
+  box-sizing: border-box;
 }
 .brand-fallback {
-  font-size: 14px;
+  width: clamp(30px, 64cqmin, 52px);
+  height: clamp(30px, 64cqmin, 52px);
+  display: grid;
+  place-items: center;
+  font-size: 16px;
   font-weight: 800;
   color: var(--ink);
 }
@@ -445,42 +452,23 @@ body {
 }
 .pawn {
   position: absolute;
-  width: clamp(12px, 2.4%, 20px);
-  height: clamp(12px, 2.4%, 20px);
-  border-radius: 50%;
-  border: 2px solid #fff;
-  outline: 1px solid var(--ink);
-  transform: translate(-50%, -50%);
+  width: clamp(18px, 3.4%, 28px);
+  height: clamp(23px, 4.3%, 36px);
+  transform: translate(-50%, -72%);
   display: grid;
   place-items: center;
-  font-size: 8px;
-  font-weight: 800;
-  color: var(--ink);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
   transition: left 0.26s linear, top 0.26s linear;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .35));
 }
-.pawn.walking { filter: brightness(1.08); }
-.pawn.acting { outline: 2px solid var(--accent); }
-.pawn img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
-
-/* —— Dock —— */
-.foot { display: flex; flex-direction: column; gap: 8px; }
-.dock {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 10px 14px;
-  backdrop-filter: blur(10px);
-}
-.you { display: flex; gap: 10px; align-items: center; flex: none; }
-.you .avatar, .you .avatar.ph { width: 40px; height: 40px; font-size: 15px; }
-.stats b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
-.stats span { color: var(--muted); font-size: 12px; }
-.prompt { color: var(--muted); font-size: 13px; flex: 1; min-width: 0; line-height: 1.35; }
-.actions { display: flex; gap: 8px; justify-content: flex-end; flex: none; flex-wrap: wrap; }
+.pawn.walking { filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .4)) brightness(1.06); }
+.pawn.acting { filter: drop-shadow(0 0 4px var(--accent)) drop-shadow(0 2px 2px rgba(0, 0, 0, .35)); }
+.pawn .token { width: 100%; height: 100%; }
+.token { display: grid; color: var(--player); }
+.token svg { width: 100%; height: 100%; display: block; }
 
 button {
   border: 0;
@@ -531,7 +519,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 .sheet h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
 .sheet p, .log li { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
-.row.company .mark { width: 28px; height: 28px; border-radius: 8px; }
+.row.company .brand-logo,
+.row.company .brand-fallback { width: 22px; height: 22px; }
 .row.company span { flex: 1; min-width: 120px; }
 input {
   width: 100%;
@@ -571,6 +560,7 @@ input {
   to { transform: none; opacity: 1; }
 }
 
+.banner { margin: 0 auto; max-width: 720px; width: 100%; }
 @media (max-width: 760px) {
   .center-actions { width: 100%; }
   .center-actions button { flex: 1; min-width: 0; }

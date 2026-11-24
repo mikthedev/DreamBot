@@ -60,8 +60,10 @@ let playGen = 0;
 let muffled = false;
 let musicOn = localStorage.getItem(MUSIC_MUTE_KEY) !== "off";
 let sfxOn = localStorage.getItem(SFX_MUTE_KEY) !== "off";
-let musicLevel = readLevel(MUSIC_VOL_KEY, 0.4);
-let sfxLevel = readLevel(SFX_VOL_KEY, 0.8);
+const DEFAULT_MUSIC = 0.4;
+const DEFAULT_SFX = 0.8;
+let musicLevel = readLevel(MUSIC_VOL_KEY, DEFAULT_MUSIC);
+let sfxLevel = readLevel(SFX_VOL_KEY, DEFAULT_SFX);
 let armed = false;
 
 function readLevel(key: string, fallback: number) {
@@ -124,6 +126,20 @@ export function setMusicLevel(n: number) {
   }
   applyMusicGain();
   return musicLevel;
+}
+
+export function resetMix() {
+  musicOn = true;
+  sfxOn = true;
+  musicLevel = DEFAULT_MUSIC;
+  sfxLevel = DEFAULT_SFX;
+  localStorage.setItem(MUSIC_MUTE_KEY, "on");
+  localStorage.setItem(SFX_MUTE_KEY, "on");
+  localStorage.setItem(MUSIC_VOL_KEY, String(DEFAULT_MUSIC));
+  localStorage.setItem(SFX_VOL_KEY, String(DEFAULT_SFX));
+  applyMusicGain();
+  void startTrack(track ?? "menu");
+  return getMix();
 }
 
 export function setSfxLevel(n: number) {

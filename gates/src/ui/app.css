@@ -153,6 +153,25 @@ body {
   background: transparent;
   border: 0;
 }
+.mix-reset {
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: #121016;
+  color: #fff4cc;
+  border: 2px dashed #6a6058;
+  box-shadow: 2px 2px 0 #0a080c;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 14px;
+}
+.mix-reset:hover:not(:disabled) {
+  background: #1c1822;
+  color: #fff4cc;
+  border-style: solid;
+  border-color: #f3eadf;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 #0a080c;
+}
 .brand {
   font-family: "Pixelify Sans", Outfit, sans-serif;
   font-weight: 700;

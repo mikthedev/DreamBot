@@ -21,7 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
-import { armAudio, getMix, muffleMusic, setMusicLevel, setSoundtrack, setSfxLevel, sfx, toggleMusic, toggleSfx } from "./sfx";
+import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -755,6 +755,17 @@ function AudioMix({
                 }}
               />
             </div>
+            <button
+              type="button"
+              className="mix-reset"
+              onClick={() => {
+                armAudio();
+                onMix(resetMix());
+                sfx("click");
+              }}
+            >
+              Default
+            </button>
           </div>
         </>
       ) : null}

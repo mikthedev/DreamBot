@@ -245,13 +245,20 @@ body {
   border: 3px solid #2a2430;
   box-shadow: 4px 4px 0 #0a080c;
 }
+.center.trading { place-items: stretch; padding: 10px; }
 .table-core.is-market {
-  width: min(96%, 520px);
-  max-height: 100%;
-  overflow: auto;
-  gap: 8px;
-  padding: 10px 12px 12px;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  overflow: hidden;
+  gap: 0;
+  padding: 0;
   text-align: left;
+  align-items: stretch;
+  background:
+    linear-gradient(180deg, rgba(48, 32, 16, .92), rgba(16, 12, 14, .94));
+  border: 3px solid #5a3a18;
+  box-shadow: inset 0 0 0 2px #f59e0b22, 4px 4px 0 #0a080c;
 }
 .dash {
   display: flex;
@@ -823,98 +830,245 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .trade-desk {
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 0;
+  animation: trade-in 0.22s ease;
 }
-.trade-desk button { min-width: 0; padding: 6px 10px; }
-.trade-desk header {
+.trade-desk button { min-width: 0; }
+.trade-banner {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+  padding: 10px 14px 12px;
+  background:
+    repeating-linear-gradient(90deg, #b45309 0 14px, #f59e0b 14px 28px);
+  color: #1a1208;
+  box-shadow: inset 0 -4px 0 #7c2d12;
 }
-.trade-desk header b {
+.trade-banner b {
   font-family: "Pixelify Sans", Outfit, sans-serif;
-  font-size: 22px;
+  font-size: clamp(22px, 3.4vw, 32px);
   line-height: 1;
+  text-shadow: 2px 2px 0 #fde68a;
 }
-.trade-desk header span,
-.deal-ok {
+.trade-banner em {
+  font-style: normal;
   font-size: 11px;
-  color: var(--muted);
-  margin: 0;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: #1a1208;
+  color: #fbbf24;
+  padding: 4px 8px;
 }
+.trade-banner em.free { color: #86efac; }
 .trade-people {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+  padding: 10px 12px 0;
+  overflow: auto;
 }
-.trade-people button {
-  min-width: 0;
-  padding: 4px 8px 4px 4px;
-  gap: 6px;
+.trade-seat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1a1410;
+  color: var(--text);
+  border: 2px solid #3a2a20;
+  padding: 4px 10px 4px 4px;
 }
-.deal-grid {
+.trade-seat small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.trade-seat.on {
+  border-color: var(--player);
+  box-shadow: 3px 3px 0 #0a080c, 0 0 0 1px var(--player);
+}
+.trade-floor {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin: 0;
-  width: 100%;
+  grid-template-columns: 1fr 44px 1fr;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px;
 }
-.deal-grid small {
+.trade-swap {
+  display: grid;
+  place-items: center;
+  align-self: center;
+}
+.trade-swap span {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: #f59e0b;
+  color: #1a1208;
+  font-size: 18px;
+  font-weight: 800;
+  box-shadow: 3px 3px 0 #0a080c;
+}
+.trade-crate {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #161018;
+  border: 2px solid color-mix(in srgb, var(--player) 45%, #3a2a20);
+  box-shadow: 3px 3px 0 #0a080c;
+}
+.trade-crate header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--player) 18%, #1c1410);
+  border-bottom: 2px solid #2a2018;
+}
+.trade-crate header small {
   display: block;
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--muted);
   font-weight: 700;
-  margin-bottom: 6px;
 }
-.cash-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
+.trade-crate header b { font-size: 14px; }
+.trade-crate header em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  color: #fde68a;
 }
-.cash-line input { width: 72px; padding: 6px 8px; }
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 6px 0;
-  font-size: 12px;
-}
-.deal-cos {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.trade-tenders {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 0;
+  align-items: center;
+}
+.cash-step {
+  display: flex;
+  align-items: center;
   gap: 4px;
-  max-height: 28vh;
-  overflow: auto;
+  background: #0e0c10;
+  border: 2px solid #3a2a20;
+  padding: 2px;
 }
-.deal-cos li { min-width: 0; }
-.deal-cos button {
-  min-width: 0;
-  width: auto;
-  padding: 4px 7px;
-  justify-content: flex-start;
-  gap: 6px;
+.cash-step button { padding: 4px 7px; font-size: 11px; }
+.cash-step strong {
+  min-width: 56px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  color: #fde68a;
+}
+.move-ticket {
+  background: #1a1024;
+  color: var(--muted);
+  border: 2px dashed #4a3a50;
+  padding: 6px 10px;
   font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-.deal-cos .brand-logo,
-.deal-cos .brand-fallback { width: 14px; height: 14px; }
+.move-ticket.on {
+  background: #3b1d6e;
+  color: #f3eadf;
+  border-style: solid;
+  border-color: #c4b5fd;
+}
+.stock-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+}
+.stock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px 8px;
+  background: #22181c;
+  color: var(--text);
+  border: 2px solid #3a2a20;
+}
+.stock .brand-logo,
+.stock .brand-fallback { width: 28px; height: 28px; }
+.stock span { font-size: 11px; font-weight: 700; line-height: 1.15; text-align: center; }
+.stock em { font-style: normal; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.stock:hover:not(:disabled) { transform: translate(-1px, -1px); }
+.stock.on {
+  background: #2a2210;
+  border-color: #f59e0b;
+  box-shadow: inset 0 0 0 1px #f59e0b88, 2px 2px 0 #0a080c;
+}
+.stock-empty, .trade-empty {
+  margin: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.trade-bar {
+  display: grid;
+  gap: 8px;
+  padding: 8px 12px 12px;
+  background: #120e10;
+  border-top: 2px solid #3a2a20;
+}
+.trade-slip {
+  display: grid;
+  grid-template-columns: 1fr 16px 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+.trade-slip i {
+  height: 2px;
+  background: #f59e0b;
+  box-shadow: 1px 1px 0 #0a080c;
+}
+.slip-bits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.slip-empty { font-size: 11px; color: var(--faint); }
+.slip-co, .slip-cash, .slip-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #1c1822;
+  border: 1px solid #3a3344;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.slip-co .brand-logo,
+.slip-co .brand-fallback { width: 12px; height: 12px; }
+.slip-cash { color: #fde68a; }
+.slip-move { color: #c4b5fd; }
+.deal-ok { font-size: 11px; color: var(--muted); margin: 0; }
 .deal-warn { color: #fb7185; margin: 0; font-size: 12px; }
 .trade-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: center;
+  justify-content: flex-end;
 }
+.trade-actions .go { min-width: 8.5rem; }
 .market-card .go { margin-top: 8px; width: 100%; }
+@keyframes trade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
 .sheet h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
 .sheet p, .log li { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
@@ -977,7 +1131,11 @@ input {
 @media (max-width: 760px) {
   .center-actions { width: 100%; }
   .center-actions button { flex: 1; min-width: 0; }
+  .trade-floor { grid-template-columns: 1fr; }
+  .trade-swap span { transform: rotate(90deg); }
+  .trade-slip { grid-template-columns: 1fr; }
+  .trade-slip i { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button { animation: none; transition: none; }
+  .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk { animation: none; transition: none; }
 }

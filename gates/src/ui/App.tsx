@@ -1141,93 +1141,163 @@ function TradeDesk({
   if (!other) {
     return (
       <div className="trade-desk">
-        <b>Market</b>
-        <p>Nobody else is at the table.</p>
-        <button className="ghost" onClick={onClose}>Close</button>
+        <div className="trade-banner">
+          <b>Market</b>
+        </div>
+        <p className="trade-empty">Nobody else is at the table.</p>
+        <button className="ghost" onClick={onClose}>Leave</button>
       </div>
     );
   }
 
   return (
     <div className="trade-desk">
-      <header>
+      <div className="trade-banner">
         <b>Market</b>
-        <span>{you.freeTrade ? "Free this turn" : `Desk $${fee}`}</span>
-      </header>
+        <em className={you.freeTrade ? "free" : ""}>{you.freeTrade ? "Free stall" : `Desk $${fee}`}</em>
+      </div>
       <div className="trade-people">
         {others.map((p) => (
-          <button key={p.id} className={p.id === to ? "" : "ghost"} onClick={() => { setTo(p.id); setGet([]); }}>
-            <Face name={p.name} avatar={p.avatar} color={p.color} size={22} />
-            {p.name}
+          <button
+            key={p.id}
+            className={`trade-seat ${p.id === to ? "on" : ""}`}
+            style={{ "--player": p.color } as CSSProperties}
+            onClick={() => {
+              setTo(p.id);
+              setGet([]);
+            }}
+          >
+            <Face name={p.name} avatar={p.avatar} color={p.color} size={28} />
+            <span>{p.name}</span>
+            <small>${p.cash}</small>
           </button>
         ))}
       </div>
-      <div className="deal-grid">
-        <div>
-          <small>You give</small>
-          <label className="cash-line">
-            $
-            <input
-              type="number"
-              min={0}
-              value={giveCash}
-              onChange={(e) => setGiveCash(Math.max(0, Number(e.target.value) || 0))}
-            />
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={giveMove} onChange={(e) => setGiveMove(e.target.checked)} />
-            1 move
-          </label>
-          <ul className="deal-cos">
-            {yours.map((c) => (
-              <li key={c.id}>
-                <button className={give.includes(c.id) ? "" : "ghost"} onClick={() => toggle(give, c.id, setGive)}>
-                  <BrandLogo id={c.id} label={c.name} />
-                  {shortName(c.name)}
-                </button>
-              </li>
-            ))}
-            {!yours.length && <li>Nothing owned</li>}
-          </ul>
+      <div className="trade-floor">
+        <TradeCrate
+          kicker="You put in"
+          player={you}
+          cash={giveCash}
+          onCash={setGiveCash}
+          move={giveMove}
+          onMove={setGiveMove}
+          companies={yours}
+          picked={give}
+          onToggle={(id) => toggle(give, id, setGive)}
+        />
+        <div className="trade-swap" aria-hidden>
+          <span>⇄</span>
         </div>
-        <div>
-          <small>From {other.name}</small>
-          <label className="cash-line">
-            $
-            <input
-              type="number"
-              min={0}
-              value={getCash}
-              onChange={(e) => setGetCash(Math.max(0, Number(e.target.value) || 0))}
-            />
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={getMove} onChange={(e) => setGetMove(e.target.checked)} />
-            1 move
-          </label>
-          <ul className="deal-cos">
-            {theirs.map((c) => (
-              <li key={c.id}>
-                <button className={get.includes(c.id) ? "" : "ghost"} onClick={() => toggle(get, c.id, setGet)}>
-                  <BrandLogo id={c.id} label={c.name} />
-                  {shortName(c.name)}
-                </button>
-              </li>
-            ))}
-            {!theirs.length && <li>Nothing owned</li>}
-          </ul>
-        </div>
+        <TradeCrate
+          kicker={`${other.name} puts in`}
+          player={other}
+          cash={getCash}
+          onCash={setGetCash}
+          move={getMove}
+          onMove={setGetMove}
+          companies={theirs}
+          picked={get}
+          onToggle={(id) => toggle(get, id, setGet)}
+        />
       </div>
-      <p className={problem ? "deal-warn" : "deal-ok"}>{problem || "Ready"}</p>
-      <div className="trade-actions">
-        <button disabled={!!problem} onClick={() => onDeal(action)}>
-          Make deal
-        </button>
-        <button className="ghost" onClick={onClose}>
-          Cancel
-        </button>
+      <div className="trade-bar">
+        <div className="trade-slip">
+          <DealBits ids={give} cash={giveCash} move={giveMove} empty="Nothing from you" />
+          <i />
+          <DealBits ids={get} cash={getCash} move={getMove} empty={`Nothing from ${other.name}`} />
+        </div>
+        <p className={problem ? "deal-warn" : "deal-ok"}>{problem || "Tap companies, cash, or a move — then seal it."}</p>
+        <div className="trade-actions">
+          <button className="go" disabled={!!problem} onClick={() => onDeal(action)}>
+            Seal deal
+          </button>
+          <button className="ghost" onClick={onClose}>
+            Leave stall
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+function TradeCrate({
+  kicker,
+  player,
+  cash,
+  onCash,
+  move,
+  onMove,
+  companies,
+  picked,
+  onToggle,
+}: {
+  kicker: string;
+  player: Player;
+  cash: number;
+  onCash: (n: number) => void;
+  move: boolean;
+  onMove: (v: boolean) => void;
+  companies: typeof COMPANIES;
+  picked: string[];
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <section className="trade-crate" style={{ "--player": player.color } as CSSProperties}>
+      <header>
+        <Face name={player.name} avatar={player.avatar} color={player.color} size={30} />
+        <div>
+          <small>{kicker}</small>
+          <b>{player.name}</b>
+        </div>
+        <em>${player.cash}</em>
+      </header>
+      <div className="trade-tenders">
+        <div className="cash-step">
+          <button type="button" className="ghost" onClick={() => onCash(Math.max(0, cash - 50))}>−50</button>
+          <button type="button" className="ghost" onClick={() => onCash(Math.max(0, cash - 10))}>−</button>
+          <strong>${cash}</strong>
+          <button type="button" className="ghost" onClick={() => onCash(cash + 10)}>+</button>
+          <button type="button" className="ghost" onClick={() => onCash(cash + 50)}>+50</button>
+        </div>
+        <button type="button" className={`move-ticket ${move ? "on" : ""}`} onClick={() => onMove(!move)}>
+          {move ? "1 move in" : "Add a move"}
+        </button>
+      </div>
+      <div className="stock-grid">
+        {companies.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`stock ${picked.includes(c.id) ? "on" : ""}`}
+            onClick={() => onToggle(c.id)}
+          >
+            <BrandLogo id={c.id} label={c.name} />
+            <span>{shortName(c.name)}</span>
+            <em>{setOf(c.set).label}</em>
+          </button>
+        ))}
+        {!companies.length && <p className="stock-empty">Empty crate</p>}
+      </div>
+    </section>
+  );
+}
+
+function DealBits({ ids, cash, move, empty }: { ids: string[]; cash: number; move: boolean; empty: string }) {
+  if (!ids.length && !cash && !move) return <span className="slip-empty">{empty}</span>;
+  return (
+    <span className="slip-bits">
+      {ids.map((id) => {
+        const c = COMPANIES.find((x) => x.id === id);
+        return c ? (
+          <span key={id} className="slip-co">
+            <BrandLogo id={c.id} label={c.name} />
+            {shortName(c.name)}
+          </span>
+        ) : null;
+      })}
+      {cash > 0 ? <span className="slip-cash">${cash}</span> : null}
+      {move ? <span className="slip-move">1m</span> : null}
+    </span>
   );
 }
 

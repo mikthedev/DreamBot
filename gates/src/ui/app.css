@@ -2050,7 +2050,7 @@ input {
 .sheet.is-stall article.how-card,
 .how-card {
   width: min(1100px, calc(100vw - 48px));
-  max-height: min(90vh, 820px);
+  max-height: min(92vh, 900px);
   overflow: auto;
   background:
     repeating-linear-gradient(0deg, #1a1520 0 28px, #1e1824 28px 56px);

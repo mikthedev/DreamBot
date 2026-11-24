@@ -699,56 +699,138 @@ function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
   return (
     <>
       <header className="how-head">
-        <p className="start-kicker">{moves ? "Main game" : "Classic table"}</p>
+        <p className="start-kicker">{moves ? "Main game · DreamPoly" : "Classic table"}</p>
         <h2>How to play</h2>
-        <p className="how-tag">Read the stall. Then take the board.</p>
+        <p className="how-tag">
+          {moves
+            ? "A board of brands, scarce cash, and a meter of moves. Last fortune with fuel standing wins."
+            : "A board of brands and scarce cash. Miss a payment and you are out. Richest at the stop wins."}
+        </p>
       </header>
       <div className="how-grid">
-        {moves ? (
-          <>
-            <section className="how-panel fuel">
-              <small>01 · Fuel</small>
-              <h3>Moves</h3>
-              <p>Start with <b>{START_MOVES} moves</b> and <b>${START_CASH}</b>. Each turn spends 1 move, then <b>$12</b> upkeep per brand or store you own.</p>
-              <p>Hit <b>0 moves</b> and you are out. Cap is {MOVE_CAP}.</p>
-            </section>
-            <section className="how-panel note">
-              <small>02 · Earn</small>
-              <h3>Get more moves</h3>
-              <p>Pass GO: <b>$200</b> and <b>+1 move</b>.</p>
-              <p>Collect or pay rent: <b>+1</b>. Rest in Jail: <b>+1</b>.</p>
-              <p>Buy one in More — $100, then $200, then $300.</p>
-            </section>
-          </>
-        ) : (
-          <>
-            <section className="how-panel fuel">
-              <small>01 · Bank</small>
-              <h3>Cash</h3>
-              <p>Start with <b>${START_CASH}</b>. No move meter. Miss a payment and the bank takes you.</p>
-              <p>After <b>{HARD_STOP_ROUNDS} rounds</b>, most cash wins.</p>
-            </section>
-            <section className="how-panel note">
-              <small>02 · GO</small>
-              <h3>Walk and land</h3>
-              <p>Pass GO for <b>$200</b>. Stay on the tile you land on.</p>
-              <p>Pay rent when you land on an owned brand.</p>
-            </section>
-          </>
-        )}
-        <section className="how-panel deal">
-          <small>03 · Track</small>
-          <h3>The board</h3>
-          <p>Grey brands are free. Owned ones wash in the owner’s color.</p>
-          <p>Click a tile for the whole set. Hover a player for their deeds. Right-click someone else’s tile to peek.</p>
+        <section className="how-panel win how-wide">
+          <small>01 · Goal</small>
+          <h3>How you win</h3>
+          {moves ? (
+            <>
+              <p>
+                Everyone starts with <b>{START_MOVES} moves</b> and <b>${START_CASH}</b>. You are out if you hit{" "}
+                <b>0 moves</b>. Last player still on the board wins.
+              </p>
+              <p>
+                After <b>{HARD_STOP_ROUNDS} rounds</b> the table hard-stops: most moves wins, cash breaks a tie.
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                Everyone starts with <b>${START_CASH}</b>. There is no move meter. If you cannot pay, the bank sells
+                your cheapest brands at half price, then takes you out.
+              </p>
+              <p>
+                Last player with cash wins. After <b>{HARD_STOP_ROUNDS} rounds</b>, richest player wins.
+              </p>
+            </>
+          )}
         </section>
+
+        <section className="how-panel deal how-wide">
+          <small>02 · Turn</small>
+          <h3>What a turn is</h3>
+          <p>On your turn you roll two dice and walk every tile along the track. You stay on the space you land on.</p>
+          <ul className="how-stack">
+            <li>
+              <b>Unowned brand (grey)</b> — buy it for the printed price, or leave it.
+            </li>
+            <li>
+              <b>Someone else’s brand</b> — pay the printed rent now. Color wash shows who owns it.
+            </li>
+            <li>
+              <b>Your brand</b> — nothing to pay. After you land you can still use More.
+            </li>
+            <li>
+              <b>GO</b> — collect <b>$200</b>
+              {moves ? " and +1 move if you pass it. On GO itself you may take $200 or +1 move (if you own a full set)." : "."}
+            </li>
+            <li>
+              <b>Market</b> — this turn’s trade is free.
+            </li>
+            <li>
+              <b>Casino</b> — draw a card. Follow it, then continue.
+            </li>
+            <li>
+              <b>Jail</b> — you are only visiting.
+              {moves ? " Resting here grants +1 move." : ""}
+            </li>
+            <li>
+              <b>App Store, Play Store, Steam, Epic</b> — buy that stall for <b>$150</b>, or skip.
+            </li>
+          </ul>
+          <p>Then you get extras (build, fuel, trade) and hit <b>End turn</b>.</p>
+        </section>
+
+        {moves ? (
+          <section className="how-panel fuel how-wide">
+            <small>03 · Fuel</small>
+            <h3>Moves and money</h3>
+            <p>
+              Each turn spends <b>1 move</b> first, then <b>$12 upkeep</b> for every brand and store you own. Cash is
+              tight on purpose. Cap is <b>{MOVE_CAP}</b> moves.
+            </p>
+            <ul className="how-stack">
+              <li>
+                Pass GO: <b>$200</b> and <b>+1 move</b>
+              </li>
+              <li>
+                Collect rent: the owner gets a spark. Four sparks = <b>+1 move</b>
+              </li>
+              <li>
+                Rest in Jail: <b>+1 move</b>
+              </li>
+              <li>
+                Buy a move in More: <b>$100</b>, then $200, then $300. Once per turn.
+              </li>
+            </ul>
+            <p>Run out of moves and you drop every brand. The table keeps going without you.</p>
+          </section>
+        ) : (
+          <section className="how-panel fuel how-wide">
+            <small>03 · Bank</small>
+            <h3>Cash only</h3>
+            <p>
+              Turns do not spend moves and there is no upkeep. Pass GO for <b>$200</b>. Pay rent when you land on an
+              owned brand. If you cannot pay, brands sell at half until you cover it — or you go bankrupt.
+            </p>
+          </section>
+        )}
+
+        <section className="how-panel note">
+          <small>04 · Brands</small>
+          <h3>Buy, rent, build</h3>
+          <p>Grey tiles are unowned. Buy them when you land. Owned tiles wash in the owner’s color.</p>
+          <p>
+            Rent is the printed number. Own all three in a set to <b>build</b> (More). Each brand has two build steps.
+            Social set makes building <b>$20</b> cheaper. Sell in More for half the buy price — that also breaks the set.
+          </p>
+        </section>
+
+        <section className="how-panel log">
+          <small>05 · Stores</small>
+          <h3>The four stalls</h3>
+          <p>
+            App Store, Play Store, Steam, and Epic cost <b>$150</b> when you land. They are not brands and they do not
+            stack, but they still cost <b>$12</b> upkeep in the main game.
+          </p>
+          <p>Click a store tile to see the whole store row.</p>
+        </section>
+
         <section className="how-panel license how-wide">
-          <small>04 · Dependencies</small>
+          <small>06 · Dependencies</small>
           <h3>Company stacks</h3>
           <p>
             Brands live in sets of three. Some sets <b>depend</b> on another set. Own a full set and
-            <b> 1/{STACK_CUT}</b> of that rent is paid to whoever owns the set below — not to you —
-            unless they buy a <b>$180 license</b> in More.
+            <b> 1/{STACK_CUT}</b> of that rent is paid to whoever owns the set below — not to you — unless they buy a{" "}
+            <b>$180 license</b> in More.
           </p>
           <ul className="how-stack">
             <li>
@@ -762,21 +844,55 @@ function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
             </li>
           </ul>
           <p>
-            Example: you own all of Social. Someone else owns Cloud. They take 1/{STACK_CUT} of Social
-            rent until Cloud licenses you. If nobody owns the lower set, you keep the full rent.
+            Example: you own all of Social. Someone else owns Cloud. They take 1/{STACK_CUT} of Social rent until Cloud
+            licenses you. If nobody owns the lower set, you keep the full rent.
           </p>
         </section>
-        <section className="how-panel log">
-          <small>05 · Market</small>
+
+        <section className="how-panel deal">
+          <small>07 · Market</small>
           <h3>Trades</h3>
-          <p>Swap brands, cash, or a move in the center stall.</p>
-          <p>Fee is <b>$20</b> unless you land on Market or own the Watch set. They must accept.</p>
+          <p>
+            After you land, open a trade from the center or from More. Offer brands, cash, or a move. The other player
+            must <b>accept</b> or <b>decline</b>. Only you two see the stall.
+          </p>
+          <p>
+            Fee is <b>$20</b> unless you landed on Market this turn, or you own the whole <b>Watch</b> set. You cannot
+            trade someone down to 0 moves.
+          </p>
         </section>
+
         <section className="how-panel win">
-          <small>06 · Stall</small>
-          <h3>More & winner</h3>
-          <p>Build or sell brands. Cash a one-time <b>$300</b> bank note. License a stack. Open a trade.</p>
-          <p>{moves ? "Last player with moves wins. Hard stop: most moves, then cash." : "Last player with cash wins. Hard stop: richest player."}</p>
+          <small>08 · Stall</small>
+          <h3>More</h3>
+          <p>
+            <b>Build</b> or <b>sell</b> your brands. Cash a one-time <b>$300 bank note</b> (you may owe it back later).
+            Buy a <b>$180 license</b> if a stack is biting you.
+            {moves ? " Buy a move from the pump." : ""} Open a trade.
+          </p>
+          <p>
+            <b>?</b> on the cash rail is this guide. <b>◀</b> at the bottom of the rail leaves the table — it will ask
+            first.
+          </p>
+        </section>
+
+        <section className="how-panel log how-wide">
+          <small>09 · Table</small>
+          <h3>How to read the board</h3>
+          <ul className="how-stack">
+            <li>
+              <b>Click a brand</b> — the whole set lights. Click again to clear.
+            </li>
+            <li>
+              <b>Hover a player</b> on the left — their deeds sit on the board, the rest blurs.
+            </li>
+            <li>
+              <b>Right-click</b> someone else’s tile — peek that owner’s holdings.
+            </li>
+            <li>
+              Cash rail shows everyone’s money. Your piece color is painted in the waiting room before Start.
+            </li>
+          </ul>
         </section>
       </div>
       <button type="button" className="stall-act fuel how-ok" onClick={onClose}>

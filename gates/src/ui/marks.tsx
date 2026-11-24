@@ -254,65 +254,43 @@ export function CornerArt({ id }: { id: string }) {
   );
 }
 
-const DICE_FACE: Record<number, string> = {
-  1: "rotateX(0deg) rotateY(0deg)",
-  2: "rotateX(0deg) rotateY(-90deg)",
-  3: "rotateX(-90deg) rotateY(0deg)",
-  4: "rotateX(90deg) rotateY(0deg)",
-  5: "rotateX(0deg) rotateY(90deg)",
-  6: "rotateX(0deg) rotateY(180deg)",
+const PIXEL_PIPS: Record<number, [number, number][]> = {
+  1: [[7, 7]],
+  2: [[3, 3], [11, 11]],
+  3: [[3, 3], [7, 7], [11, 11]],
+  4: [[3, 3], [11, 3], [3, 11], [11, 11]],
+  5: [[3, 3], [11, 3], [7, 7], [3, 11], [11, 11]],
+  6: [[3, 3], [11, 3], [3, 7], [11, 7], [3, 11], [11, 11]],
 };
 
-function Pips({ n }: { n: number }) {
-  const map: Record<number, string[]> = {
-    1: ["c"],
-    2: ["tl", "br"],
-    3: ["tl", "c", "br"],
-    4: ["tl", "tr", "bl", "br"],
-    5: ["tl", "tr", "c", "bl", "br"],
-    6: ["tl", "tr", "ml", "mr", "bl", "br"],
-  };
+export function PixelDie({ n, spinning }: { n: number; spinning?: boolean }) {
+  const face = Math.min(6, Math.max(1, Math.round(n)));
   return (
-    <span className="pips">
-      {map[n].map((p) => (
-        <i key={p} className={p} />
-      ))}
+    <span className={`pixel-die ${spinning ? "is-spin" : ""}`} aria-hidden>
+      <svg viewBox="0 0 16 16" shapeRendering="crispEdges">
+        <rect x="0" y="0" width="16" height="16" fill="#1a1024" />
+        <rect x="1" y="1" width="14" height="14" fill="#fff4e6" />
+        <rect x="1" y="1" width="14" height="2" fill="#fff" />
+        {PIXEL_PIPS[face].map(([x, y]) => (
+          <rect key={`${x}-${y}`} x={x} y={y} width="2" height="2" fill="#e11d48" />
+        ))}
+      </svg>
     </span>
   );
 }
 
-export function CubeDie({ n, spinning }: { n: number; spinning?: boolean }) {
-  const face = Math.min(6, Math.max(1, Math.round(n)));
+export function PixelPawn({ color }: { color: string }) {
   return (
-    <span className={`cube-wrap ${spinning ? "is-spin" : ""}`}>
-      <span className="cube" style={{ transform: spinning ? undefined : `${DICE_FACE[face]} rotateX(-16deg) rotateY(14deg)` }}>
-        <span className="f f1"><Pips n={1} /></span>
-        <span className="f f2"><Pips n={2} /></span>
-        <span className="f f3"><Pips n={3} /></span>
-        <span className="f f4"><Pips n={4} /></span>
-        <span className="f f5"><Pips n={5} /></span>
-        <span className="f f6"><Pips n={6} /></span>
-      </span>
-    </span>
-  );
-}
-
-export function DieFace({ n }: { n: number }) {
-  const face = Math.min(6, Math.max(1, Math.round(n)));
-  const pips: Record<number, [number, number][]> = {
-    1: [[12, 12]],
-    2: [[7.5, 7.5], [16.5, 16.5]],
-    3: [[7.2, 7.2], [12, 12], [16.8, 16.8]],
-    4: [[7.2, 7.2], [16.8, 7.2], [7.2, 16.8], [16.8, 16.8]],
-    5: [[7.2, 7.2], [16.8, 7.2], [12, 12], [7.2, 16.8], [16.8, 16.8]],
-    6: [[7.2, 7.2], [16.8, 7.2], [7.2, 12], [16.8, 12], [7.2, 16.8], [16.8, 16.8]],
-  };
-  return (
-    <svg viewBox="0 0 24 24" className="die-svg" aria-hidden>
-      <rect x="1.2" y="1.2" width="21.6" height="21.6" rx="4" fill="#fffaf2" stroke="#1b140c" strokeWidth="1.6" />
-      {pips[face].map(([cx, cy]) => (
-        <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="2" fill="#b42318" />
-      ))}
+    <svg className="pixel-pawn" viewBox="0 0 16 20" shapeRendering="crispEdges" aria-hidden>
+      <rect x="4" y="18" width="8" height="2" fill="rgba(0,0,0,.35)" />
+      <rect x="3" y="14" width="10" height="4" fill={color} />
+      <rect x="4" y="8" width="8" height="6" fill={color} />
+      <rect x="5" y="7" width="6" height="2" fill={color} />
+      <rect x="5" y="2" width="6" height="6" fill="#f3d2b3" />
+      <rect x="5" y="1" width="6" height="2" fill="#3a2a22" />
+      <rect x="6" y="4" width="1" height="1" fill="#1a1024" />
+      <rect x="9" y="4" width="1" height="1" fill="#1a1024" />
+      <rect x="4" y="15" width="2" height="2" fill="rgba(255,255,255,.35)" />
     </svg>
   );
 }

@@ -14,7 +14,7 @@ import {
 } from "../engine/game";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
-import { CornerArt, CubeDie } from "./marks";
+import { CornerArt, PixelDie, PixelPawn } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const ID_KEY = "gates-discord-id";
@@ -111,7 +111,7 @@ export function App() {
               className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""}`}
               style={{ "--player": p.color } as CSSProperties}
             >
-              <TokenFace name={p.name} avatar={p.avatar} color={p.color} size={22} />
+              <Face name={p.name} avatar={p.avatar} color={p.color} size={26} />
               <b>{p.name}</b>
               <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
             </div>
@@ -127,7 +127,7 @@ export function App() {
           <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${!mine && !walking ? "idle" : "live"}`}>
             <div className="table-core">
               <div className="dash">
-                <TokenFace name={me.name} avatar={me.avatar} color={me.color} size={34} />
+                <Face name={me.name} avatar={me.avatar} color={me.color} size={36} />
                 <div className="stats">
                   <b>${shownCash}</b>
                   <span>{shownMoves} moves</span>
@@ -141,8 +141,8 @@ export function App() {
               ) : mine || walking || rolling ? (
                 <>
                   <div className="dice-row" key={rolling ? "spin" : state.rollTick}>
-                    <CubeDie n={centerDie?.[0] ?? 6} spinning={rolling} />
-                    <CubeDie n={centerDie?.[1] ?? 5} spinning={rolling} />
+                    <PixelDie n={centerDie?.[0] ?? 6} spinning={rolling} />
+                    <PixelDie n={centerDie?.[1] ?? 5} spinning={rolling} />
                   </div>
                   {state.lastPay && mine && state.phase === "extra" && !walking && !held ? (
                     <div className="pay-chip" key={`${state.rollTick}-pay`}>−${state.lastPay.amount}</div>
@@ -329,8 +329,8 @@ type BoardPlayer = { id: string; name: string; avatar: string | null; color: str
 
 function OwnerMark({ owner }: { owner: BoardPlayer }) {
   return (
-    <span className="owner-mark" style={{ "--player": owner.color } as CSSProperties} title={owner.name}>
-      {owner.avatar ? <img src={owner.avatar} alt="" /> : owner.name.slice(0, 1)}
+    <span className="owner-mark" title={owner.name}>
+      <Face name={owner.name} avatar={owner.avatar} color={owner.color} size={16} />
     </span>
   );
 }
@@ -356,7 +356,7 @@ function Tile({ space, state, walk }: { space: (typeof TRACK)[number]; state: St
         price={owner ? `$${co.rent[own.level]}` : `$${co.price}`}
         owner={owner}
         level={own.level}
-        title={`${co.name} · ${owner ? `rent $${co.rent[own.level]} · ${owner.name}` : `$${co.price}`}`}
+        setLabel={set.label}
       />
     );
   }
@@ -391,7 +391,7 @@ function Tile({ space, state, walk }: { space: (typeof TRACK)[number]; state: St
       owner={owner}
       level={0}
       store
-      title={`${stand?.label ?? ""} · ${owner ? `${owner.name} · rent $${rent}` : "$150"}`}
+      setLabel="Store"
     />
   );
 }
@@ -406,7 +406,7 @@ function DeedTile({
   owner,
   level,
   store,
-  title,
+  setLabel,
 }: {
   space: (typeof TRACK)[number];
   hot: boolean;
@@ -417,7 +417,7 @@ function DeedTile({
   owner?: BoardPlayer;
   level: number;
   store?: boolean;
-  title: string;
+  setLabel: string;
 }) {
   return (
     <div
@@ -430,7 +430,6 @@ function DeedTile({
           "--player": owner?.color,
         } as CSSProperties
       }
-      title={title}
     >
       <i className="band" aria-hidden />
       {owner && <OwnerMark owner={owner} />}
@@ -444,10 +443,31 @@ function DeedTile({
       )}
       <div className="deed-body">
         <BrandLogo id={logoId} label={name} />
+        <strong className="deed-name">{shortName(name)}</strong>
         <em>{price}</em>
+      </div>
+      <div className="tip" role="tooltip">
+        <b>{name}</b>
+        <span>{setLabel}</span>
+        <span>{owner ? `${owner.name} · ${price}` : `Unowned · ${price}`}</span>
       </div>
     </div>
   );
+}
+
+function shortName(name: string) {
+  const map: Record<string, string> = {
+    "Apple Music": "Music",
+    "Google Cloud": "G Cloud",
+    "App Store": "App",
+    "Play Store": "Play",
+    SoundCloud: "Sound",
+    Instagram: "Insta",
+    Anthropic: "Claude",
+    Microsoft: "MSFT",
+    "Disney+": "Disney",
+  };
+  return map[name] ?? name;
 }
 
 function storeRent(state: State, ownerId: string) {
@@ -553,8 +573,8 @@ function Pawns({
             transitionTimingFunction: "cubic-bezier(.22,.8,.28,1)",
           }}
         >
-          <span className={walk[p.id] != null ? "hop-inner" : ""} key={`${p.id}-${i}`}>
-            <TokenFace name={p.name} avatar={p.avatar} color={p.color} size={18} />
+          <span className={walk[p.id] != null ? "hop-inner" : ""} key={`${p.id}-${walk[p.id] ?? p.stand}`}>
+            <PixelPawn color={p.color} />
           </span>
         </span>,
       );
@@ -590,15 +610,10 @@ function slotOffset(index: number, count: number): [number, number] {
   return [Math.cos(angle) * radius, Math.sin(angle) * radius];
 }
 
-function TokenFace({ name, avatar, color, size }: { name: string; avatar: string | null; color: string; size: number }) {
+function Face({ name, avatar, color, size }: { name: string; avatar: string | null; color: string; size: number }) {
   return (
-    <span className="meeple" style={{ width: size, height: size * 1.35, "--player": color } as CSSProperties} title={name}>
-      <i className="m-shadow" />
-      <i className="m-base" />
-      <i className="m-body" />
-      <i className="m-head">
-        {avatar ? <img src={avatar} alt="" /> : <em>{name.slice(0, 1)}</em>}
-      </i>
+    <span className="face" style={{ width: size, height: size, "--player": color } as CSSProperties} title={name}>
+      {avatar ? <img src={avatar} alt="" /> : <em>{name.slice(0, 1)}</em>}
     </span>
   );
 }

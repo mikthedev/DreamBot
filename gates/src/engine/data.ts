@@ -17,16 +17,15 @@ export type Company = {
   rent: [number, number, number];
 };
 
-/** Muted deed-bar colors — readable on cream tiles, not neon UI accents. */
 export const SETS: { id: SetId; label: string; alley: number; color: string }[] = [
-  { id: "social", label: "Social", alley: 20, color: "#b8838f" },
-  { id: "music", label: "Music", alley: 20, color: "#6f9d87" },
-  { id: "watch", label: "Watch", alley: 40, color: "#7a8fad" },
-  { id: "cloud", label: "Cloud", alley: 40, color: "#8f84b3" },
-  { id: "ai", label: "AI", alley: 40, color: "#a67ca1" },
-  { id: "ride", label: "Ride", alley: 60, color: "#b89b63" },
-  { id: "chips", label: "Chips", alley: 60, color: "#b88862" },
-  { id: "giants", label: "Giants", alley: 60, color: "#a67d73" },
+  { id: "social", label: "Social", alley: 20, color: "#5865f2" },
+  { id: "music", label: "Music", alley: 20, color: "#1db954" },
+  { id: "watch", label: "Watch", alley: 40, color: "#e50914" },
+  { id: "cloud", label: "Cloud", alley: 40, color: "#3b82f6" },
+  { id: "ai", label: "AI", alley: 40, color: "#a855f7" },
+  { id: "ride", label: "Ride", alley: 60, color: "#ff6b00" },
+  { id: "chips", label: "Chips", alley: 60, color: "#22c55e" },
+  { id: "giants", label: "Giants", alley: 60, color: "#64748b" },
 ];
 
 export const STORE_BAND = "#5c554c";

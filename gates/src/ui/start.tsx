@@ -181,19 +181,19 @@ export function Lobby({
         </p>
         <WaitingBooth />
         <div className="lobby-actions">
-          <button className="stall-btn primary" disabled={!ready} onClick={() => { sfx("enter"); onStart(); }}>
+          <button className="stall-btn primary" disabled={!ready} onMouseEnter={sfxHover} onClick={() => { sfx("enter"); onStart(); }}>
             <b>Start</b>
             <small>{ready ? "The stall is open" : `${MIN_PLAYERS - joined.length} more to open`}</small>
           </button>
-          <button className="stall-btn bots" onClick={() => { sfx("click"); onSeatBots(); }}>
+          <button className="stall-btn bots" onMouseEnter={sfxHover} onClick={() => { sfx("click"); onSeatBots(); }}>
             <b>Seat bots</b>
             <small>Fill empty chairs</small>
           </button>
-          <button className="stall-btn playbots" onClick={() => { sfx("enter"); onPlayBots(); }}>
+          <button className="stall-btn playbots" onMouseEnter={sfxHover} onClick={() => { sfx("enter"); onPlayBots(); }}>
             <b>Play with bots</b>
             <small>You plus three</small>
           </button>
-          <button className="stall-btn back" onClick={() => { sfx("back"); onBack(); }}>
+          <button className="stall-btn back" onMouseEnter={sfxHover} onClick={() => { sfx("back"); onBack(); }}>
             <b>◀ Back</b>
             <small>Leave table</small>
           </button>

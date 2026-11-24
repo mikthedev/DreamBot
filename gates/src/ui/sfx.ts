@@ -24,7 +24,7 @@ const FILES: Record<SfxName, string> = {
 };
 
 const VOL: Record<SfxName, number> = {
-  hover: 0.22,
+  hover: 0.4,
   click: 0.45,
   enter: 0.5,
   back: 0.5,

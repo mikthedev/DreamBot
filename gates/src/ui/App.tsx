@@ -21,7 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
-import { sfx, sfxHover } from "./sfx";
+import { sfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -327,7 +327,7 @@ export function App() {
             key={p.id}
             className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id || ownerPeek === p.id ? "peek" : ""}`}
             style={{ "--player": p.color } as CSSProperties}
-            onMouseEnter={() => { sfxHover(); setSeatHover(p.id); }}
+            onMouseEnter={() => setSeatHover(p.id)}
             onMouseLeave={() => setSeatHover(null)}
           >
             <Portrait player={p} size={26} />
@@ -1074,10 +1074,7 @@ function Tile({
   const facts = spaceFacts(space, state);
 
   const bind = {
-    onMouseEnter: () => {
-      sfxHover();
-      onHover(space.id);
-    },
+    onMouseEnter: () => onHover(space.id),
     onMouseLeave: () => onHover(null),
     onClick: (e: { stopPropagation: () => void }) => {
       e.stopPropagation();

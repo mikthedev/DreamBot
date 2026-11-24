@@ -1,5 +1,5 @@
 import { playUntil } from "./bot";
-import { COMPANIES } from "./data";
+import { COMPANIES, STACK_CUT } from "./data";
 import { apply, createGame, fuelPrice, type State } from "./game";
 
 export type ScenarioResult = {
@@ -92,7 +92,7 @@ function cloudPaysChips(): ScenarioResult {
   const chipsBefore = s.players[2].cash;
   s = apply(s, { type: "path", pick: "walk" });
   const paid = COMPANIES.find((c) => c.id === "gcloud")!.rent[2];
-  const cut = Math.floor(paid / 4);
+  const cut = Math.floor(paid / STACK_CUT);
   const ok = s.players[1].cash === cloudBefore + paid - cut && s.players[2].cash === chipsBefore + cut;
   return {
     id: "stack",

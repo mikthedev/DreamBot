@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, MOVE_CAP, SETS, STANDS, STORES, companiesIn, setOf, type SetId } from "../engine/data";
+import { CARD_LABEL, COMPANIES, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, STORES, companiesIn, setOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
@@ -9,6 +9,9 @@ import {
   createGame,
   describePhase,
   fuelPrice,
+  hasSet,
+  licenseNeeded,
+  ownerOfSet,
   type Action,
   type State,
 } from "../engine/game";
@@ -125,9 +128,26 @@ export function App() {
           >
             <Face name={p.name} avatar={p.avatar} color={p.color} size={26} />
             <b>{p.name}</b>
-            <span>{p.out ? "Out" : `$${p.cash} · ${p.moves}m`}</span>
+            <span>{p.out ? "Out" : `${p.moves}m`}</span>
           </div>
         ))}
+        <div className="wallet">
+          <small>Cash</small>
+          <b>${shownCash}</b>
+          <span>{shownMoves} moves</span>
+          <ul>
+            {state.players.filter((p) => !p.out).map((p) => (
+              <li key={p.id} style={{ "--player": p.color } as CSSProperties}>
+                <i />
+                <span>{p.name}</span>
+                <em>${p.cash}</em>
+              </li>
+            ))}
+          </ul>
+          <p className="stack-key">
+            Social, Music, Watch, AI pay Cloud. Cloud, Ride, Giants pay Chips. Full set rent: 1/{STACK_CUT} goes down the stack unless you license it.
+          </p>
+        </div>
       </div>
 
       <div className="stage">
@@ -148,7 +168,6 @@ export function App() {
               <div className="dash">
                 <Face name={me.name} avatar={me.avatar} color={me.color} size={36} />
                 <div className="stats">
-                  <b>${shownCash}</b>
                   <span>{shownMoves} moves</span>
                 </div>
               </div>
@@ -164,7 +183,14 @@ export function App() {
                     <PixelDie n={centerDie?.[1] ?? 5} spinning={rolling} />
                   </div>
                   {state.lastPay && mine && state.phase === "extra" && !walking && !held ? (
-                    <div className="pay-chip" key={`${state.rollTick}-pay`}>−${state.lastPay.amount}</div>
+                    <div className="pay-chip" key={`${state.rollTick}-pay`}>
+                      −${state.lastPay.amount}
+                      {state.lastPay.viaAmount ? (
+                        <em>
+                          {state.players.find((p) => p.id === state.lastPay?.via)?.name} stack ${state.lastPay.viaAmount}
+                        </em>
+                      ) : null}
+                    </div>
                   ) : null}
                   <p className="center-prompt">
                     {walking ? "Moving" : describePhase(state)}
@@ -249,6 +275,16 @@ export function App() {
                   <button className="ghost" disabled={!mine || state.phase !== "extra" || me.noteUsed} onClick={() => act({ type: "note" })}>
                     Bank note +$300
                   </button>
+                  {licenseNeeded(state, me.id).map((kind) => (
+                    <button
+                      key={kind}
+                      className="ghost"
+                      disabled={!mine || state.phase !== "extra" || me.cash < 180}
+                      onClick={() => act({ type: "license", kind })}
+                    >
+                      License {setOf(kind).label} $180
+                    </button>
+                  ))}
                   <button className="ghost" onClick={() => setSheet("log")}>Recent</button>
                 </div>
                 <h2>Your companies</h2>
@@ -623,10 +659,21 @@ function GroupCard({ group, state }: { group: SetId | "store"; state: State }) {
     );
   }
   const set = setOf(group);
+  const dep = STACK[group];
+  const lower = dep ? ownerOfSet(state, dep) : null;
+  const lowerName = lower ? state.players.find((p) => p.id === lower)?.name : null;
   return (
     <div className="group-card" onClick={(e) => e.stopPropagation()}>
       <small>Group</small>
       <b>{set.label}</b>
+      {dep ? (
+        <p className="dep">
+          Depends on {setOf(dep).label}. If that set is owned by someone else, they take 1/{STACK_CUT} of full-set rent
+          {lowerName ? ` — ${lowerName} owns it` : " — nobody owns it yet"}.
+        </p>
+      ) : (
+        <p className="dep">Base of the stack. Full-set rent from Cloud, Ride, and Giants pays you 1/{STACK_CUT} unless they license you.</p>
+      )}
       <ul>
         {companiesIn(group).map((c) => {
           const own = state.companies[c.id];
@@ -918,7 +965,16 @@ function Holdings({ state, player }: { state: State; player: { id: string; name:
         <div className="hold-list">
           {bySet.map(({ set, companies }) => (
             <div className="hold-set" key={set.id}>
-              <span className="hold-cat">{set.label}</span>
+              <span className="hold-cat">
+                {set.label}
+                {STACK[set.id] ? ` → ${setOf(STACK[set.id]!).label}` : ""}
+                {(() => {
+                  const dep = STACK[set.id];
+                  if (dep !== "chips" && dep !== "cloud") return "";
+                  if (!hasSet(state, player.id, set.id)) return "";
+                  return licenseNeeded(state, player.id).includes(dep) ? " · rent cut" : "";
+                })()}
+              </span>
               <ul>
                 {companies.map((c) => (
                   <li key={c.id}>

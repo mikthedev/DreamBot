@@ -5,11 +5,13 @@ import {
   HARD_STOP_ROUNDS,
   MOVE_CAP,
   STACK,
+  STACK_CUT,
   STANDS,
   START_CASH,
   START_MOVES,
   STORES,
   companiesIn,
+  setOf,
   type CardId,
   type Company,
   type SetId,
@@ -62,7 +64,7 @@ export type State = {
   deck: CardId[];
   pendingCard: CardId | null;
   land: string | null;
-  lastPay: { to: string; amount: number } | null;
+  lastPay: { to: string; amount: number; via?: string; viaAmount?: number } | null;
   forcedRoll: [number, number] | null;
   lastRoll: [number, number] | null;
   rollTick: number;
@@ -81,6 +83,7 @@ export type Action =
   | { type: "build"; companyId: string }
   | { type: "sell"; companyId: string }
   | { type: "note" }
+  | { type: "license"; kind: "chips" | "cloud" }
   | { type: "end" }
   | {
       type: "trade";
@@ -234,12 +237,13 @@ function beginTurn(state: State) {
     }
     p.moves -= 1;
   }
-  const owned = COMPANIES.filter((c) => state.companies[c.id].owner === p.id).length;
-  const shops = STORES.filter((s) => state.stores[s.id] === p.id).length;
-  const dividend = owned * 20 + shops * 25;
-  if (dividend > 0) {
-    p.cash += dividend;
-    say(state, `${p.name} collects $${dividend} from holdings.`);
+  const held = COMPANIES.filter((c) => state.companies[c.id].owner === p.id).length
+    + STORES.filter((s) => state.stores[s.id] === p.id).length;
+  const upkeep = held * 12;
+  if (upkeep > 0) {
+    const pay = Math.min(upkeep, p.cash);
+    p.cash -= pay;
+    say(state, `${p.name} pays $${pay} upkeep.`);
   }
   if (!p.leftHome && spaceId(p) === "home") {
     p.leftHome = true;
@@ -292,18 +296,34 @@ function payCash(state: State, from: Player, to: Player | null, printed: number,
         (l) => l.buyer === to.id && l.seller === lowerOwner && (dep === "chips" ? l.kind === "chips" : l.kind === "cloud"),
       );
       if (lowerOwner && lowerOwner !== to.id && !licensed) {
-        lowerCut = Math.floor(due / 4);
+        lowerCut = Math.floor(due / STACK_CUT);
         player(state, lowerOwner).cash += lowerCut;
+        say(state, `${player(state, lowerOwner).name} takes $${lowerCut} from the ${setOf(dep).label} stack.`);
+        state.lastPay = { to: to.id, amount: due, via: lowerOwner, viaAmount: lowerCut };
       }
     }
   }
   to.cash += due - lowerCut;
+  if (due > 0 && !state.lastPay) state.lastPay = { to: to.id, amount: due };
 }
 
-function ownerOfSet(state: State, set: SetId): string | null {
+export function ownerOfSet(state: State, set: SetId): string | null {
   const ids = companiesIn(set).map((co) => state.companies[co.id].owner);
   if (ids.every((id) => id && id === ids[0])) return ids[0];
   return null;
+}
+
+export function licenseNeeded(state: State, playerId: string): Array<"chips" | "cloud"> {
+  const kinds: Array<"chips" | "cloud"> = [];
+  for (const [set, dep] of Object.entries(STACK) as [SetId, SetId][]) {
+    if (dep !== "chips" && dep !== "cloud") continue;
+    if (!hasSet(state, playerId, set)) continue;
+    const seller = ownerOfSet(state, dep);
+    if (!seller || seller === playerId) continue;
+    if (state.licenses.some((l) => l.buyer === playerId && l.kind === dep)) continue;
+    if (!kinds.includes(dep)) kinds.push(dep);
+  }
+  return kinds;
 }
 
 function liquidate(state: State, p: Player, need: number) {
@@ -451,6 +471,20 @@ export function apply(prev: State, action: Action): State {
         p.cash += Math.floor(co.price / 2);
         say(state, `${p.name} sells ${co.name}.`);
       }
+      return state;
+    }
+    if (action.type === "license") {
+      const kind = action.kind;
+      if (kind !== "chips" && kind !== "cloud") return state;
+      if (!licenseNeeded(state, p.id).includes(kind)) return state;
+      const seller = ownerOfSet(state, kind);
+      if (!seller || seller === p.id) return state;
+      const price = 180;
+      if (p.cash < price) return state;
+      p.cash -= price;
+      player(state, seller).cash += price;
+      state.licenses.push({ kind, seller, buyer: p.id });
+      say(state, `${p.name} licenses ${kind} from ${player(state, seller).name} for $${price}.`);
       return state;
     }
     if (action.type === "note" && !p.noteUsed) {
@@ -650,9 +684,7 @@ function resolveLanding(state: State, p: Player, id: string) {
 function takeRent(state: State, from: Player, to: Player, printed: number, stackSplit: boolean, set?: SetId) {
   const before = from.cash;
   payCash(state, from, to, printed, stackSplit, set);
-  const paid = Math.max(0, before - from.cash);
-  if (paid > 0) state.lastPay = { to: to.id, amount: paid };
-  return paid;
+  return Math.max(0, before - from.cash);
 }
 
 function restOnSpace(state: State, p: Player) {
@@ -691,6 +723,10 @@ export function describePhase(state: State): string {
   if (state.phase === "land") return state.land ? `Buy ${company(state.land).name}?` : "Buy?";
   if (state.lastPay) {
     const who = player(state, state.lastPay.to);
+    if (state.lastPay.via && state.lastPay.viaAmount) {
+      const via = player(state, state.lastPay.via);
+      return `Paid $${state.lastPay.amount} to ${who.name} · ${via.name} took $${state.lastPay.viaAmount} stack`;
+    }
     return `Paid $${state.lastPay.amount} to ${who.name}`;
   }
   if (state.phase === "extra") return `On ${here}`;

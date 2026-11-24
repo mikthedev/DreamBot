@@ -207,14 +207,11 @@ export function muffleMusic(on: boolean) {
   const g = ensureGraph();
   if (!g) return;
   const now = g.ctx.currentTime;
-  const hz = on ? MUFFLE_HZ : OPEN_HZ;
-  const from = Math.max(80, g.filter.frequency.value || OPEN_HZ);
   g.filter.frequency.cancelScheduledValues(now);
   g.musicGain.gain.cancelScheduledValues(now);
-  g.filter.Q.setValueAtTime(g.filter.Q.value || 0.7, now);
-  g.filter.Q.linearRampToValueAtTime(on ? 1.4 : 0.7, now + 0.08);
-  g.filter.frequency.setValueAtTime(from, now);
-  g.filter.frequency.exponentialRampToValueAtTime(hz, now + 0.12);
+  g.filter.Q.cancelScheduledValues(now);
+  g.filter.Q.setTargetAtTime(on ? 1.4 : 0.7, now, 0.05);
+  g.filter.frequency.setTargetAtTime(on ? MUFFLE_HZ : OPEN_HZ, now, 0.05);
   g.musicGain.gain.setTargetAtTime(targetGain(), now, 0.05);
 }
 

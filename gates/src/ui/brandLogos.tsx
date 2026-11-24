@@ -26,7 +26,7 @@ import {
   siYoutube,
 } from "simple-icons";
 
-type LogoSpec = { kind: "si"; icon: SimpleIcon } | { kind: "img"; src: string; invert?: boolean };
+type LogoSpec = { kind: "si"; icon: SimpleIcon; fill?: string } | { kind: "img"; src: string; invert?: boolean };
 
 const LOGOS: Record<string, LogoSpec> = {
   discord: { kind: "si", icon: siDiscord },
@@ -42,9 +42,9 @@ const LOGOS: Record<string, LogoSpec> = {
   azure: { kind: "img", src: "/brands/azure.svg" },
   gcloud: { kind: "si", icon: siGooglecloud },
   openai: { kind: "si", icon: siOpenai },
-  anthropic: { kind: "si", icon: siAnthropic },
-  xai: { kind: "img", src: "/brands/xai.svg" },
-  uber: { kind: "si", icon: siUber },
+  anthropic: { kind: "si", icon: siAnthropic, fill: "#D4A27F" },
+  xai: { kind: "img", src: "/brands/xai.svg", invert: true },
+  uber: { kind: "si", icon: siUber, fill: "#f3eadf" },
   tesla: { kind: "si", icon: siTesla },
   waymo: { kind: "img", src: "https://www.google.com/s2/favicons?domain=waymo.com&sz=128", invert: true },
   intel: { kind: "si", icon: siIntel },
@@ -52,12 +52,22 @@ const LOGOS: Record<string, LogoSpec> = {
   nvidia: { kind: "si", icon: siNvidia },
   samsung: { kind: "si", icon: siSamsung },
   microsoft: { kind: "img", src: "/brands/microsoft.svg" },
-  apple: { kind: "si", icon: siApple },
+  apple: { kind: "si", icon: siApple, fill: "#f3eadf" },
   app: { kind: "si", icon: siAppstore },
   play: { kind: "si", icon: siGoogleplay },
-  steam: { kind: "si", icon: siSteam },
-  epic: { kind: "si", icon: siEpicgames },
+  steam: { kind: "si", icon: siSteam, fill: "#f3eadf" },
+  epic: { kind: "si", icon: siEpicgames, fill: "#f3eadf" },
 };
+
+function contrastFill(hex: string) {
+  const h = hex.replace("#", "");
+  if (h.length !== 6) return hex;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return lum < 0.18 ? "#f3eadf" : hex;
+}
 
 export function BrandLogo({ id, label }: { id: string; label?: string }) {
   const spec = LOGOS[id];
@@ -72,9 +82,11 @@ export function BrandLogo({ id, label }: { id: string; label?: string }) {
   }
 
   if (spec.kind === "si") {
+    const raw = spec.fill ?? `#${spec.icon.hex}`;
+    const fill = contrastFill(raw);
     return (
       <svg className="brand-logo" viewBox="0 0 24 24" role="img" aria-label={label || spec.icon.title}>
-        <path d={spec.icon.path} fill={`#${spec.icon.hex}`} />
+        <path d={spec.icon.path} fill={fill} />
       </svg>
     );
   }

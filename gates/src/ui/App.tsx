@@ -21,7 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
-import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
+import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -1618,6 +1618,13 @@ function StoreTile({
   );
 }
 
+function bumpCash(onCash: (n: number) => void, cash: number, delta: number) {
+  const next = Math.max(0, cash + delta);
+  if (next === cash) return;
+  sfxCash(delta);
+  onCash(next);
+}
+
 function shortName(name: string) {
   const map: Record<string, string> = {
     "Apple Music": "Music",
@@ -1987,7 +1994,7 @@ function TradeDesk({
               setGet([]);
             }}
           >
-            <Portrait player={p} size={28} />
+            <Portrait player={p} size={22} />
             <span>{p.name}</span>
             <small>${p.cash}</small>
           </button>
@@ -2064,7 +2071,7 @@ function TradeCrate({
   return (
     <section className="trade-crate" style={{ "--player": player.color } as CSSProperties}>
       <header>
-        <Portrait player={player} size={30} />
+        <Portrait player={player} size={22} />
         <div>
           <small>{kicker}</small>
           <b>{player.name}</b>
@@ -2073,24 +2080,27 @@ function TradeCrate({
       </header>
       <div className="trade-tenders">
         <div className="cash-step">
-          <button type="button" className="ghost" onClick={() => onCash(Math.max(0, cash - 50))}>−50</button>
-          <button type="button" className="ghost" onClick={() => onCash(Math.max(0, cash - 10))}>−</button>
+          <button type="button" className="ghost" onClick={() => bumpCash(onCash, cash, -50)}>-50</button>
+          <button type="button" className="ghost" onClick={() => bumpCash(onCash, cash, -10)}>-</button>
           <strong>${cash}</strong>
-          <button type="button" className="ghost" onClick={() => onCash(cash + 10)}>+</button>
-          <button type="button" className="ghost" onClick={() => onCash(cash + 50)}>+50</button>
+          <button type="button" className="ghost" onClick={() => bumpCash(onCash, cash, 10)}>+</button>
+          <button type="button" className="ghost" onClick={() => bumpCash(onCash, cash, 50)}>+50</button>
         </div>
         <button type="button" className={`move-ticket ${move ? "on" : ""}`} onClick={() => onMove(!move)}>
           {move ? "1 move in" : "Add a move"}
         </button>
       </div>
       <div className="stock-grid">
-        {companies.map((c) => (
+        {companies.map((c, i) => (
           <button
             key={c.id}
             type="button"
             className={`stock ${picked.includes(c.id) ? "on" : ""}`}
-            onMouseEnter={sfxPlayHover}
-            onClick={() => onToggle(c.id)}
+            onMouseEnter={() => sfxPlayHover(1.16 + (i % 5) * 0.07)}
+            onClick={() => {
+              sfx("confirm");
+              onToggle(c.id);
+            }}
           >
             <BrandLogo id={c.id} label={c.name} />
             <span>{shortName(c.name)}</span>

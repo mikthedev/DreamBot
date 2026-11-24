@@ -108,7 +108,7 @@ export function sfx(name: SfxName, rate = 1) {
   const shot = src.cloneNode(true) as HTMLAudioElement;
   shot.volume = Math.min(1, VOL[name] * sfxLevel);
   shot.preservesPitch = false;
-  shot.playbackRate = Math.min(1.8, Math.max(0.7, rate));
+  shot.playbackRate = Math.min(2, Math.max(0.65, rate));
   void shot.play().catch(() => {});
 }
 
@@ -119,11 +119,15 @@ export function sfxHover() {
   sfx("hover");
 }
 
-export function sfxPlayHover() {
+export function sfxPlayHover(rate?: unknown) {
   const now = performance.now();
-  if (now - playHoverAt < 140) return;
+  if (now - playHoverAt < 120) return;
   playHoverAt = now;
-  sfx("peek");
+  sfx("peek", typeof rate === "number" ? rate : 1);
+}
+
+export function sfxCash(delta: number) {
+  sfx("click", delta < 0 ? 0.78 : 1.22);
 }
 
 export function getMix() {

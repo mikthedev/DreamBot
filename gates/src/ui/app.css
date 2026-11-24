@@ -372,7 +372,7 @@ body {
   border: 3px solid #2a2430;
   box-shadow: 4px 4px 0 #0a080c;
 }
-.center.trading { place-items: stretch; padding: 10px; }
+.center.trading { place-items: stretch; padding: 4px; }
 .table-core.is-market {
   width: 100%;
   height: 100%;
@@ -596,7 +596,7 @@ body {
 .tile.deed:not(.owned) .brand-logo,
 .tile.deed:not(.owned) .brand-fallback {
   filter: grayscale(1);
-  opacity: 0.48;
+  opacity: 0.82;
 }
 .tile.owned {
   background: color-mix(in srgb, var(--player) 40%, var(--tile-face));
@@ -1334,50 +1334,52 @@ button:disabled { opacity: 0.4; cursor: default; }
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 0;
   animation: trade-in 0.22s ease;
+  font-size: 12px;
 }
 .trade-desk button { min-width: 0; }
 .trade-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 10px 14px 12px;
+  gap: 8px;
+  padding: 6px 10px 7px;
   background:
     repeating-linear-gradient(90deg, #b45309 0 14px, #f59e0b 14px 28px);
   color: #1a1208;
-  box-shadow: inset 0 -4px 0 #7c2d12;
+  box-shadow: inset 0 -3px 0 #7c2d12;
 }
 .trade-banner b {
   font-family: "Pixelify Sans", Outfit, sans-serif;
-  font-size: clamp(22px, 3.4vw, 32px);
+  font-size: clamp(16px, 2.2vw, 22px);
   line-height: 1;
   text-shadow: 2px 2px 0 #fde68a;
 }
 .trade-banner em {
   font-style: normal;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   background: #1a1208;
   color: #fbbf24;
-  padding: 4px 8px;
+  padding: 3px 6px;
 }
 .trade-banner em.free { color: #86efac; }
 .trade-people {
   display: flex;
-  gap: 8px;
-  padding: 10px 12px 0;
+  gap: 6px;
+  padding: 6px 8px 0;
   overflow: auto;
 }
 .trade-seat {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: #1a1410;
   color: var(--text);
   border: 2px solid #3a2a20;
-  padding: 4px 10px 4px 4px;
+  padding: 2px 8px 2px 2px;
+  font-size: 11px;
 }
 .trade-seat small { color: var(--muted); font-variant-numeric: tabular-nums; }
 .trade-seat.on {
@@ -1386,10 +1388,10 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .trade-floor {
   display: grid;
-  grid-template-columns: 1fr 44px 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr 28px 1fr;
+  gap: 6px;
   min-height: 0;
-  padding: 10px 12px;
+  padding: 6px 8px;
 }
 .trade-swap {
   display: grid;
@@ -1397,15 +1399,15 @@ button:disabled { opacity: 0.4; cursor: default; }
   align-self: center;
 }
 .trade-swap span {
-  width: 36px;
-  height: 36px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   background: #f59e0b;
   color: #1a1208;
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 800;
-  box-shadow: 3px 3px 0 #0a080c;
+  box-shadow: 2px 2px 0 #0a080c;
 }
 .trade-crate {
   min-width: 0;
@@ -1420,8 +1422,8 @@ button:disabled { opacity: 0.4; cursor: default; }
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 5px 8px;
   background: color-mix(in srgb, var(--player) 18%, #1c1410);
   border-bottom: 2px solid #2a2018;
 }
@@ -1433,7 +1435,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   color: var(--muted);
   font-weight: 700;
 }
-.trade-crate header b { font-size: 14px; }
+.trade-crate header b { font-size: 12px; }
 .trade-crate header em {
   font-style: normal;
   font-variant-numeric: tabular-nums;
@@ -1443,8 +1445,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 .trade-tenders {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 10px 0;
+  gap: 6px;
+  padding: 5px 8px 0;
   align-items: center;
 }
 .cash-step {
@@ -1455,20 +1457,20 @@ button:disabled { opacity: 0.4; cursor: default; }
   border: 2px solid #3a2a20;
   padding: 2px;
 }
-.cash-step button { padding: 4px 7px; font-size: 11px; }
+.cash-step button { padding: 2px 5px; font-size: 10px; }
 .cash-step strong {
-  min-width: 56px;
+  min-width: 44px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  font-size: 16px;
+  font-size: 13px;
   color: #fde68a;
 }
 .move-ticket {
   background: #1a1024;
   color: var(--muted);
   border: 2px dashed #4a3a50;
-  padding: 6px 10px;
-  font-size: 11px;
+  padding: 4px 8px;
+  font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -1480,9 +1482,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .stock-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
-  gap: 8px;
-  padding: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 5px;
+  padding: 6px;
   overflow: auto;
   min-height: 0;
   flex: 1;
@@ -1491,16 +1493,23 @@ button:disabled { opacity: 0.4; cursor: default; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 10px 6px 8px;
+  gap: 2px;
+  padding: 6px 4px 5px;
   background: #22181c;
   color: var(--text);
   border: 2px solid #3a2a20;
+  overflow: hidden;
+  min-width: 0;
 }
 .stock .brand-logo,
-.stock .brand-fallback { width: 28px; height: 28px; }
-.stock span { font-size: 11px; font-weight: 700; line-height: 1.15; text-align: center; }
-.stock em { font-style: normal; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.stock .brand-fallback {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+}
+.stock span { font-size: 10px; font-weight: 700; line-height: 1.1; text-align: center; }
+.stock em { font-style: normal; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .stock:hover:not(:disabled) { transform: translate(-1px, -1px); }
 .stock.on {
   background: #2a2210;
@@ -1514,8 +1523,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .trade-bar {
   display: grid;
-  gap: 8px;
-  padding: 8px 12px 12px;
+  gap: 5px;
+  padding: 6px 8px 8px;
   background: #120e10;
   border-top: 2px solid #3a2a20;
 }
@@ -1523,8 +1532,8 @@ button:disabled { opacity: 0.4; cursor: default; }
   display: grid;
   grid-template-columns: 1fr 16px 1fr;
   align-items: center;
-  gap: 8px;
-  min-height: 34px;
+  gap: 6px;
+  min-height: 24px;
 }
 .trade-slip i {
   height: 2px;
@@ -1557,10 +1566,11 @@ button:disabled { opacity: 0.4; cursor: default; }
 .trade-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   justify-content: flex-end;
 }
-.trade-actions .go { min-width: 8.5rem; }
+.trade-actions .go { min-width: 6.5rem; }
+.trade-actions button { padding: 6px 10px; font-size: 12px; }
 .market-card .go { margin-top: 8px; width: 100%; }
 @keyframes trade-in {
   from { opacity: 0; transform: translateY(8px); }

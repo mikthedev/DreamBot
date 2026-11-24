@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, MOVE_CAP, STANDS, STORES, setOf } from "../engine/data";
+import { CARD_LABEL, COMPANIES, MOVE_CAP, SETS, STANDS, STORES, companiesIn, setOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
@@ -37,7 +37,7 @@ export function App() {
   const [walk, setWalk] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<{ cash: number; moves: number } | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openGroup, setOpenGroup] = useState<SetId | "store" | null>(null);
   const [seatHover, setSeatHover] = useState<string | null>(null);
   const walking = Object.keys(walk).length > 0;
   useEffect(() => {
@@ -129,11 +129,11 @@ export function App() {
 
       <div className="stage">
         <div
-          className="board"
+          className={`board ${openGroup ? "is-grouping" : ""}`}
           aria-label="DreamPoly board"
           onClick={(e) => {
             const t = e.target as HTMLElement;
-            if (!t.closest(".tile, .float-card")) setOpenId(null);
+            if (!t.closest(".tile, .float-card, .group-card")) setOpenGroup(null);
           }}
         >
           <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${!mine && !walking ? "idle" : "live"}`}>
@@ -191,18 +191,24 @@ export function App() {
               state={state}
               walk={walk}
               you={me.id}
-              open={openId === space.id}
+              grouped={inGroup(space.id, openGroup)}
               onHover={setHoverId}
-              onOpen={(id) => setOpenId((cur) => (cur === id ? null : id))}
+              onOpen={() => {
+                const g = groupOf(space.id);
+                setOpenGroup((cur) => (g && cur === g ? null : g));
+              }}
             />
           ))}
-          <TileFloat id={openId ?? hoverId} mode={openId ? "inspect" : "owner"} state={state} />
           {seatHover ? (
             <Holdings
               state={state}
               player={state.players.find((p) => p.id === seatHover)!}
             />
-          ) : null}
+          ) : openGroup ? (
+            <GroupCard group={openGroup} state={state} />
+          ) : (
+            <TileFloat id={hoverId} mode="owner" state={state} />
+          )}
           <Pawns state={state} walk={walk} setWalk={setWalk} />
         </div>
       </div>
@@ -368,12 +374,24 @@ function ownedClass(owner: BoardPlayer | undefined, you: string) {
   return owner.id === you ? "owned mine" : "owned theirs";
 }
 
+function groupOf(id: string): SetId | "store" | null {
+  const co = COMPANIES.find((c) => c.id === id);
+  if (co) return co.set;
+  if (STORES.some((s) => s.id === id)) return "store";
+  return null;
+}
+
+function inGroup(id: string, group: SetId | "store" | null) {
+  if (!group) return false;
+  return groupOf(id) === group;
+}
+
 function Tile({
   space,
   state,
   walk,
   you,
-  open,
+  grouped,
   onHover,
   onOpen,
 }: {
@@ -381,9 +399,9 @@ function Tile({
   state: State;
   walk: Record<string, number>;
   you: string;
-  open: boolean;
+  grouped: boolean;
   onHover: (id: string | null) => void;
-  onOpen: (id: string) => void;
+  onOpen: () => void;
 }) {
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
@@ -397,7 +415,7 @@ function Tile({
     onMouseLeave: () => onHover(null),
     onClick: (e: { stopPropagation: () => void }) => {
       e.stopPropagation();
-      onOpen(space.id);
+      onOpen();
     },
   };
 
@@ -407,7 +425,7 @@ function Tile({
       <DeedTile
         space={space}
         hot={hot}
-        open={open}
+        grouped={grouped}
         you={you}
         name={co.name}
         logoId={co.id}
@@ -423,7 +441,7 @@ function Tile({
     const spec = SPECIAL[space.id];
     return (
       <div
-        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""} ${open ? "open" : ""}`}
+        className={`tile corner id-${space.id} accent-${space.id} ${space.side} ${hot ? "hot" : ""}`}
         style={{ gridColumn: space.col, gridRow: space.row }}
         {...bind}
       >
@@ -441,7 +459,7 @@ function Tile({
     <StoreTile
       space={space}
       hot={hot}
-      open={open}
+      grouped={grouped}
       you={you}
       name={facts.name}
       logoId={space.id}
@@ -529,29 +547,63 @@ function TileFloat({
       style={popStyle(space)}
       onClick={(e) => e.stopPropagation()}
     >
-      {mode === "owner" ? (
-        facts.owner ? (
-          <>
-            <Face name={facts.owner.name} avatar={facts.owner.avatar} color={facts.owner.color} size={28} />
-            <div>
-              <small>Owned by</small>
-              <b>{facts.owner.name}</b>
-            </div>
-          </>
-        ) : (
-          <div>
-            <small>Owner</small>
-            <b>Unowned</b>
-          </div>
-        )
-      ) : (
+      {facts.owner ? (
         <>
-          <small className="cat">{facts.setLabel}</small>
-          <BrandLogo id={facts.logoId} label={facts.name} />
-          <b>{facts.name}</b>
-          {facts.price ? <em>{facts.price}</em> : null}
+          <Face name={facts.owner.name} avatar={facts.owner.avatar} color={facts.owner.color} size={22} />
+          <div>
+            <small>Owned by</small>
+            <b>{facts.owner.name}</b>
+          </div>
         </>
+      ) : (
+        <div>
+          <small>Owner</small>
+          <b>Unowned</b>
+        </div>
       )}
+    </div>
+  );
+}
+
+function GroupCard({ group, state }: { group: SetId | "store"; state: State }) {
+  if (group === "store") {
+    return (
+      <div className="group-card" onClick={(e) => e.stopPropagation()}>
+        <small>Group</small>
+        <b>Stores</b>
+        <ul>
+          {STORES.map((s) => {
+            const owner = state.players.find((p) => p.id === state.stores[s.id]);
+            return (
+              <li key={s.id}>
+                <BrandLogo id={s.id} label={s.name} />
+                <span>{s.name}</span>
+                <em>{owner ? owner.name : "Unowned"}</em>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
+  const set = setOf(group);
+  return (
+    <div className="group-card" onClick={(e) => e.stopPropagation()}>
+      <small>Group</small>
+      <b>{set.label}</b>
+      <ul>
+        {companiesIn(group).map((c) => {
+          const own = state.companies[c.id];
+          const owner = state.players.find((p) => p.id === own.owner);
+          return (
+            <li key={c.id}>
+              <BrandLogo id={c.id} label={c.name} />
+              <span>{c.name}</span>
+              <em>{owner ? owner.name : "Unowned"}</em>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -559,7 +611,7 @@ function TileFloat({
 function DeedTile({
   space,
   hot,
-  open,
+  grouped,
   you,
   name,
   logoId,
@@ -570,7 +622,7 @@ function DeedTile({
 }: {
   space: (typeof TRACK)[number];
   hot: boolean;
-  open: boolean;
+  grouped: boolean;
   you: string;
   name: string;
   logoId: string;
@@ -581,7 +633,7 @@ function DeedTile({
 }) {
   return (
     <div
-      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${ownedClass(owner, you)}`}
+      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""} ${ownedClass(owner, you)}`}
       style={
         {
           gridColumn: space.col,
@@ -591,7 +643,6 @@ function DeedTile({
       }
       {...bind}
     >
-      {owner && <i className="claim" aria-hidden />}
       {level > 0 && (
         <span className="houses">
           {Array.from({ length: level }, (_, i) => (
@@ -611,7 +662,7 @@ function DeedTile({
 function StoreTile({
   space,
   hot,
-  open,
+  grouped,
   you,
   name,
   logoId,
@@ -621,7 +672,7 @@ function StoreTile({
 }: {
   space: (typeof TRACK)[number];
   hot: boolean;
-  open: boolean;
+  grouped: boolean;
   you: string;
   name: string;
   logoId: string;
@@ -631,7 +682,7 @@ function StoreTile({
 }) {
   return (
     <div
-      className={`tile store-tile ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${ownedClass(owner, you)}`}
+      className={`tile store-tile ${space.side} id-${space.id} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""} ${ownedClass(owner, you)}`}
       style={
         {
           gridColumn: space.col,
@@ -641,7 +692,6 @@ function StoreTile({
       }
       {...bind}
     >
-      {owner && <i className="claim" aria-hidden />}
       <div className="deed-body">
         <BrandLogo id={logoId} label={name} />
         <strong className="deed-name">{name}</strong>
@@ -810,29 +860,49 @@ function slotOffset(index: number, count: number, side: (typeof TRACK)[number]["
 }
 
 function Holdings({ state, player }: { state: State; player: { id: string; name: string; cash: number; color: string } }) {
-  const companies = COMPANIES.filter((c) => state.companies[c.id].owner === player.id);
+  const bySet = SETS.map((set) => ({
+    set,
+    companies: companiesIn(set.id).filter((c) => state.companies[c.id].owner === player.id),
+  })).filter((row) => row.companies.length);
   const stores = STORES.filter((s) => state.stores[s.id] === player.id);
+  const empty = bySet.length === 0 && stores.length === 0;
   return (
     <div className="holdings" role="tooltip" style={{ "--player": player.color } as CSSProperties}>
-      <div className="holdings-title">{player.name}</div>
-      <div className="holdings-cash">${player.cash}</div>
-      {companies.length === 0 && stores.length === 0 ? (
+      <div className="holdings-head">
+        <div className="holdings-title">{player.name}</div>
+        <div className="holdings-cash">${player.cash}</div>
+      </div>
+      {empty ? (
         <p>No companies yet</p>
       ) : (
-        <ul>
-          {companies.map((c) => (
-            <li key={c.id}>
-              <BrandLogo id={c.id} label={c.name} />
-              <span>{c.name}</span>
-            </li>
+        <div className="hold-list">
+          {bySet.map(({ set, companies }) => (
+            <div className="hold-set" key={set.id}>
+              <span className="hold-cat">{set.label}</span>
+              <ul>
+                {companies.map((c) => (
+                  <li key={c.id}>
+                    <BrandLogo id={c.id} label={c.name} />
+                    <span>{c.name}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
-          {stores.map((s) => (
-            <li key={s.id}>
-              <BrandLogo id={s.id} label={s.name} />
-              <span>{s.name}</span>
-            </li>
-          ))}
-        </ul>
+          {stores.length > 0 && (
+            <div className="hold-set">
+              <span className="hold-cat">Stores</span>
+              <ul>
+                {stores.map((s) => (
+                  <li key={s.id}>
+                    <BrandLogo id={s.id} label={s.name} />
+                    <span>{s.name}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -327,11 +327,32 @@ body {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
-.stack-key {
-  margin: 8px 0 0;
-  font-size: 10px;
-  line-height: 1.35;
-  color: var(--muted);
+.help-go {
+  margin-top: 8px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: #121016;
+  color: #fff4cc;
+  border: 2px solid #c9b48a;
+  box-shadow: 2px 2px 0 #0a080c;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+}
+.help-go:hover:not(:disabled) {
+  background: #2a2418;
+  color: #fff4cc;
+  border-color: var(--accent);
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 #0a080c;
+}
+.roster .board-close {
+  position: static;
+  margin-top: 8px;
 }
 .idle-mark { padding: 8px 0 2px; }
 .logo {
@@ -887,10 +908,6 @@ button:disabled { opacity: 0.4; cursor: default; }
   animation: card-in 0.32s steps(6) both;
 }
 .board-close {
-  position: fixed;
-  top: 58px;
-  right: 16px;
-  z-index: 40;
   width: 40px;
   height: 40px;
   min-width: 40px;
@@ -2022,9 +2039,39 @@ input {
 .rail-face.host .rail-ava { border-color: var(--accent); }
 .lobby-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; width: min(100%, 720px); }
 
+.how-card {
+  width: min(520px, 100%);
+  max-height: min(78vh, 560px);
+  overflow: auto;
+  background: #1c1822;
+  padding: 14px 16px 16px;
+  border: 3px solid #c9b48a;
+  box-shadow: 8px 8px 0 #0a080c;
+  animation: card-in 0.32s steps(6) both;
+}
+.how-body h3 {
+  margin: 12px 0 4px;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 16px;
+  color: #fff4cc;
+}
+.how-body p {
+  margin: 0;
+  color: #e8dcc8;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.how-ok { width: 100%; margin-top: 14px; align-items: flex-start; }
+.leave-box h2 {
+  margin: 0 0 8px;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  color: #fff4cc;
+}
+.leave-box .leave-warn-act { margin-top: 12px; }
+.sheet.is-pass { pointer-events: none; }
+.sheet.is-pass article { pointer-events: auto; }
 @media (max-width: 760px) {
   .stall-grid { grid-template-columns: 1fr 1fr; }
-  .board-close { top: 52px; right: 10px; }
   .stall-deeds li { grid-template-columns: 28px 1fr; }
   .stall-deeds .deed-act { justify-self: start; }
   .center-actions { width: 100%; }
@@ -2040,5 +2087,5 @@ input {
 @media (prefers-reduced-motion: reduce) {
   .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk,
   .menu-vault, .menu-bill, .menu-stamp, .menu-chip, .menu-mascot, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
-  .lobby.is-in, .join-rail, .waiting-booth, .stall-btn, .stall-menu, .dive-bars i, .dive-word, .app.is-open .play { animation: none; transition: none; }
+  .lobby.is-in, .join-rail, .waiting-booth, .stall-btn, .stall-menu, .how-card, .dive-bars i, .dive-word, .app.is-open .play { animation: none; transition: none; }
 }

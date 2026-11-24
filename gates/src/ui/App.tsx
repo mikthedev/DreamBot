@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, MAX_PLAYERS, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, STORES, companiesIn, setOf, type SetId } from "../engine/data";
+import { CARD_LABEL, COMPANIES, HARD_STOP_ROUNDS, MAX_PLAYERS, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, START_CASH, START_MOVES, STORES, companiesIn, setOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
@@ -46,6 +46,8 @@ export function App() {
   const [look, setLook] = useState<Look>(() => (localStorage.getItem(LOOK_KEY) === "icon" ? "icon" : "pawn"));
   const [screen, setScreen] = useState<"menu" | "lobby" | "play">("menu");
   const [dive, setDive] = useState<"idle" | "cover" | "open">("idle");
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [leaveWarn, setLeaveWarn] = useState(false);
   const diveWait = useRef<number[]>([]);
   const [pickedMode, setPickedMode] = useState<Mode>("moves");
   const [joined, setJoined] = useState<SeatPerson[]>([]);
@@ -319,10 +321,18 @@ export function App() {
               </li>
             ))}
           </ul>
-          <p className="stack-key">
-            Social, Music, Watch, AI pay Cloud. Cloud, Ride, Giants pay Chips. Full set rent: 1/{STACK_CUT} goes down the stack unless you license it.
-          </p>
+          <button type="button" className="help-go" title="How this table works" onClick={() => setHelpOpen(true)}>
+            ?
+          </button>
         </div>
+        <button
+          type="button"
+          className="board-close"
+          title={sheet === "more" ? "Back to the board" : "Leave table"}
+          onClick={() => (sheet === "more" ? setSheet(null) : setLeaveWarn(true))}
+        >
+          ◀
+        </button>
       </div>
 
       <div className="stage">
@@ -480,13 +490,44 @@ export function App() {
         </div>
       )}
 
-      {sheet === "more" ? (
-        <button type="button" className="board-close" title="Back to the board" onClick={() => setSheet(null)}>
-          ◀
-        </button>
+      {helpOpen && state ? (
+        <div className="sheet is-stall" onClick={() => setHelpOpen(false)}>
+          <article className="how-card" onClick={(e) => e.stopPropagation()}>
+            <HowToPlay mode={state.mode} onClose={() => setHelpOpen(false)} />
+          </article>
+        </div>
+      ) : null}
+      {leaveWarn ? (
+        <div className="sheet is-stall" onClick={() => setLeaveWarn(false)}>
+          <article className="stall-menu leave-box" onClick={(e) => e.stopPropagation()}>
+            <p className="start-kicker">Warning</p>
+            <h2>Leave this table?</h2>
+            <p className="stall-empty">The game is still going. You’ll drop the board and go back to the menu.</p>
+            <div className="leave-warn-act">
+              <button
+                className="stall-act leave"
+                type="button"
+                onClick={() => {
+                  setLeaveWarn(false);
+                  setSheet(null);
+                  setHelpOpen(false);
+                  setScreen("menu");
+                  setState(null);
+                }}
+              >
+                <b>Leave</b>
+                <span>Back to menu</span>
+              </button>
+              <button className="stall-act fuel" type="button" onClick={() => setLeaveWarn(false)}>
+                <b>Stay</b>
+                <span>Keep playing</span>
+              </button>
+            </div>
+          </article>
+        </div>
       ) : null}
       {sheet && (
-        <div className={`sheet ${sheet === "more" ? "is-stall" : ""}`} onClick={() => setSheet(null)}>
+        <div className={`sheet ${sheet === "more" ? "is-stall is-pass" : ""}`} onClick={() => setSheet(null)}>
           <article className={sheet === "more" ? "stall-menu" : ""} onClick={(e) => e.stopPropagation()}>
             {sheet === "more" && state && me && (
               <MoreStall
@@ -499,11 +540,7 @@ export function App() {
                   setTrading(true);
                 }}
                 onLog={() => setSheet("log")}
-                onLeave={() => {
-                  setSheet(null);
-                  setScreen("menu");
-                  setState(null);
-                }}
+                onLeave={() => setLeaveWarn(true)}
               />
             )}
             {sheet === "log" && state && (
@@ -583,7 +620,6 @@ function MoreStall({
   onLog: () => void;
   onLeave: () => void;
 }) {
-  const [warnLeave, setWarnLeave] = useState(false);
   const extra = mine && state.phase === "extra";
   const owned = COMPANIES.filter((c) => state.companies[c.id].owner === me.id);
   const licenses = licenseNeeded(state, me.id);
@@ -651,26 +687,50 @@ function MoreStall({
       ) : (
         <p className="stall-empty">No deeds yet.</p>
       )}
-      <button type="button" className="leave-link" onClick={() => setWarnLeave(true)}>
+      <button type="button" className="leave-link" onClick={onLeave}>
         Leave table
       </button>
-      {warnLeave ? (
-        <div className="leave-warn" role="alertdialog" aria-labelledby="leave-warn-title">
-          <p className="start-kicker">Warning</p>
-          <h3 id="leave-warn-title">Leave this table?</h3>
-          <p>The game is still going. You’ll drop the board and lose this stall.</p>
-          <div className="leave-warn-act">
-            <button className="stall-act leave" type="button" onClick={onLeave}>
-              <b>Leave</b>
-              <span>Back to menu</span>
-            </button>
-            <button className="stall-act fuel" type="button" onClick={() => setWarnLeave(false)}>
-              <b>Stay</b>
-              <span>Keep playing</span>
-            </button>
-          </div>
-        </div>
-      ) : null}
+    </>
+  );
+}
+
+function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
+  const moves = mode === "moves";
+  return (
+    <>
+      <header className="stall-head">
+        <p className="start-kicker">{moves ? "Main game" : "Classic"}</p>
+        <h2>How to play</h2>
+      </header>
+      <div className="how-body">
+        {moves ? (
+          <>
+            <h3>Moves</h3>
+            <p>You start with {START_MOVES} moves and ${START_CASH}. Each turn spends 1 move, then $12 upkeep per brand or store you own. Hit 0 moves and you are out. Cap is {MOVE_CAP}.</p>
+            <h3>Earn more moves</h3>
+            <p>Pass GO for $200 and +1 move. Collect or pay rent for +1. Rest in Jail for +1. Buy one in More — first costs $100, then $200, then $300.</p>
+          </>
+        ) : (
+          <>
+            <h3>Cash</h3>
+            <p>You start with ${START_CASH}. There is no move meter. Miss a payment and the bank takes you. After {HARD_STOP_ROUNDS} rounds, most cash wins.</p>
+            <h3>GO</h3>
+            <p>Pass GO for $200. Stay standing until you land. Pay rent when you land on an owned brand.</p>
+          </>
+        )}
+        <h3>The board</h3>
+        <p>Grey brands are free to buy. Once owned they wash in the owner’s color. Click a tile to see its whole set. Hover a player to see their deeds. Right-click someone else’s tile to peek their holdings.</p>
+        <h3>Stack rent</h3>
+        <p>Social, Music, Watch, and AI pay Cloud. Cloud, Ride, and Giants pay Chips. Own a full set and 1/{STACK_CUT} of that rent goes to the set below — unless they buy a $180 license in More.</p>
+        <h3>Trade</h3>
+        <p>Swap brands, cash, or a move from the center stall. It costs $20 unless you land on Market or you own the Watch set. The other player must accept.</p>
+        <h3>More</h3>
+        <p>Build or sell your brands, cash a one-time $300 bank note, buy a license, or open a trade. {moves ? "Last player with moves wins. Hard stop: most moves, then cash." : "Last player with cash wins. Hard stop: richest player."}</p>
+      </div>
+      <button type="button" className="stall-act fuel how-ok" onClick={onClose}>
+        <b>Got it</b>
+        <span>Back to the board</span>
+      </button>
     </>
   );
 }

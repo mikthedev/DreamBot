@@ -45,6 +45,8 @@ export function App() {
   const skipMarketOpen = useRef(false);
   const [look, setLook] = useState<Look>(() => (localStorage.getItem(LOOK_KEY) === "icon" ? "icon" : "pawn"));
   const [screen, setScreen] = useState<"menu" | "lobby" | "play">("menu");
+  const [dive, setDive] = useState<"idle" | "cover" | "open">("idle");
+  const diveWait = useRef<number[]>([]);
   const [pickedMode, setPickedMode] = useState<Mode>("moves");
   const [joined, setJoined] = useState<SeatPerson[]>([]);
   const [spectators, setSpectators] = useState<SeatPerson[]>([]);
@@ -177,12 +179,35 @@ export function App() {
     return people.map((p) => (p.id === "you" ? { ...p, color: savedPieceColor() } : p));
   }
 
-  function startTable(people = joined) {
-    if (people.length < 3 || people.length > MAX_PLAYERS) return;
+  function clearDiveWaits() {
+    diveWait.current.forEach((id) => window.clearTimeout(id));
+    diveWait.current = [];
+  }
+
+  function commitPlay(people: SeatPerson[]) {
     setWalk({});
     setTrading(false);
     setState(createGame(painted(people), { mode: pickedMode, seed: Date.now() % 100000 }));
     setScreen("play");
+  }
+
+  function startTable(people = joined) {
+    if (people.length < 3 || people.length > MAX_PLAYERS) return;
+    if (dive !== "idle") return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      commitPlay(people);
+      return;
+    }
+    clearDiveWaits();
+    setDive("cover");
+    diveWait.current.push(
+      window.setTimeout(() => {
+        commitPlay(people);
+        setDive("open");
+        diveWait.current.push(window.setTimeout(() => setDive("idle"), 620));
+      }, 520),
+    );
   }
 
   function seatBots() {
@@ -209,6 +234,8 @@ export function App() {
     startTable(table);
   }
 
+  useEffect(() => () => clearDiveWaits(), []);
+
   const primary = useMemo(
     () => (state ? buttonsFor(state, mine, !!diceSpin || walking) : []),
     [state, mine, diceSpin, walking],
@@ -224,7 +251,7 @@ export function App() {
 
   return (
     <LookCtx.Provider value={look}>
-    <div className={`app ${pregame ? "pregame" : ""}`}>
+    <div className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""}`}>
       <header className="top">
         <div className="brand">DreamPoly</div>
         <div className="top-tools">
@@ -236,6 +263,16 @@ export function App() {
           </button>
         </div>
       </header>
+      {dive !== "idle" ? (
+        <div className={`dive ${dive}`} aria-hidden>
+          <div className="dive-bars">
+            {Array.from({ length: 9 }, (_, i) => (
+              <i key={i} style={{ "--i": i } as CSSProperties} />
+            ))}
+          </div>
+          <p className="dive-word">GO</p>
+        </div>
+      ) : null}
       {pregame ? (
         screen === "lobby" ? (
           <Lobby

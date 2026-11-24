@@ -183,17 +183,17 @@ export function Lobby({
             <b>Start</b>
             <small>{ready ? "The stall is open" : `${MIN_PLAYERS - joined.length} more to open`}</small>
           </button>
-          <button className="stall-btn" onClick={onSeatBots}>
+          <button className="stall-btn bots" onClick={onSeatBots}>
             <b>Seat bots</b>
             <small>Fill empty chairs</small>
           </button>
-          <button className="stall-btn" onClick={onPlayBots}>
+          <button className="stall-btn playbots" onClick={onPlayBots}>
             <b>Play with bots</b>
             <small>You plus three</small>
           </button>
-          <button className="stall-btn" onClick={onBack}>
-            <b>Back</b>
-            <small>Pick a table</small>
+          <button className="stall-btn back" onClick={onBack}>
+            <b>◀ Back</b>
+            <small>Leave table</small>
           </button>
         </div>
       </div>

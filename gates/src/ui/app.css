@@ -1223,6 +1223,69 @@ input {
   0%, 100% { box-shadow: 4px 4px 0 #0a080c, inset 0 2px 0 #fff4cc; }
   50% { box-shadow: 4px 4px 0 #0a080c, inset 0 2px 0 #fff4cc, 0 0 0 3px #e6c35a55; }
 }
+@keyframes dive-shut {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes dive-open {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+@keyframes dive-go {
+  0% { opacity: 0; transform: scale(0.6); }
+  35% { opacity: 1; transform: scale(1.08); }
+  70% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.2); }
+}
+@keyframes board-immerse {
+  from { transform: scale(1.16); filter: brightness(0.15); }
+  to { transform: none; filter: none; }
+}
+.dive {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: auto;
+}
+.dive-bars {
+  display: grid;
+  grid-template-rows: repeat(9, 1fr);
+  height: 100%;
+}
+.dive-bars i {
+  display: block;
+  background: #0a080c;
+  transform: scaleX(0);
+  transform-origin: left center;
+  border-bottom: 2px solid #e6c35a22;
+}
+.dive.cover .dive-bars i {
+  animation: dive-shut 0.42s steps(6) both;
+  animation-delay: calc(var(--i) * 0.03s);
+}
+.dive.open .dive-bars i {
+  transform-origin: right center;
+  animation: dive-open 0.48s steps(6) both;
+  animation-delay: calc(var(--i) * 0.028s);
+}
+.dive-word {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: clamp(64px, 12vw, 120px);
+  letter-spacing: 0.12em;
+  color: #fff4cc;
+  text-shadow: 5px 5px 0 #1a1208, -2px 0 0 #1a1208, 2px 0 0 #1a1208;
+  pointer-events: none;
+}
+.dive.cover .dive-word { animation: dive-go 0.7s steps(8) both; }
+.dive.open .dive-word { opacity: 0; }
+.app.is-open .play {
+  animation: board-immerse 0.62s steps(8) both;
+}
 
 .app.pregame {
   grid-template-rows: auto minmax(0, 1fr);
@@ -1538,6 +1601,44 @@ input {
   background: linear-gradient(180deg, #ffe9a8 0%, #e0b84a 48%, #a8883a 100%);
   color: #1a1208;
 }
+.stall-btn.bots {
+  background: linear-gradient(180deg, #243428, #1a221c);
+  color: #c8e8c4;
+  border-color: #6a9a6e;
+}
+.stall-btn.bots:hover:not(:disabled) {
+  background: linear-gradient(180deg, #2e4634, #243428);
+  color: #e4ffe0;
+  border-color: #9fd9b4;
+}
+.stall-btn.playbots {
+  background: linear-gradient(180deg, #243044, #1a2030);
+  color: #c8d8f0;
+  border-color: #6a82b4;
+}
+.stall-btn.playbots:hover:not(:disabled) {
+  background: linear-gradient(180deg, #2e4060, #243044);
+  color: #e8f0ff;
+  border-color: #8aa8e0;
+}
+.stall-btn.back {
+  margin-left: auto;
+  min-width: 124px;
+  align-items: flex-start;
+  background: #121016;
+  color: #d4c8b8;
+  border: 3px dashed #6a6058;
+  box-shadow: 4px 4px 0 #0a080c;
+}
+.stall-btn.back b { font-size: 20px; letter-spacing: 0.02em; }
+.stall-btn.back:hover:not(:disabled) {
+  background: #1c1822;
+  color: #fff4cc;
+  border-style: solid;
+  border-color: #f3eadf;
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 #0a080c;
+}
 .stall-btn:disabled { opacity: 0.45; filter: grayscale(0.35); }
 .join-rail {
   position: absolute;
@@ -1681,7 +1782,7 @@ input {
 .rail-ava.big { border-width: 3px; }
 .rail-ava img { width: 100%; height: 100%; object-fit: cover; }
 .rail-face.host .rail-ava { border-color: var(--accent); }
-.lobby-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
+.lobby-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; width: min(100%, 720px); }
 
 @media (max-width: 760px) {
   .center-actions { width: 100%; }
@@ -1697,5 +1798,5 @@ input {
 @media (prefers-reduced-motion: reduce) {
   .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk,
   .menu-vault, .menu-bill, .menu-stamp, .menu-chip, .menu-mascot, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
-  .lobby.is-in, .join-rail, .waiting-booth, .stall-btn { animation: none; transition: none; }
+  .lobby.is-in, .join-rail, .waiting-booth, .stall-btn, .dive-bars i, .dive-word, .app.is-open .play { animation: none; transition: none; }
 }

@@ -278,31 +278,31 @@ body {
 }
 .tile:hover { filter: brightness(1.06); }
 
-.tile.deed.owned {
-  background: color-mix(in srgb, var(--player) 16%, var(--tile-face));
+.tile.deed:not(.owned) .brand-logo,
+.tile.deed:not(.owned) .brand-fallback {
+  filter: grayscale(1);
+  opacity: 0.48;
 }
-.tile.deed.owned::before {
-  content: "";
+.tile.owned {
+  background: color-mix(in srgb, var(--player) 40%, var(--tile-face));
+}
+.tile.owned.mine {
+  background: color-mix(in srgb, var(--player) 58%, var(--tile-face));
+}
+.tile .claim {
   position: absolute;
-  inset: 0;
-  box-shadow: inset 0 0 0 3px var(--player);
-  pointer-events: none;
   z-index: 2;
+  background: var(--player);
+  pointer-events: none;
 }
-
-.tile .band {
-  position: absolute;
-  background: var(--band, #6d6458);
-  z-index: 1;
-}
+.tile.bottom .claim { left: 0; right: 0; bottom: 0; height: 10px; }
+.tile.top .claim { left: 0; right: 0; top: 0; height: 10px; }
+.tile.left .claim { top: 0; bottom: 0; left: 0; width: 10px; }
+.tile.right .claim { top: 0; bottom: 0; right: 0; width: 10px; }
 .tile.bottom { padding: 6px 4px 18px; }
 .tile.top { padding: 18px 4px 6px; }
 .tile.left { padding: 4px 6px 4px 18px; }
 .tile.right { padding: 4px 18px 4px 6px; }
-.tile.bottom .band { left: 0; right: 0; bottom: 0; height: 8px; }
-.tile.top .band { left: 0; right: 0; top: 0; height: 8px; }
-.tile.left .band { top: 0; bottom: 0; left: 0; width: 8px; }
-.tile.right .band { top: 0; bottom: 0; right: 0; width: 8px; }
 
 .deed-body {
   position: absolute;
@@ -393,65 +393,29 @@ body {
 .float-card .brand-fallback { width: 28px; height: 28px; }
 
 .tile.store-tile {
-  background: #141820;
-  color: #eef1f8;
-  box-shadow: inset 0 0 0 1px #2a3348;
+  color: #f4f6fb;
 }
 .tile.store-tile .deed-name { color: #f8fafc; }
-.tile.store-tile .deed-body em { color: var(--accent); }
-.tile.store-tile .kiosk {
-  font-size: clamp(6px, 10cqmin, 8px);
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--accent);
+.tile.store-tile .deed-body em { color: rgba(255,255,255,.7); }
+.tile.store-tile .brand-logo,
+.tile.store-tile .brand-fallback {
+  width: clamp(28px, 62cqmin, 54px);
+  height: clamp(28px, 62cqmin, 54px);
+  background: none;
+  padding: 0;
+  border: 0;
+  filter: none;
 }
-.tile.store-tile .store-mark {
-  width: clamp(24px, 52cqmin, 44px);
-  height: clamp(24px, 52cqmin, 44px);
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: rgba(255,255,255,.06);
+.tile.store-tile.id-app { background: #111111; }
+.tile.store-tile.id-app .brand-logo { filter: invert(1); }
+.tile.store-tile.id-play { background: #10261a; }
+.tile.store-tile.id-steam { background: #14202e; }
+.tile.store-tile.id-steam .brand-logo { filter: invert(1); }
+.tile.store-tile.id-epic { background: #161616; }
+.tile.store-tile.id-epic .brand-logo { filter: invert(1); }
+.tile.store-tile.owned {
+  background: color-mix(in srgb, var(--player) 52%, #0e1016);
 }
-.tile.store-tile .store-mark .brand-logo,
-.tile.store-tile .store-mark .brand-fallback {
-  width: 72%;
-  height: 72%;
-}
-.tile.store-tile.id-app {
-  background: linear-gradient(180deg, #1c1c1e, #0b0b0d);
-}
-.tile.store-tile.id-app .store-mark { background: #fff; }
-.tile.store-tile.id-play {
-  background: linear-gradient(180deg, #123d28, #071910);
-}
-.tile.store-tile.id-play .kiosk { color: #3ddc84; }
-.tile.store-tile.id-steam {
-  background: linear-gradient(180deg, #2a475e, #171a21);
-}
-.tile.store-tile.id-steam .kiosk { color: #66c0f4; }
-.tile.store-tile.id-epic {
-  background: linear-gradient(180deg, #2b2b2b, #101010);
-}
-.tile.store-tile.id-epic .kiosk { color: #fff; }
-.tile.store-tile.owned::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  box-shadow: inset 0 0 0 3px var(--player);
-  pointer-events: none;
-  z-index: 2;
-}
-
-.owner-mark {
-  position: absolute;
-  z-index: 4;
-}
-.tile.bottom .owner-mark { left: 3px; top: 3px; }
-.tile.top .owner-mark { left: 3px; bottom: 3px; }
-.tile.left .owner-mark { right: 3px; top: 3px; }
-.tile.right .owner-mark { left: 3px; top: 3px; }
 
 .brand-logo {
   width: clamp(22px, 48cqmin, 42px);
@@ -459,12 +423,14 @@ body {
   display: block;
   object-fit: contain;
   flex: none;
+  background: none;
+  padding: 0;
+  border: 0;
 }
 .brand-logo.img.invert {
-  background: #111;
-  border-radius: 4px;
-  padding: 3px;
-  box-sizing: border-box;
+  filter: invert(1);
+  background: none;
+  padding: 0;
 }
 .brand-fallback {
   width: clamp(22px, 48cqmin, 42px);

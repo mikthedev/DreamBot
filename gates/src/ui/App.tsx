@@ -187,6 +187,7 @@ export function App() {
               space={space}
               state={state}
               walk={walk}
+              you={me.id}
               open={openId === space.id}
               onHover={setHoverId}
               onOpen={(id) => setOpenId((cur) => (cur === id ? null : id))}
@@ -345,18 +346,16 @@ const SPECIAL: Record<string, { title: string; kicker: string }> = {
 
 type BoardPlayer = { id: string; name: string; avatar: string | null; color: string };
 
-function OwnerMark({ owner }: { owner: BoardPlayer }) {
-  return (
-    <span className="owner-mark" title={owner.name}>
-      <Face name={owner.name} avatar={owner.avatar} color={owner.color} size={16} />
-    </span>
-  );
+function ownedClass(owner: BoardPlayer | undefined, you: string) {
+  if (!owner) return "";
+  return owner.id === you ? "owned mine" : "owned theirs";
 }
 
 function Tile({
   space,
   state,
   walk,
+  you,
   open,
   onHover,
   onOpen,
@@ -364,6 +363,7 @@ function Tile({
   space: (typeof TRACK)[number];
   state: State;
   walk: Record<string, number>;
+  you: string;
   open: boolean;
   onHover: (id: string | null) => void;
   onOpen: (id: string) => void;
@@ -391,7 +391,7 @@ function Tile({
         space={space}
         hot={hot}
         open={open}
-        band={setOf(co.set).color}
+        you={you}
         name={co.name}
         logoId={co.id}
         price={facts.price}
@@ -425,6 +425,7 @@ function Tile({
       space={space}
       hot={hot}
       open={open}
+      you={you}
       name={facts.name}
       logoId={space.id}
       price={facts.price}
@@ -542,7 +543,7 @@ function DeedTile({
   space,
   hot,
   open,
-  band,
+  you,
   name,
   logoId,
   price,
@@ -553,7 +554,7 @@ function DeedTile({
   space: (typeof TRACK)[number];
   hot: boolean;
   open: boolean;
-  band: string;
+  you: string;
   name: string;
   logoId: string;
   price: string;
@@ -563,19 +564,17 @@ function DeedTile({
 }) {
   return (
     <div
-      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${owner ? "owned" : ""}`}
+      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${ownedClass(owner, you)}`}
       style={
         {
           gridColumn: space.col,
           gridRow: space.row,
-          "--band": band,
           "--player": owner?.color,
         } as CSSProperties
       }
       {...bind}
     >
-      <i className="band" aria-hidden />
-      {owner && <OwnerMark owner={owner} />}
+      {owner && <i className="claim" aria-hidden />}
       {level > 0 && (
         <span className="houses">
           {Array.from({ length: level }, (_, i) => (
@@ -596,6 +595,7 @@ function StoreTile({
   space,
   hot,
   open,
+  you,
   name,
   logoId,
   price,
@@ -605,6 +605,7 @@ function StoreTile({
   space: (typeof TRACK)[number];
   hot: boolean;
   open: boolean;
+  you: string;
   name: string;
   logoId: string;
   price: string;
@@ -613,7 +614,7 @@ function StoreTile({
 }) {
   return (
     <div
-      className={`tile store-tile ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${owner ? "owned" : ""}`}
+      className={`tile store-tile ${space.side} id-${space.id} ${hot ? "hot" : ""} ${open ? "open" : ""} ${ownedClass(owner, you)}`}
       style={
         {
           gridColumn: space.col,
@@ -623,12 +624,9 @@ function StoreTile({
       }
       {...bind}
     >
-      {owner && <OwnerMark owner={owner} />}
+      {owner && <i className="claim" aria-hidden />}
       <div className="deed-body">
-        <span className="kiosk">Store</span>
-        <span className="store-mark">
-          <BrandLogo id={logoId} label={name} />
-        </span>
+        <BrandLogo id={logoId} label={name} />
         <strong className="deed-name">{name}</strong>
         <em>{price}</em>
       </div>

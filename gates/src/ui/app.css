@@ -245,6 +245,14 @@ body {
   border: 3px solid #2a2430;
   box-shadow: 4px 4px 0 #0a080c;
 }
+.table-core.is-market {
+  width: min(96%, 520px);
+  max-height: 100%;
+  overflow: auto;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  text-align: left;
+}
 .dash {
   display: flex;
   align-items: center;
@@ -813,12 +821,47 @@ button:disabled { opacity: 0.4; cursor: default; }
   border-left: 1px solid var(--line);
   animation: sheet-in 0.26s ease;
 }
-.sheet article.deal { width: min(560px, 100%); }
+.trade-desk {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.trade-desk button { min-width: 0; padding: 6px 10px; }
+.trade-desk header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.trade-desk header b {
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 22px;
+  line-height: 1;
+}
+.trade-desk header span,
+.deal-ok {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0;
+}
+.trade-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.trade-people button {
+  min-width: 0;
+  padding: 4px 8px 4px 4px;
+  gap: 6px;
+}
 .deal-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin: 10px 0;
+  gap: 10px;
+  margin: 0;
+  width: 100%;
 }
 .deal-grid small {
   display: block;
@@ -835,12 +878,12 @@ button:disabled { opacity: 0.4; cursor: default; }
   gap: 6px;
   font-weight: 700;
 }
-.cash-line input { width: 96px; padding: 8px; }
+.cash-line input { width: 72px; padding: 6px 8px; }
 .check {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 8px 0;
+  margin: 6px 0;
   font-size: 12px;
 }
 .deal-cos {
@@ -848,17 +891,29 @@ button:disabled { opacity: 0.4; cursor: default; }
   margin: 0;
   padding: 0;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 28vh;
+  overflow: auto;
 }
+.deal-cos li { min-width: 0; }
 .deal-cos button {
-  width: 100%;
+  min-width: 0;
+  width: auto;
+  padding: 4px 7px;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 6px;
+  font-size: 11px;
 }
 .deal-cos .brand-logo,
-.deal-cos .brand-fallback { width: 16px; height: 16px; }
-.deal-warn { color: #fb7185; }
+.deal-cos .brand-fallback { width: 14px; height: 14px; }
+.deal-warn { color: #fb7185; margin: 0; font-size: 12px; }
+.trade-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
 .market-card .go { margin-top: 8px; width: 100%; }
 .sheet h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
 .sheet p, .log li { color: var(--muted); font-size: 13px; line-height: 1.45; }

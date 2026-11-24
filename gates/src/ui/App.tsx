@@ -34,7 +34,9 @@ export function App() {
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) !== "off");
   const [discordId, setDiscordId] = useState(() => localStorage.getItem(ID_KEY) || "");
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [sheet, setSheet] = useState<null | "more" | "test" | "log" | "trade">(null);
+  const [sheet, setSheet] = useState<null | "more" | "test" | "log">(null);
+  const [trading, setTrading] = useState(false);
+  const skipMarketOpen = useRef(false);
   const [state, setState] = useState<State>(() =>
     createGame(seats("You", null, true), { seed: Date.now() % 100000 }),
   );
@@ -73,6 +75,19 @@ export function App() {
   const who = actor(state);
   const mine = who?.id === me.id && !me.out;
 
+  useEffect(() => {
+    if (state.phase !== "extra") {
+      setTrading(false);
+      skipMarketOpen.current = false;
+    }
+  }, [state.phase]);
+
+  useEffect(() => {
+    if (!mine || walking || diceSpin || state.phase !== "extra" || !me.freeTrade) return;
+    if (skipMarketOpen.current) return;
+    setTrading(true);
+  }, [mine, walking, diceSpin, state.phase, me.freeTrade, state.rollTick]);
+
   function act(action: Action) {
     setState((s) => apply(s, action));
   }
@@ -102,6 +117,7 @@ export function App() {
     const name = profile?.username || "You";
     setState(createGame(seats(name, profile?.avatar ?? null, withBots), { seed: Date.now() % 100000 }));
     setSheet(null);
+    setTrading(false);
   }
 
   const primary = useMemo(() => buttonsFor(state, mine, !!diceSpin || walking), [state, mine, diceSpin, walking]);
@@ -166,8 +182,25 @@ export function App() {
           }}
           onContextMenu={(e) => e.preventDefault()}
         >
-          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${!mine && !walking ? "idle" : "live"}`}>
-            <div className="table-core">
+          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${trading ? "trading" : ""} ${!mine && !walking && !trading ? "idle" : "live"}`}>
+            <div className={`table-core ${trading ? "is-market" : ""}`}>
+              {trading ? (
+                <TradeDesk
+                  state={state}
+                  you={me}
+                  mine={mine}
+                  onClose={() => {
+                    skipMarketOpen.current = true;
+                    setTrading(false);
+                  }}
+                  onDeal={(action) => {
+                    act(action);
+                    skipMarketOpen.current = true;
+                    setTrading(false);
+                  }}
+                />
+              ) : (
+                <>
               <div className="dash">
                 <Face name={me.name} avatar={me.avatar} color={me.color} size={36} />
                 <div className="stats">
@@ -217,12 +250,14 @@ export function App() {
                   </button>
                 ))}
                 {mine && state.phase === "extra" && !walking && !diceSpin ? (
-                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => setSheet("trade")}>
+                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => setTrading(true)}>
                     {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
                   </button>
                 ) : null}
                 <button className="ghost" onClick={() => setSheet("more")}>More</button>
               </div>
+                </>
+              )}
             </div>
           </div>
           {TRACK.map((space) => (
@@ -238,6 +273,11 @@ export function App() {
               onOpen={() => {
                 const g = groupOf(space.id);
                 setOwnerPeek(null);
+                if (g === "market" && mine && state.phase === "extra") {
+                  setOpenGroup(null);
+                  setTrading(true);
+                  return;
+                }
                 setOpenGroup((cur) => (g && cur === g ? null : g));
               }}
               onOwnerPeek={() => {
@@ -248,7 +288,7 @@ export function App() {
               }}
             />
           ))}
-          {focusOwner ? (
+          {trading ? null : focusOwner ? (
             <Holdings
               state={state}
               player={state.players.find((p) => p.id === focusOwner)!}
@@ -258,7 +298,7 @@ export function App() {
               state={state}
               you={me}
               mine={mine}
-              onTrade={() => setSheet("trade")}
+              onTrade={() => setTrading(true)}
             />
           ) : openGroup ? (
             <GroupCard group={openGroup} state={state} />
@@ -278,7 +318,7 @@ export function App() {
 
       {sheet && (
         <div className="sheet" onClick={() => setSheet(null)}>
-          <article className={sheet === "trade" ? "deal" : ""} onClick={(e) => e.stopPropagation()}>
+          <article onClick={(e) => e.stopPropagation()}>
             {sheet === "more" && (
               <>
                 <h2>More</h2>
@@ -300,7 +340,14 @@ export function App() {
                       License {setOf(kind).label} $180
                     </button>
                   ))}
-                  <button className="ghost" disabled={!mine || state.phase !== "extra"} onClick={() => setSheet("trade")}>
+                  <button
+                    className="ghost"
+                    disabled={!mine || state.phase !== "extra"}
+                    onClick={() => {
+                      setSheet(null);
+                      setTrading(true);
+                    }}
+                  >
                     {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
                   </button>
                   <button className="ghost" onClick={() => setSheet("log")}>Recent</button>
@@ -316,18 +363,6 @@ export function App() {
                 ))}
                 {!COMPANIES.some((c) => state.companies[c.id].owner === me.id) && <p>You do not own a company yet.</p>}
               </>
-            )}
-            {sheet === "trade" && (
-              <TradeDesk
-                state={state}
-                you={me}
-                mine={mine}
-                onClose={() => setSheet(null)}
-                onDeal={(action) => {
-                  act(action);
-                  setSheet(null);
-                }}
-              />
             )}
             {sheet === "log" && (
               <>
@@ -1105,25 +1140,24 @@ function TradeDesk({
 
   if (!other) {
     return (
-      <>
-        <h2>Market</h2>
+      <div className="trade-desk">
+        <b>Market</b>
         <p>Nobody else is at the table.</p>
         <button className="ghost" onClick={onClose}>Close</button>
-      </>
+      </div>
     );
   }
 
   return (
-    <>
-      <h2>Market</h2>
-      <p>
-        {you.freeTrade
-          ? "You landed on Market — this deal has no desk fee."
-          : `Desk fee $${fee}. Land on Market next time to trade free.`}
-      </p>
-      <div className="row">
+    <div className="trade-desk">
+      <header>
+        <b>Market</b>
+        <span>{you.freeTrade ? "Free this turn" : `Desk $${fee}`}</span>
+      </header>
+      <div className="trade-people">
         {others.map((p) => (
           <button key={p.id} className={p.id === to ? "" : "ghost"} onClick={() => { setTo(p.id); setGet([]); }}>
+            <Face name={p.name} avatar={p.avatar} color={p.color} size={22} />
             {p.name}
           </button>
         ))}
@@ -1149,15 +1183,15 @@ function TradeDesk({
               <li key={c.id}>
                 <button className={give.includes(c.id) ? "" : "ghost"} onClick={() => toggle(give, c.id, setGive)}>
                   <BrandLogo id={c.id} label={c.name} />
-                  {c.name}
+                  {shortName(c.name)}
                 </button>
               </li>
             ))}
-            {!yours.length && <li>You own nothing yet</li>}
+            {!yours.length && <li>Nothing owned</li>}
           </ul>
         </div>
         <div>
-          <small>You get from {other.name}</small>
+          <small>From {other.name}</small>
           <label className="cash-line">
             $
             <input
@@ -1176,16 +1210,16 @@ function TradeDesk({
               <li key={c.id}>
                 <button className={get.includes(c.id) ? "" : "ghost"} onClick={() => toggle(get, c.id, setGet)}>
                   <BrandLogo id={c.id} label={c.name} />
-                  {c.name}
+                  {shortName(c.name)}
                 </button>
               </li>
             ))}
-            {!theirs.length && <li>{other.name} owns nothing yet</li>}
+            {!theirs.length && <li>Nothing owned</li>}
           </ul>
         </div>
       </div>
-      {problem ? <p className="deal-warn">{problem}</p> : <p>Ready to swap.</p>}
-      <div className="row">
+      <p className={problem ? "deal-warn" : "deal-ok"}>{problem || "Ready"}</p>
+      <div className="trade-actions">
         <button disabled={!!problem} onClick={() => onDeal(action)}>
           Make deal
         </button>
@@ -1193,7 +1227,7 @@ function TradeDesk({
           Cancel
         </button>
       </div>
-    </>
+    </div>
   );
 }
 

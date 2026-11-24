@@ -50,6 +50,7 @@ export function App() {
   const [dive, setDive] = useState<"idle" | "cover" | "open">("idle");
   const [helpOpen, setHelpOpen] = useState(false);
   const [leaveWarn, setLeaveWarn] = useState(false);
+  const [brokeShake, setBrokeShake] = useState(0);
   const [mix, setMix] = useState(() => getMix());
   const diveWait = useRef<number[]>([]);
   const [pickedMode, setPickedMode] = useState<Mode>("moves");
@@ -376,6 +377,12 @@ export function App() {
             ) : null}
           </div>
           {state.mode === "moves" ? <span className="till-fuel">{shownMoves} moves</span> : <span className="till-fuel">Classic table</span>}
+          {state.mode === "moves" && me && me.moves <= 4 && !me.out ? (
+            <div className="till-warn">
+              <PixelCaution />
+              <span>Low moves. Pass GO, collect rent, rest in Jail, or buy one for ${fuelPrice(me)}.</span>
+            </div>
+          ) : null}
           <ul>
             {state.players.filter((p) => !p.out).map((p) => (
               <li key={p.id} style={{ "--player": p.color } as CSSProperties}>
@@ -421,7 +428,12 @@ export function App() {
           onContextMenu={(e) => e.preventDefault()}
         >
           <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${stallOpen ? "trading" : ""} ${!mine && !walking && !stallOpen ? "idle" : "live"}`}>
-            <div className={`table-core ${stallOpen ? "is-market" : ""}`}>
+            <div
+              className={`table-core ${stallOpen ? "is-market" : ""} ${brokeShake ? "is-shaking" : ""}`}
+              onAnimationEnd={(e) => {
+                if (e.target === e.currentTarget) setBrokeShake(0);
+              }}
+            >
               {inDeal && state.offer ? (
                 <OfferStall
                   state={state}
@@ -487,13 +499,28 @@ export function App() {
                 {primary.map((b) => (
                   <button
                     key={b.label}
-                    className={b.ghost ? "ghost" : b.warn ? "warn" : "go"}
+                    className={b.ghost ? "ghost" : b.broke ? "warn" : b.warn ? "warn" : "go"}
                     disabled={(!mine && b.needsYou) || !!diceSpin || walking}
-                    onClick={() => (b.roll ? rollThen(b.action) : act(b.action))}
+                    onClick={() => {
+                      if (b.broke) {
+                        sfx("warning");
+                        setBrokeShake(0);
+                        window.requestAnimationFrame(() => setBrokeShake(1));
+                        return;
+                      }
+                      if (b.roll) rollThen(b.action);
+                      else act(b.action);
+                    }}
                   >
                     {b.label}
                   </button>
                 ))}
+                {primary.some((b) => b.broke) ? (
+                  <p className="broke-sign">
+                    <PixelCaution />
+                    <span>Can&apos;t afford this</span>
+                  </p>
+                ) : null}
                 {mine && state.phase === "extra" && !walking && !diceSpin ? (
                   <button className={me.freeTrade ? "go" : "ghost"} onMouseEnter={sfxPlayHover} onClick={() => setTrading(true)}>
                     {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
@@ -555,13 +582,6 @@ export function App() {
         </div>
       </div>
       </div>
-      )}
-
-      {state && me && me.moves <= 4 && !me.out && state.mode === "moves" && (
-        <div className="banner warn-banner">
-          <PixelCaution />
-          <span>Low on moves. Pass GO or collect rent, rest in Jail, or buy one for ${fuelPrice(me)}.</span>
-        </div>
       )}
 
       {helpOpen && state ? (
@@ -1190,7 +1210,7 @@ function buttonsFor(
   state: State,
   mine: boolean,
   busy: boolean,
-): { label: string; action: Action; ghost?: boolean; warn?: boolean; needsYou: boolean; roll?: boolean }[] {
+): { label: string; action: Action; ghost?: boolean; warn?: boolean; broke?: boolean; needsYou: boolean; roll?: boolean }[] {
   if (state.phase === "over") return [];
   if (busy) return [];
   if (!mine) return [];
@@ -1204,8 +1224,9 @@ function buttonsFor(
     ];
   }
   if (state.phase === "store") {
+    const broke = (actor(state)?.cash ?? 0) < 150;
     return [
-      { label: "Buy $150", action: { type: "store", pick: "buy" }, needsYou: true },
+      { label: "Buy $150", action: { type: "store", pick: "buy" }, needsYou: true, broke },
       { label: "Skip", action: { type: "store", pick: "skip" }, ghost: true, needsYou: true },
     ];
   }
@@ -1216,8 +1237,9 @@ function buttonsFor(
   }
   if (state.phase === "land" && state.land) {
     const co = COMPANIES.find((c) => c.id === state.land)!;
+    const broke = (actor(state)?.cash ?? 0) < co.price;
     return [
-      { label: `Buy ${co.name} $${co.price}`, action: { type: "land", pick: "buy" }, needsYou: true },
+      { label: `Buy ${co.name} $${co.price}`, action: { type: "land", pick: "buy" }, needsYou: true, broke },
       { label: "Leave it", action: { type: "land", pick: "skip" }, ghost: true, needsYou: true },
     ];
   }

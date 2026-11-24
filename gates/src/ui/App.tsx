@@ -563,8 +563,13 @@ export function App() {
         </div>
       ) : null}
       {sheet && (
-        <div className={`sheet ${sheet === "more" ? "is-stall is-pass" : ""}`} onClick={() => { sfx("back"); setSheet(null); }}>
-          <article className={sheet === "more" ? "stall-menu" : ""} onClick={(e) => e.stopPropagation()}>
+        <div className={`sheet ${sheet === "more" || sheet === "log" ? "is-stall" : ""}`} onClick={() => { sfx("back"); setSheet(null); }}>
+          {sheet === "more" || sheet === "log" ? (
+            <button type="button" className="board-close overlay-close" title="Back to the board" onClick={(e) => { e.stopPropagation(); sfx("back"); setSheet(null); }}>
+              ◀
+            </button>
+          ) : null}
+          <article className={sheet === "more" || sheet === "log" ? "stall-menu" : ""} onClick={(e) => e.stopPropagation()}>
             {sheet === "more" && state && me && (
               <MoreStall
                 state={state}
@@ -582,8 +587,15 @@ export function App() {
             )}
             {sheet === "log" && state && (
               <>
-                <h2>Recent</h2>
-                <ul className="log">{state.log.map((line, i) => <li key={i}>{line}</li>)}</ul>
+                <header className="stall-head">
+                  <p className="start-kicker">Table</p>
+                  <h2>Recent</h2>
+                </header>
+                <ul className="log stall-log">{state.log.map((line, i) => <li key={i}>{line}</li>)}</ul>
+                <button type="button" className="stall-act log" onClick={() => { sfx("back"); setSheet("more"); }}>
+                  <b>More</b>
+                  <span>Back to the stall</span>
+                </button>
               </>
             )}
             {sheet === "test" && (

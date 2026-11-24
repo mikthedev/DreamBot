@@ -897,23 +897,30 @@ button:disabled { opacity: 0.4; cursor: default; }
   background: rgba(8, 6, 10, .78);
 }
 .sheet.is-stall article {
-  width: min(640px, calc(100% - 32px));
+  width: min(560px, calc(100vw - 48px));
   height: auto;
-  max-height: min(88vh, 720px);
+  max-height: min(72vh, 540px);
   border-left: 0;
+  background: #1c1822;
 }
+.sheet.is-stall article.stall-menu,
 .stall-menu {
   position: relative;
-  width: min(520px, 100%);
+  width: min(560px, calc(100vw - 48px));
   height: auto;
-  max-height: min(62vh, 420px);
+  max-height: min(72vh, 540px);
   background: #1c1822;
-  padding: 12px 12px 14px;
+  padding: 16px 16px 14px;
   overflow: auto;
   border: 3px solid #c9b48a;
-  border-left: 3px solid #c9b48a;
   box-shadow: 8px 8px 0 #0a080c;
   animation: card-in 0.32s steps(6) both;
+}
+.overlay-close {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  z-index: 2;
 }
 .board-close {
   width: 40px;
@@ -951,8 +958,16 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .stall-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+.stall-log {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  max-height: 280px;
+  overflow: auto;
+  color: #f6eee4;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
 }
 .stall-act {
   display: flex;
@@ -960,9 +975,9 @@ button:disabled { opacity: 0.4; cursor: default; }
   align-items: flex-start;
   gap: 2px;
   min-height: 0;
-  padding: 8px 10px;
+  padding: 10px 12px;
   text-align: left;
-  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
   background: linear-gradient(180deg, #2a2418, #1c1822);
   color: #fff4cc;
   border: 3px solid #c9b48a;
@@ -976,7 +991,12 @@ button:disabled { opacity: 0.4; cursor: default; }
   font-weight: 800;
   opacity: 0.8;
 }
-.stall-act b { font-size: 16px; line-height: 1.05; font-weight: 700; }
+.stall-act b {
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 18px;
+  line-height: 1.1;
+  font-weight: 700;
+}
 .stall-act span {
   font-family: Outfit, sans-serif;
   font-size: 11px;
@@ -2160,8 +2180,7 @@ input {
   color: #fff4cc;
 }
 .leave-box .leave-warn-act { margin-top: 12px; }
-.sheet.is-pass { pointer-events: none; }
-.sheet.is-pass article { pointer-events: auto; }
+.sheet.is-stall .overlay-close { pointer-events: auto; }
 @media (max-width: 760px) {
   .how-grid { grid-template-columns: 1fr; }
   .how-card { padding: 14px; }

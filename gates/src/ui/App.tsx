@@ -38,6 +38,7 @@ export function App() {
   const [held, setHeld] = useState<{ cash: number; moves: number } | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [seatHover, setSeatHover] = useState<string | null>(null);
   const walking = Object.keys(walk).length > 0;
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
@@ -106,24 +107,25 @@ export function App() {
     <div className="app">
       <header className="top">
         <div className="brand">DreamPoly</div>
-        <div className="seats">
-          {state.players.map((p) => (
-            <div
-              key={p.id}
-              className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""}`}
-              style={{ "--player": p.color } as CSSProperties}
-            >
-              <Face name={p.name} avatar={p.avatar} color={p.color} size={26} />
-              <b>{p.name}</b>
-              <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
-              <Holdings state={state} player={p} />
-            </div>
-          ))}
-        </div>
         <button className="ghost tiny" onClick={() => setSheet("test")}>
           {testOn ? "Test tools" : "Test off"}
         </button>
       </header>
+      <div className="roster">
+        {state.players.map((p) => (
+          <div
+            key={p.id}
+            className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id ? "peek" : ""}`}
+            style={{ "--player": p.color } as CSSProperties}
+            onMouseEnter={() => setSeatHover(p.id)}
+            onMouseLeave={() => setSeatHover(null)}
+          >
+            <Face name={p.name} avatar={p.avatar} color={p.color} size={26} />
+            <b>{p.name}</b>
+            <span>{p.out ? "Out" : `$${p.cash} · ${p.moves}m`}</span>
+          </div>
+        ))}
+      </div>
 
       <div className="stage">
         <div
@@ -195,6 +197,12 @@ export function App() {
             />
           ))}
           <TileFloat id={openId ?? hoverId} mode={openId ? "inspect" : "owner"} state={state} />
+          {seatHover ? (
+            <Holdings
+              state={state}
+              player={state.players.find((p) => p.id === seatHover)!}
+            />
+          ) : null}
           <Pawns state={state} walk={walk} setWalk={setWalk} />
         </div>
       </div>
@@ -801,12 +809,13 @@ function slotOffset(index: number, count: number, side: (typeof TRACK)[number]["
   return [0, t];
 }
 
-function Holdings({ state, player }: { state: State; player: { id: string; name: string } }) {
+function Holdings({ state, player }: { state: State; player: { id: string; name: string; cash: number; color: string } }) {
   const companies = COMPANIES.filter((c) => state.companies[c.id].owner === player.id);
   const stores = STORES.filter((s) => state.stores[s.id] === player.id);
   return (
-    <div className="holdings" role="tooltip">
+    <div className="holdings" role="tooltip" style={{ "--player": player.color } as CSSProperties}>
       <div className="holdings-title">{player.name}</div>
+      <div className="holdings-cash">${player.cash}</div>
       {companies.length === 0 && stores.length === 0 ? (
         <p>No companies yet</p>
       ) : (

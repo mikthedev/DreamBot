@@ -234,6 +234,13 @@ function beginTurn(state: State) {
     }
     p.moves -= 1;
   }
+  const owned = COMPANIES.filter((c) => state.companies[c.id].owner === p.id).length;
+  const shops = STORES.filter((s) => state.stores[s.id] === p.id).length;
+  const dividend = owned * 20 + shops * 25;
+  if (dividend > 0) {
+    p.cash += dividend;
+    say(state, `${p.name} collects $${dividend} from holdings.`);
+  }
   if (!p.leftHome && spaceId(p) === "home") {
     p.leftHome = true;
     say(state, `${p.name} leaves GO.`);
@@ -268,12 +275,11 @@ function payCash(state: State, from: Player, to: Player | null, printed: number,
     return;
   }
   let due = printed;
-  if (state.mode === "moves") due = Math.min(printed, Math.floor(from.cash / 2));
   if (state.mode === "classic" && from.cash < due) {
     liquidate(state, from, due);
     if (from.out) return;
-    due = Math.min(due, from.cash);
   }
+  due = Math.min(due, Math.max(0, from.cash));
   from.cash -= due;
   if (!to) return;
   if (due > 0) spark(state, to);

@@ -91,8 +91,7 @@ function cloudPaysChips(): ScenarioResult {
   const cloudBefore = s.players[1].cash;
   const chipsBefore = s.players[2].cash;
   s = apply(s, { type: "path", pick: "walk" });
-  const printed = COMPANIES.find((c) => c.id === "gcloud")!.rent[2];
-  const paid = Math.min(printed, 200);
+  const paid = COMPANIES.find((c) => c.id === "gcloud")!.rent[2];
   const cut = Math.floor(paid / 4);
   const ok = s.players[1].cash === cloudBefore + paid - cut && s.players[2].cash === chipsBefore + cut;
   return {

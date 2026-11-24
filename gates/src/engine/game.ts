@@ -111,10 +111,10 @@ export type Offer = {
   fee: number;
 };
 
-const COLORS = ["#3b5bdb", "#2b8a6e", "#c4922a", "#b44d7a", "#b54a4a", "#c56e2d", "#2f8f9a", "#6b5b95"];
+export const COLORS = ["#3b5bdb", "#2b8a6e", "#c4922a", "#b44d7a", "#b54a4a", "#c56e2d", "#2f8f9a", "#6b5b95"];
 
 export function createGame(
-  people: { id: string; name: string; avatar?: string | null; bot?: boolean; test?: boolean }[],
+  people: { id: string; name: string; avatar?: string | null; bot?: boolean; test?: boolean; color?: string }[],
   opts?: { mode?: Mode; seed?: number },
 ): State {
   const seed = opts?.seed ?? 1;
@@ -126,7 +126,7 @@ export function createGame(
       id: p.id,
       name: p.name,
       avatar: p.avatar ?? null,
-      color: COLORS[i % COLORS.length],
+      color: p.color || COLORS[i % COLORS.length],
       bot: !!p.bot,
       test: !!p.test,
       cash: START_CASH,

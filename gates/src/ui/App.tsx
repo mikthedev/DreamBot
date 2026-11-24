@@ -20,7 +20,7 @@ import {
   type Player,
   type State,
 } from "../engine/game";
-import { Lobby, StartMenu, guestPool, type SeatPerson } from "./start";
+import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -141,37 +141,72 @@ export function App() {
 
   function openLobby(mode: Mode) {
     const name = profile?.username || "You";
-    const people = guestPool(name, profile?.avatar ?? null, testOn);
+    const you: SeatPerson = { id: "you", name, avatar: profile?.avatar ?? null, color: savedPieceColor() };
     setPickedMode(mode);
-    setJoined([people[0]]);
-    setSpectators(people.slice(1));
+    setJoined([you]);
+    setSpectators([]);
     setScreen("lobby");
     setState(null);
   }
 
   function joinSeat(id?: string) {
-    const pick = id ?? (joined.some((p) => p.id === "you") ? spectators[0]?.id : "you");
+    const pick = id ?? "you";
     if (!pick || joined.length >= MAX_PLAYERS) return;
-    const person = spectators.find((p) => p.id === pick);
+    if (joined.some((p) => p.id === pick)) return;
+    const fromWatch = spectators.find((p) => p.id === pick);
+    const you: SeatPerson = {
+      id: "you",
+      name: profile?.username || "You",
+      avatar: profile?.avatar ?? null,
+      color: savedPieceColor(),
+    };
+    const person = fromWatch ?? (pick === "you" ? you : undefined);
     if (!person) return;
     setSpectators((s) => s.filter((p) => p.id !== pick));
     setJoined((j) => [...j, person]);
   }
 
   function spectateSeat(id: string) {
-    if (id === "you") return;
     const person = joined.find((p) => p.id === id);
     if (!person) return;
     setJoined((j) => j.filter((p) => p.id !== id));
-    setSpectators((s) => [...s, person]);
+    setSpectators((s) => (s.some((p) => p.id === id) ? s : [...s, person]));
   }
 
-  function startTable() {
-    if (joined.length < 3 || joined.length > MAX_PLAYERS) return;
+  function painted(people: SeatPerson[]) {
+    return people.map((p) => (p.id === "you" ? { ...p, color: savedPieceColor() } : p));
+  }
+
+  function startTable(people = joined) {
+    if (people.length < 3 || people.length > MAX_PLAYERS) return;
     setWalk({});
     setTrading(false);
-    setState(createGame(joined, { mode: pickedMode, seed: Date.now() % 100000 }));
+    setState(createGame(painted(people), { mode: pickedMode, seed: Date.now() % 100000 }));
     setScreen("play");
+  }
+
+  function seatBots() {
+    const name = profile?.username || "You";
+    const pool = guestPool(name, profile?.avatar ?? null, true);
+    const humans = joined.filter((p) => !p.bot);
+    const bots = pool.filter((p) => p.bot);
+    const next = [...humans];
+    for (const b of bots) {
+      if (next.length >= 4) break;
+      if (!next.some((p) => p.id === b.id)) next.push(b);
+    }
+    const ids = new Set(next.map((p) => p.id));
+    setJoined(next);
+    setSpectators((s) => s.filter((p) => !ids.has(p.id)));
+  }
+
+  function playWithBots() {
+    const name = profile?.username || "You";
+    const pool = guestPool(name, profile?.avatar ?? null, true);
+    const table = painted(pool.slice(0, 4));
+    setJoined(table);
+    setSpectators([]);
+    startTable(table);
   }
 
   const primary = useMemo(
@@ -205,14 +240,15 @@ export function App() {
         screen === "lobby" ? (
           <Lobby
             mode={pickedMode}
-            hostId="you"
+            youId="you"
             joined={joined}
             spectators={spectators}
-            testOn={testOn}
             onJoin={joinSeat}
             onSpectate={spectateSeat}
-            onStart={startTable}
+            onStart={() => startTable()}
             onBack={() => setScreen("menu")}
+            onSeatBots={seatBots}
+            onPlayBots={playWithBots}
           />
         ) : (
           <StartMenu onPick={openLobby} />

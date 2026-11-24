@@ -1,6 +1,9 @@
-import type { CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { MAX_PLAYERS, MIN_PLAYERS } from "../engine/data";
-import type { Mode } from "../engine/game";
+import { COLORS, type Mode } from "../engine/game";
+import { PixelDie, PixelPawn } from "./marks";
+
+const PIECE_KEY = "gates-piece-color";
 
 export type SeatPerson = {
   id: string;
@@ -8,6 +11,7 @@ export type SeatPerson = {
   avatar: string | null;
   bot?: boolean;
   test?: boolean;
+  color?: string;
 };
 
 export function guestPool(name: string, avatar: string | null, withBots: boolean): SeatPerson[] {
@@ -53,103 +57,100 @@ export function StartMenu({
 
 export function Lobby({
   mode,
-  hostId,
+  youId,
   joined,
   spectators,
-  testOn,
   onJoin,
   onSpectate,
   onStart,
   onBack,
+  onSeatBots,
+  onPlayBots,
 }: {
   mode: Mode;
-  hostId: string;
+  youId: string;
   joined: SeatPerson[];
   spectators: SeatPerson[];
-  testOn: boolean;
   onJoin: (id?: string) => void;
   onSpectate: (id: string) => void;
   onStart: () => void;
   onBack: () => void;
+  onSeatBots: () => void;
+  onPlayBots: () => void;
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
-  const seated = joined.length > 0;
-  const kick = [...joined].reverse().find((p) => p.id !== hostId);
+  const inTable = joined.some((p) => p.id === youId);
+  const [spectateOpen, setSpectateOpen] = useState(true);
+
   return (
     <div className="lobby">
       <div className="join-rail" aria-label="Join and spectators">
-        {seated ? (
+        {!inTable ? (
+          <button className="join-plus" title="Join the table" onClick={() => onJoin(youId)}>
+            +
+          </button>
+        ) : null}
+        {joined.length > 0 ? (
           <div className="join-in">
-            {ready ? (
-              <button className="start-pip" title="Start table" onClick={onStart}>
-                S
-              </button>
-            ) : null}
             <div className="join-card">
-              <button
-                className="join-minus"
-                title={kick ? `Unseat ${kick.name}` : "Table is open"}
-                onClick={() => kick && onSpectate(kick.id)}
-                disabled={!kick}
-              >
-                −
-              </button>
+              {inTable ? (
+                <button className="join-minus" title="Watch as a spectator" onClick={() => onSpectate(youId)}>
+                  −
+                </button>
+              ) : null}
               {joined.map((p) => (
+                <span key={p.id} className={`rail-face ${p.id === youId ? "host" : ""}`} title={p.name}>
+                  <RailFace person={p} />
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <div className={`spectate-rail ${spectateOpen ? "" : "is-min"}`}>
+          <div className="spectate-eye" title="Spectators">
+            <EyeIcon />
+          </div>
+          {spectateOpen ? (
+            <div className="spectate-list">
+              {spectators.map((p) => (
                 <button
                   key={p.id}
-                  className={`rail-face ${p.id === hostId ? "host" : ""}`}
-                  title={p.id === hostId ? `${p.name} (host)` : `Move ${p.name} to spectators`}
-                  onClick={() => p.id !== hostId && onSpectate(p.id)}
+                  className="rail-face"
+                  title={p.id === youId ? "You are watching" : `Seat ${p.name}`}
+                  onClick={() => onJoin(p.id)}
                 >
                   <RailFace person={p} />
                 </button>
               ))}
             </div>
-          </div>
-        ) : (
-          <button className="join-plus" title="Join the table" onClick={() => onJoin()}>
-            +
+          ) : null}
+          <button
+            className="spectate-foot"
+            title={spectateOpen ? "Hide spectators" : "Show spectators"}
+            onClick={() => setSpectateOpen((v) => !v)}
+          >
+            {spectateOpen ? "▾" : "▴"}
           </button>
-        )}
-        <div className="spectate-rail">
-          <div className="spectate-eye" title="Spectators">
-            <EyeIcon />
-          </div>
-          <div className="spectate-list">
-            {spectators.map((p) => (
-              <button
-                key={p.id}
-                className="rail-face"
-                title={`Seat ${p.name}`}
-                onClick={() => onJoin(p.id)}
-              >
-                <RailFace person={p} />
-              </button>
-            ))}
-          </div>
-          <div className="spectate-foot" aria-hidden>
-            ▾
-          </div>
         </div>
       </div>
       <div className="lobby-main">
         <p className="start-kicker">{mode === "moves" ? "Main game" : "Classic"}</p>
-        <h1>Waiting on the table</h1>
+        <h1>Waiting room</h1>
         <p className="start-lead">
-          {joined.length}/{MAX_PLAYERS} seated. Need {MIN_PLAYERS} to start.
-          {testOn ? " Test players sit in the red rail — tap one to seat them, or hit +." : " People who have not joined watch from the red rail."}
+          {joined.length}/{MAX_PLAYERS} at the table. Need {MIN_PLAYERS} to start.
+          {inTable ? " Hit − to watch from the spectator rail." : " You are watching. Hit + to sit."}
         </p>
-        <div className="lobby-table">
-          {joined.map((p, i) => (
-            <div key={p.id} className="lobby-seat" style={{ "--i": i } as CSSProperties}>
-              <RailFace person={p} big />
-              <span>{p.name}</span>
-            </div>
-          ))}
-        </div>
+        <WaitingBooth />
         <div className="lobby-actions">
-          <button className="go" disabled={!ready} onClick={onStart}>
-            Start table
+          <button className="start-big" disabled={!ready} onClick={onStart}>
+            <b>Start</b>
+            <small>{ready ? "The stall is open" : `${MIN_PLAYERS - joined.length} more to open`}</small>
+          </button>
+          <button className="ghost" onClick={onSeatBots}>
+            Seat bots
+          </button>
+          <button className="ghost" onClick={onPlayBots}>
+            Play with bots
           </button>
           <button className="ghost" onClick={onBack}>
             Back
@@ -158,6 +159,56 @@ export function Lobby({
       </div>
     </div>
   );
+}
+
+function WaitingBooth() {
+  const [color, setColor] = useState(() => localStorage.getItem(PIECE_KEY) || COLORS[0]);
+  const [dice, setDice] = useState<[number, number]>([3, 5]);
+  const [spin, setSpin] = useState(false);
+  const [hop, setHop] = useState(0);
+
+  useEffect(() => {
+    localStorage.setItem(PIECE_KEY, color);
+  }, [color]);
+
+  function toss() {
+    setSpin(true);
+    window.setTimeout(() => {
+      setDice([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
+      setSpin(false);
+    }, 420);
+  }
+
+  return (
+    <div className="waiting-booth">
+      <div className="booth-stage">
+        <button type="button" className={`booth-pawn ${hop ? "hop" : ""}`} onClick={() => setHop((n) => n + 1)} title="Your piece">
+          <PixelPawn color={color} />
+        </button>
+        <button type="button" className="booth-dice" onClick={toss} title="Toss while you wait">
+          <PixelDie n={dice[0]} spinning={spin} />
+          <PixelDie n={dice[1]} spinning={spin} />
+        </button>
+      </div>
+      <p className="booth-hint">Paint your piece. Toss the dice. This is just the waiting room.</p>
+      <div className="swatches">
+        {COLORS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            className={`swatch ${c === color ? "on" : ""}`}
+            style={{ background: c }}
+            onClick={() => setColor(c)}
+            aria-label={c}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function savedPieceColor() {
+  return localStorage.getItem(PIECE_KEY) || COLORS[0];
 }
 
 function RailFace({ person, big }: { person: SeatPerson; big?: boolean }) {

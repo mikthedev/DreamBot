@@ -352,7 +352,7 @@ body {
 }
 .roster .board-close {
   position: static;
-  margin-top: 8px;
+  margin-top: auto;
 }
 .idle-mark { padding: 8px 0 2px; }
 .logo {

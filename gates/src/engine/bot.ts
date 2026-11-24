@@ -1,7 +1,12 @@
 import { COMPANIES, MOVE_CAP, companiesIn } from "./data";
-import { actor, anySet, apply, fuelPrice, type Action, type State } from "./game";
+import { actor, anySet, apply, company, fuelPrice, type Action, type State } from "./game";
 
 export function botAction(state: State): Action {
+  if (state.offer) {
+    const them = state.players.find((p) => p.id === state.offer?.to);
+    if (!them?.bot) return { type: "end" };
+    return { type: "offer", pick: botTakeOffer(state) };
+  }
   const p = actor(state);
   if (!p) return { type: "end" };
   if (state.phase === "home") {
@@ -34,9 +39,24 @@ export function botAction(state: State): Action {
   return { type: "end" };
 }
 
+function botTakeOffer(state: State): "accept" | "decline" {
+  const o = state.offer!;
+  const worth = (ids: string[], cash: number, move: boolean) =>
+    ids.reduce((n, id) => n + company(id).price, 0) + cash + (move ? 80 : 0);
+  const incoming = worth(o.giveCompanies, o.giveCash, o.giveMove);
+  const outgoing = worth(o.getCompanies, o.getCash, o.getMove);
+  return incoming + 60 >= outgoing ? "accept" : "decline";
+}
+
 export function stepBot(state: State): State {
+  if (state.phase === "over") return state;
+  if (state.offer) {
+    const them = state.players.find((p) => p.id === state.offer?.to);
+    if (!them?.bot) return state;
+    return apply(state, botAction(state));
+  }
   const p = actor(state);
-  if (!p?.bot || state.phase === "over") return state;
+  if (!p?.bot) return state;
   return apply(state, botAction(state));
 }
 
@@ -46,6 +66,13 @@ export function playUntil(state: State, maxSteps = 4000): State {
   while (s.phase !== "over" && n < maxSteps) {
     const p = actor(s);
     if (!p) break;
+    if (s.offer) {
+      const them = s.players.find((x) => x.id === s.offer?.to);
+      if (!them?.bot) break;
+      s = stepBot(s);
+      n += 1;
+      continue;
+    }
     if (!p.bot) break;
     s = stepBot(s);
     n += 1;

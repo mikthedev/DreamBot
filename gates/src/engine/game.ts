@@ -66,6 +66,7 @@ export type State = {
   pendingCard: CardId | null;
   land: string | null;
   lastPay: { to: string; amount: number; via?: string; viaAmount?: number } | null;
+  offer: Offer | null;
   forcedRoll: [number, number] | null;
   lastRoll: [number, number] | null;
   rollTick: number;
@@ -86,6 +87,7 @@ export type Action =
   | { type: "note" }
   | { type: "license"; kind: "chips" | "cloud" }
   | { type: "end" }
+  | { type: "offer"; pick: "accept" | "decline" }
   | {
       type: "trade";
       to: string;
@@ -96,6 +98,18 @@ export type Action =
       giveMove: boolean;
       getMove: boolean;
     };
+
+export type Offer = {
+  from: string;
+  to: string;
+  giveCompanies: string[];
+  getCompanies: string[];
+  giveCash: number;
+  getCash: number;
+  giveMove: boolean;
+  getMove: boolean;
+  fee: number;
+};
 
 const COLORS = ["#3b5bdb", "#2b8a6e", "#c4922a", "#b44d7a", "#b54a4a", "#c56e2d", "#2f8f9a", "#6b5b95"];
 
@@ -142,6 +156,7 @@ export function createGame(
     pendingCard: null,
     land: null,
     lastPay: null,
+    offer: null,
     forcedRoll: null,
     lastRoll: null,
     rollTick: 0,
@@ -217,6 +232,7 @@ export function onMarket(state: State) {
 export function tradeProblem(state: State, action: Extract<Action, { type: "trade" }>): string | null {
   const p = actor(state);
   if (!p || state.phase !== "extra") return "Trade after you land.";
+  if (state.offer) return "A deal is already waiting.";
   const other = state.players.find((x) => x.id === action.to);
   if (!other || other.out || other.id === p.id) return "Pick someone to trade with.";
   const fee = tradeFee(state, p);
@@ -398,8 +414,13 @@ function eliminate(state: State, p: Player, why: string) {
 export function apply(prev: State, action: Action): State {
   const state = structuredClone(prev) as State;
   if (state.phase === "over") return state;
+  if (action.type === "offer") {
+    resolveOffer(state, action.pick);
+    return state;
+  }
   const p = actor(state);
   if (!p) return state;
+  if (state.offer && action.type !== "end") return state;
 
   if (action.type === "home" && state.phase === "home") {
     if (action.pick === "move" && anySet(state, p.id) && p.moves < MOVE_CAP) {
@@ -537,36 +558,62 @@ export function apply(prev: State, action: Action): State {
         say(state, problem);
         return state;
       }
-      const other = player(state, action.to);
       const fee = tradeFee(state, p);
-      p.cash -= action.giveCash + fee;
-      other.cash += action.giveCash;
-      other.cash -= action.getCash;
-      p.cash += action.getCash;
-      if (action.giveMove) {
-        p.moves -= 1;
-        other.moves = Math.min(MOVE_CAP, other.moves + 1);
-      }
-      if (action.getMove) {
-        other.moves -= 1;
-        p.moves = Math.min(MOVE_CAP, p.moves + 1);
-      }
-      for (const id of action.giveCompanies) state.companies[id].owner = other.id;
-      for (const id of action.getCompanies) state.companies[id].owner = p.id;
-      p.freeTrade = false;
-      say(
-        state,
-        fee
-          ? `${p.name} trades with ${other.name} (−$${fee} desk).`
-          : `${p.name} trades with ${other.name} at the Market.`,
-      );
+      state.offer = {
+        from: p.id,
+        to: action.to,
+        giveCompanies: [...action.giveCompanies],
+        getCompanies: [...action.getCompanies],
+        giveCash: action.giveCash,
+        getCash: action.getCash,
+        giveMove: action.giveMove,
+        getMove: action.getMove,
+        fee,
+      };
       return state;
     }
     if (action.type === "end") {
+      state.offer = null;
       finishTurn(state);
+      return state;
     }
   }
   return state;
+}
+
+function resolveOffer(state: State, pick: "accept" | "decline") {
+  const offer = state.offer;
+  if (!offer) return;
+  if (pick === "decline") {
+    state.offer = null;
+    return;
+  }
+  const from = player(state, offer.from);
+  const to = player(state, offer.to);
+  if (from.out || to.out) {
+    state.offer = null;
+    return;
+  }
+  if (from.cash < offer.giveCash + offer.fee || to.cash < offer.getCash) {
+    state.offer = null;
+    return;
+  }
+  state.offer = null;
+  from.cash -= offer.giveCash + offer.fee;
+  to.cash += offer.giveCash;
+  to.cash -= offer.getCash;
+  from.cash += offer.getCash;
+  if (offer.giveMove) {
+    from.moves -= 1;
+    to.moves = Math.min(MOVE_CAP, to.moves + 1);
+  }
+  if (offer.getMove) {
+    to.moves -= 1;
+    from.moves = Math.min(MOVE_CAP, from.moves + 1);
+  }
+  for (const id of offer.giveCompanies) state.companies[id].owner = to.id;
+  for (const id of offer.getCompanies) state.companies[id].owner = from.id;
+  from.freeTrade = false;
 }
 
 function settleNote(state: State, p: Player) {
@@ -762,6 +809,7 @@ export function describePhase(state: State): string {
   const here = labelOf(spaceId(p));
   if (state.phase === "home") return "GO — cash or a move";
   if (state.phase === "store") return `Buy ${here}?`;
+  if (state.offer) return "A deal is waiting at the stall";
   if (state.phase === "extra" && onMarket(state)) return "Market is open — trade free this turn";
   if (state.phase === "card") return "Casino card";
   if (state.phase === "path") return "Roll two dice";

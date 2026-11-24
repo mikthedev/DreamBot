@@ -155,8 +155,13 @@ function marketLetsYouTradeFree(): ScenarioResult {
     giveMove: false,
     getMove: false,
   });
+  if (!s.offer || s.companies.uber.owner !== "nova") {
+    return { id: "market", name: "Market lets you trade free", ok: false, detail: "Offer did not wait for accept" };
+  }
+  s = apply(s, { type: "offer", pick: "accept" });
   const you = s.players[0];
   const ok =
+    !s.offer &&
     s.companies.uber.owner === "you" &&
     s.companies.discord.owner === "nova" &&
     you.cash === cash &&

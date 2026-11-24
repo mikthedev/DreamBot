@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CARD_LABEL, COMPANIES, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, STORES, companiesIn, setOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
@@ -15,6 +15,7 @@ import {
   tradeFee,
   tradeProblem,
   type Action,
+  type Offer,
   type Player,
   type State,
 } from "../engine/game";
@@ -24,6 +25,9 @@ import { CornerArt, PixelDie, PixelPawn } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const ID_KEY = "gates-discord-id";
+const LOOK_KEY = "gates-player-look";
+type Look = "pawn" | "icon";
+const LookCtx = createContext<Look>("pawn");
 const CORNER = 1.12;
 const TRACK_SUM = CORNER * 2 + 7;
 const STEP_MS = 220;
@@ -37,6 +41,7 @@ export function App() {
   const [sheet, setSheet] = useState<null | "more" | "test" | "log">(null);
   const [trading, setTrading] = useState(false);
   const skipMarketOpen = useRef(false);
+  const [look, setLook] = useState<Look>(() => (localStorage.getItem(LOOK_KEY) === "icon" ? "icon" : "pawn"));
   const [state, setState] = useState<State>(() =>
     createGame(seats("You", null, true), { seed: Date.now() % 100000 }),
   );
@@ -53,6 +58,9 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
   }, [testOn]);
+  useEffect(() => {
+    localStorage.setItem(LOOK_KEY, look);
+  }, [look]);
 
   useEffect(() => {
     if (!discordId) return;
@@ -64,10 +72,11 @@ export function App() {
 
   useEffect(() => {
     if (state.phase === "over") return;
-    const who = actor(state);
-    if (!who?.bot) return;
     if (walking) return;
-    const t = window.setTimeout(() => setState((s) => stepBot(s)), 720);
+    const turnBot = actor(state)?.bot;
+    const offerBot = state.offer && state.players.find((p) => p.id === state.offer?.to)?.bot;
+    if (!turnBot && !offerBot) return;
+    const t = window.setTimeout(() => setState((s) => stepBot(s)), offerBot ? 900 : 720);
     return () => window.clearTimeout(t);
   }, [state, walking]);
 
@@ -83,10 +92,11 @@ export function App() {
   }, [state.phase]);
 
   useEffect(() => {
+    if (state.offer) return;
     if (!mine || walking || diceSpin || state.phase !== "extra" || !me.freeTrade) return;
     if (skipMarketOpen.current) return;
     setTrading(true);
-  }, [mine, walking, diceSpin, state.phase, me.freeTrade, state.rollTick]);
+  }, [mine, walking, diceSpin, state.phase, me.freeTrade, state.rollTick, state.offer]);
 
   function act(action: Action) {
     setState((s) => apply(s, action));
@@ -126,14 +136,22 @@ export function App() {
   const rolling = diceSpin != null;
   const shownCash = held?.cash ?? me.cash;
   const shownMoves = held?.moves ?? me.moves;
+  const inDeal = !!(state.offer && (state.offer.from === me.id || state.offer.to === me.id));
+  const stallOpen = trading || inDeal;
 
   return (
+    <LookCtx.Provider value={look}>
     <div className="app">
       <header className="top">
         <div className="brand">DreamPoly</div>
-        <button className="ghost tiny" onClick={() => setSheet("test")}>
-          {testOn ? "Test tools" : "Test off"}
-        </button>
+        <div className="top-tools">
+          <button className="ghost tiny" onClick={() => setLook((cur) => (cur === "pawn" ? "icon" : "pawn"))}>
+            {look === "pawn" ? "Characters" : "Discord icons"}
+          </button>
+          <button className="ghost tiny" onClick={() => setSheet("test")}>
+            {testOn ? "Test tools" : "Test off"}
+          </button>
+        </div>
       </header>
         <div className="play">
       <div className="roster">
@@ -145,7 +163,7 @@ export function App() {
             onMouseEnter={() => setSeatHover(p.id)}
             onMouseLeave={() => setSeatHover(null)}
           >
-            <Face name={p.name} avatar={p.avatar} color={p.color} size={26} />
+            <Portrait player={p} size={26} />
             <b>{p.name}</b>
             <span>{p.out ? "Out" : `${p.moves}m`}</span>
           </div>
@@ -182,9 +200,16 @@ export function App() {
           }}
           onContextMenu={(e) => e.preventDefault()}
         >
-          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${trading ? "trading" : ""} ${!mine && !walking && !trading ? "idle" : "live"}`}>
-            <div className={`table-core ${trading ? "is-market" : ""}`}>
-              {trading ? (
+          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${stallOpen ? "trading" : ""} ${!mine && !walking && !stallOpen ? "idle" : "live"}`}>
+            <div className={`table-core ${stallOpen ? "is-market" : ""}`}>
+              {inDeal && state.offer ? (
+                <OfferStall
+                  state={state}
+                  offer={state.offer}
+                  you={me}
+                  onPick={(pick) => act({ type: "offer", pick })}
+                />
+              ) : trading ? (
                 <TradeDesk
                   state={state}
                   you={me}
@@ -202,7 +227,7 @@ export function App() {
               ) : (
                 <>
               <div className="dash">
-                <Face name={me.name} avatar={me.avatar} color={me.color} size={36} />
+                <Portrait player={me} size={36} />
                 <div className="stats">
                   <span>{shownMoves} moves</span>
                 </div>
@@ -288,7 +313,7 @@ export function App() {
               }}
             />
           ))}
-          {trading ? null : focusOwner ? (
+          {stallOpen ? null : focusOwner ? (
             <Holdings
               state={state}
               player={state.players.find((p) => p.id === focusOwner)!}
@@ -419,6 +444,7 @@ export function App() {
         </div>
       )}
     </div>
+    </LookCtx.Provider>
   );
 }
 
@@ -687,16 +713,15 @@ function TileFloat({
     >
       {facts.owner ? (
         <>
-          <Face name={facts.owner.name} avatar={facts.owner.avatar} color={facts.owner.color} size={22} />
+          <Portrait player={facts.owner} size={52} />
           <div>
             <small>Owned by</small>
-            <b>{facts.owner.name}</b>
           </div>
         </>
       ) : (
         <div>
           <small>Owner</small>
-          <b>Unowned</b>
+          <b>Bank</b>
         </div>
       )}
     </div>
@@ -743,7 +768,7 @@ function GroupCard({ group, state }: { group: SetId | "store"; state: State }) {
               <li key={s.id}>
                 <BrandLogo id={s.id} label={s.name} />
                 <span>{s.name}</span>
-                <em>{owner ? owner.name : "Unowned"}</em>
+                {owner ? <Portrait player={owner} size={32} /> : <em>Bank</em>}
               </li>
             );
           })}
@@ -775,7 +800,7 @@ function GroupCard({ group, state }: { group: SetId | "store"; state: State }) {
             <li key={c.id}>
               <BrandLogo id={c.id} label={c.name} />
               <span>{c.name}</span>
-              <em>{owner ? owner.name : "Unowned"}</em>
+              {owner ? <Portrait player={owner} size={32} /> : <em>Bank</em>}
             </li>
           );
         })}
@@ -1000,7 +1025,7 @@ function Pawns({
           }}
         >
           <span className={walk[p.id] != null ? "hop-inner" : ""} key={`${p.id}-${walk[p.id] ?? p.stand}`}>
-            <PixelPawn color={p.color} />
+            <Portrait player={p} size={22} />
           </span>
         </span>,
       );
@@ -1097,6 +1122,70 @@ function Holdings({ state, player }: { state: State; player: { id: string; name:
   );
 }
 
+function OfferStall({
+  state,
+  offer,
+  you,
+  onPick,
+}: {
+  state: State;
+  offer: Offer;
+  you: Player;
+  onPick: (pick: "accept" | "decline") => void;
+}) {
+  const from = state.players.find((p) => p.id === offer.from)!;
+  const to = state.players.find((p) => p.id === offer.to)!;
+  const mineToTake = you.id === offer.to;
+  const mineToSend = you.id === offer.from;
+  if (!mineToTake && !mineToSend) return null;
+  return (
+    <div className="trade-desk offer-stall">
+      <div className="trade-banner">
+        <b>Private stall</b>
+        <em className={offer.fee ? "" : "free"}>{offer.fee ? `Desk $${offer.fee}` : "Free stall"}</em>
+      </div>
+      <div className="offer-heads">
+        <div>
+          <Portrait player={from} size={48} />
+          <small>Offers</small>
+        </div>
+        <span className="trade-swap"><span>⇄</span></span>
+        <div>
+          <Portrait player={to} size={48} />
+          <small>Must answer</small>
+        </div>
+      </div>
+      <div className="trade-slip offer-slip">
+        <DealBits ids={offer.giveCompanies} cash={offer.giveCash} move={offer.giveMove} empty="Nothing offered" />
+        <i />
+        <DealBits ids={offer.getCompanies} cash={offer.getCash} move={offer.getMove} empty="Nothing asked" />
+      </div>
+      {mineToSend ? (
+        <>
+          <p className="deal-ok">Waiting for an answer. Only you two can see this.</p>
+          <div className="trade-actions">
+            <button className="ghost" onClick={() => onPick("decline")}>
+              Pull deal
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="deal-ok">Accept or decline. Nobody else sees this stall.</p>
+          <div className="trade-actions">
+            <button className="go" onClick={() => onPick("accept")}>
+              Accept
+            </button>
+            <button className="warn" onClick={() => onPick("decline")}>
+              Decline
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TradeDesk({
   state,
   you,
@@ -1167,7 +1256,7 @@ function TradeDesk({
               setGet([]);
             }}
           >
-            <Face name={p.name} avatar={p.avatar} color={p.color} size={28} />
+            <Portrait player={p} size={28} />
             <span>{p.name}</span>
             <small>${p.cash}</small>
           </button>
@@ -1244,7 +1333,7 @@ function TradeCrate({
   return (
     <section className="trade-crate" style={{ "--player": player.color } as CSSProperties}>
       <header>
-        <Face name={player.name} avatar={player.avatar} color={player.color} size={30} />
+        <Portrait player={player} size={30} />
         <div>
           <small>{kicker}</small>
           <b>{player.name}</b>
@@ -1297,6 +1386,22 @@ function DealBits({ ids, cash, move, empty }: { ids: string[]; cash: number; mov
       })}
       {cash > 0 ? <span className="slip-cash">${cash}</span> : null}
       {move ? <span className="slip-move">1m</span> : null}
+    </span>
+  );
+}
+
+function Portrait({
+  player,
+  size,
+}: {
+  player: { name: string; avatar: string | null; color: string };
+  size: number;
+}) {
+  const look = useContext(LookCtx);
+  if (look === "icon") return <Face name={player.name} avatar={player.avatar} color={player.color} size={size} />;
+  return (
+    <span className="char" style={{ width: size, height: Math.round(size * 1.25) }} title={player.name}>
+      <PixelPawn color={player.color} />
     </span>
   );
 }

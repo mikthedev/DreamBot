@@ -482,6 +482,11 @@ export function App() {
 
       {sheet && (
         <div className={`sheet ${sheet === "more" ? "is-stall" : ""}`} onClick={() => setSheet(null)}>
+          {sheet === "more" ? (
+            <button type="button" className="board-close" title="Back to the board" onClick={() => setSheet(null)}>
+              ◀
+            </button>
+          ) : null}
           <article className={sheet === "more" ? "stall-menu" : ""} onClick={(e) => e.stopPropagation()}>
             {sheet === "more" && state && me && (
               <MoreStall
@@ -499,7 +504,6 @@ export function App() {
                   setScreen("menu");
                   setState(null);
                 }}
-                onClose={() => setSheet(null)}
               />
             )}
             {sheet === "log" && state && (
@@ -570,7 +574,6 @@ function MoreStall({
   onTrade,
   onLog,
   onLeave,
-  onClose,
 }: {
   state: State;
   me: Player;
@@ -579,41 +582,34 @@ function MoreStall({
   onTrade: () => void;
   onLog: () => void;
   onLeave: () => void;
-  onClose: () => void;
 }) {
+  const [warnLeave, setWarnLeave] = useState(false);
   const extra = mine && state.phase === "extra";
   const owned = COMPANIES.filter((c) => state.companies[c.id].owner === me.id);
   const licenses = licenseNeeded(state, me.id);
   return (
     <>
       <header className="stall-head">
-        <div>
-          <p className="start-kicker">Open stall</p>
-          <h2>More</h2>
-        </div>
-        <button className="stall-btn back" type="button" onClick={onClose}>
-          <b>Close</b>
-          <small>Back to board</small>
-        </button>
+        <p className="start-kicker">Open stall</p>
+        <h2>More</h2>
       </header>
-      <p className="stall-lead">Fuel, paper, licenses, and trades. Build from the deeds below.</p>
       <div className="stall-grid">
         {state.mode === "moves" ? (
           <button className="stall-act fuel" disabled={!extra} onClick={() => onAct({ type: "fuel" })}>
             <small>Moves</small>
             <b>Buy a move</b>
-            <span>${fuelPrice(me)} from the pump</span>
+            <span>${fuelPrice(me)}</span>
           </button>
         ) : null}
         <button className="stall-act note" disabled={!extra || me.noteUsed} onClick={() => onAct({ type: "note" })}>
           <small>Bank</small>
           <b>{me.noteUsed ? "Note spent" : "Bank note"}</b>
-          <span>{me.noteUsed ? "Already cashed this game" : "+$300, once"}</span>
+          <span>{me.noteUsed ? "Already used" : "+$300 once"}</span>
         </button>
         <button className="stall-act deal" disabled={!extra} onClick={onTrade}>
           <small>Market</small>
           <b>{me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}</b>
-          <span>{me.freeTrade ? "Landed on the stall" : "Fee unless you own Watch"}</span>
+          <span>Swap deeds</span>
         </button>
         {licenses.map((kind) => (
           <button
@@ -624,18 +620,18 @@ function MoreStall({
           >
             <small>Stack</small>
             <b>License {setOf(kind).label}</b>
-            <span>$180 keeps full-set rent</span>
+            <span>$180</span>
           </button>
         ))}
         <button className="stall-act log" onClick={onLog}>
           <small>Table</small>
           <b>Recent</b>
-          <span>What just hit the board</span>
+          <span>Log</span>
         </button>
-        <button className="stall-act leave" onClick={onLeave}>
+        <button className="stall-act leave" onClick={() => setWarnLeave(true)}>
           <small>Leave</small>
           <b>◀ Menu</b>
-          <span>Drop this table</span>
+          <span>Drop table</span>
         </button>
       </div>
       <h3 className="stall-deeds-title">Your companies</h3>
@@ -646,7 +642,7 @@ function MoreStall({
               <BrandLogo id={c.id} label={c.name} />
               <div>
                 <b>{c.name}</b>
-                <small>Built L{state.companies[c.id].level}</small>
+                <small>L{state.companies[c.id].level}</small>
               </div>
               <button className="deed-act" disabled={!extra} onClick={() => onAct({ type: "build", companyId: c.id })}>
                 Build
@@ -658,8 +654,25 @@ function MoreStall({
           ))}
         </ul>
       ) : (
-        <p className="stall-empty">No deeds yet. Buy a brand on the track, then build it here.</p>
+        <p className="stall-empty">No deeds yet.</p>
       )}
+      {warnLeave ? (
+        <div className="leave-warn" role="alertdialog" aria-labelledby="leave-warn-title">
+          <p className="start-kicker">Warning</p>
+          <h3 id="leave-warn-title">Leave this table?</h3>
+          <p>The game is still going. You’ll drop the board and lose this stall.</p>
+          <div className="leave-warn-act">
+            <button className="stall-act leave" type="button" onClick={onLeave}>
+              <b>Leave</b>
+              <span>Back to menu</span>
+            </button>
+            <button className="stall-act fuel" type="button" onClick={() => setWarnLeave(false)}>
+              <b>Stay</b>
+              <span>Keep playing</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

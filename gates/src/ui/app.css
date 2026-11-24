@@ -873,54 +873,68 @@ button:disabled { opacity: 0.4; cursor: default; }
   background: rgba(8, 6, 10, .78);
 }
 .stall-menu {
-  width: min(560px, 100%);
+  position: relative;
+  width: min(520px, 100%);
   height: auto;
-  max-height: min(88vh, 760px);
+  max-height: min(62vh, 420px);
   background: #1c1822;
-  padding: 16px 16px 18px;
+  padding: 12px 12px 14px;
   overflow: auto;
   border: 3px solid #c9b48a;
   border-left: 3px solid #c9b48a;
   box-shadow: 8px 8px 0 #0a080c;
   animation: card-in 0.32s steps(6) both;
 }
+.board-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: #121016;
+  color: #fff4cc;
+  border: 3px dashed #6a6058;
+  box-shadow: 3px 3px 0 #0a080c;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 20px;
+}
+.board-close:hover:not(:disabled) {
+  background: #1c1822;
+  color: #fff4cc;
+  border-style: solid;
+  border-color: #f3eadf;
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 #0a080c;
+}
 .stall-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
   margin-bottom: 8px;
 }
+.stall-head .start-kicker { margin-bottom: 2px; animation: none; }
 .stall-head h2 {
   margin: 0;
   font-family: "Pixelify Sans", Outfit, sans-serif;
-  font-size: 36px;
+  font-size: 26px;
   line-height: 0.95;
   color: #fff4cc;
   text-shadow: 3px 3px 0 #1a1208;
 }
-.stall-head .stall-btn.back {
-  min-width: 108px;
-  min-height: 58px;
-  margin-left: 0;
-}
-.stall-lead {
-  margin: 0 0 14px;
-  color: #e8dcc8;
-  font-size: 14px;
-}
 .stall-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
 }
 .stall-act {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
-  min-height: 92px;
-  padding: 12px 14px;
+  gap: 2px;
+  min-height: 0;
+  padding: 8px 10px;
   text-align: left;
   font-family: "Pixelify Sans", Outfit, sans-serif;
   background: linear-gradient(180deg, #2a2418, #1c1822);
@@ -936,14 +950,14 @@ button:disabled { opacity: 0.4; cursor: default; }
   font-weight: 800;
   opacity: 0.8;
 }
-.stall-act b { font-size: 20px; line-height: 1; font-weight: 700; }
+.stall-act b { font-size: 16px; line-height: 1.05; font-weight: 700; }
 .stall-act span {
   font-family: Outfit, sans-serif;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: inherit;
   opacity: 0.72;
-  line-height: 1.3;
+  line-height: 1.2;
 }
 .stall-act.fuel { background: linear-gradient(180deg, #f0d78c 0%, #c4922a 48%, #8a6a20 100%); color: #1a1208; border-color: #f8e7b0; }
 .stall-act.note { background: linear-gradient(180deg, #243428, #1a221c); color: #c8e8c4; border-color: #6a9a6e; }
@@ -974,9 +988,9 @@ button:disabled { opacity: 0.4; cursor: default; }
   border-color: #f3eadf;
 }
 .stall-deeds-title {
-  margin: 18px 0 8px;
+  margin: 12px 0 6px;
   font-family: "Pixelify Sans", Outfit, sans-serif;
-  font-size: 18px;
+  font-size: 15px;
   color: #fff4cc;
 }
 .stall-deeds {
@@ -985,7 +999,35 @@ button:disabled { opacity: 0.4; cursor: default; }
   padding: 0;
   display: flex;
   flex-direction: column;
+  gap: 6px;
+  max-height: 132px;
+  overflow: auto;
+}
+.leave-warn {
+  position: absolute;
+  inset: 10px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   gap: 8px;
+  padding: 16px;
+  background: #1c1822;
+  border: 3px solid #e6c35a;
+  box-shadow: 6px 6px 0 #0a080c;
+}
+.leave-warn h3 {
+  margin: 0;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 22px;
+  color: #fff4cc;
+}
+.leave-warn p { margin: 0; color: #e8dcc8; }
+.leave-warn-act {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
 }
 .stall-deeds li {
   display: grid;
@@ -1959,7 +2001,8 @@ input {
 .lobby-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; width: min(100%, 720px); }
 
 @media (max-width: 760px) {
-  .stall-grid { grid-template-columns: 1fr; }
+  .stall-grid { grid-template-columns: 1fr 1fr; }
+  .board-close { top: 10px; right: 10px; }
   .stall-deeds li { grid-template-columns: 28px 1fr; }
   .stall-deeds .deed-act { justify-self: start; }
   .center-actions { width: 100%; }

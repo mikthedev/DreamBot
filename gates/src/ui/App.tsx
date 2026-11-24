@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, STORES, companiesIn, setOf, type SetId } from "../engine/data";
+import { CARD_LABEL, COMPANIES, MAX_PLAYERS, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, STORES, companiesIn, setOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
@@ -15,10 +15,12 @@ import {
   tradeFee,
   tradeProblem,
   type Action,
+  type Mode,
   type Offer,
   type Player,
   type State,
 } from "../engine/game";
+import { Lobby, StartMenu, guestPool, type SeatPerson } from "./start";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -42,9 +44,11 @@ export function App() {
   const [trading, setTrading] = useState(false);
   const skipMarketOpen = useRef(false);
   const [look, setLook] = useState<Look>(() => (localStorage.getItem(LOOK_KEY) === "icon" ? "icon" : "pawn"));
-  const [state, setState] = useState<State>(() =>
-    createGame(seats("You", null, true), { seed: Date.now() % 100000 }),
-  );
+  const [screen, setScreen] = useState<"menu" | "lobby" | "play">("menu");
+  const [pickedMode, setPickedMode] = useState<Mode>("moves");
+  const [joined, setJoined] = useState<SeatPerson[]>([]);
+  const [spectators, setSpectators] = useState<SeatPerson[]>([]);
+  const [state, setState] = useState<State | null>(null);
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
   const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
   const [walk, setWalk] = useState<Record<string, number>>({});
@@ -71,39 +75,40 @@ export function App() {
   }, [discordId]);
 
   useEffect(() => {
-    if (state.phase === "over") return;
+    if (!state || state.phase === "over") return;
     if (walking) return;
     const turnBot = actor(state)?.bot;
     const offerBot = state.offer && state.players.find((p) => p.id === state.offer?.to)?.bot;
     if (!turnBot && !offerBot) return;
-    const t = window.setTimeout(() => setState((s) => stepBot(s)), offerBot ? 900 : 720);
+    const t = window.setTimeout(() => setState((s) => (s ? stepBot(s) : s)), offerBot ? 900 : 720);
     return () => window.clearTimeout(t);
   }, [state, walking]);
 
-  const me = state.players[0];
-  const who = actor(state);
-  const mine = who?.id === me.id && !me.out;
+  const me = state?.players[0];
+  const who = state ? actor(state) : undefined;
+  const mine = !!(me && who?.id === me.id && !me.out);
 
   useEffect(() => {
-    if (state.phase !== "extra") {
+    if (!state || state.phase !== "extra") {
       setTrading(false);
       skipMarketOpen.current = false;
     }
-  }, [state.phase]);
+  }, [state?.phase]);
 
   useEffect(() => {
+    if (!state || !me) return;
     if (state.offer) return;
     if (!mine || walking || diceSpin || state.phase !== "extra" || !me.freeTrade) return;
     if (skipMarketOpen.current) return;
     setTrading(true);
-  }, [mine, walking, diceSpin, state.phase, me.freeTrade, state.rollTick, state.offer]);
+  }, [mine, walking, diceSpin, state?.phase, me?.freeTrade, state?.rollTick, state?.offer]);
 
   function act(action: Action) {
-    setState((s) => apply(s, action));
+    setState((s) => (s ? apply(s, action) : s));
   }
 
   function rollThen(action: Action) {
-    if (diceSpin != null) return;
+    if (diceSpin != null || !me) return;
     setHeld({ cash: me.cash, moves: me.moves });
     let n = 0;
     const spin = window.setInterval(() => {
@@ -125,23 +130,66 @@ export function App() {
 
   function restart(withBots: boolean) {
     const name = profile?.username || "You";
-    setState(createGame(seats(name, profile?.avatar ?? null, withBots), { seed: Date.now() % 100000 }));
+    const people = guestPool(name, profile?.avatar ?? null, withBots);
+    setJoined([people[0]]);
+    setSpectators(people.slice(1));
+    setScreen("lobby");
+    setState(null);
     setSheet(null);
     setTrading(false);
   }
 
-  const primary = useMemo(() => buttonsFor(state, mine, !!diceSpin || walking), [state, mine, diceSpin, walking]);
-  const card = !held && !walking && state.phase === "card" ? state.pendingCard : null;
-  const centerDie = diceSpin ?? state.lastRoll;
+  function openLobby(mode: Mode) {
+    const name = profile?.username || "You";
+    const people = guestPool(name, profile?.avatar ?? null, testOn);
+    setPickedMode(mode);
+    setJoined([people[0]]);
+    setSpectators(people.slice(1));
+    setScreen("lobby");
+    setState(null);
+  }
+
+  function joinSeat(id?: string) {
+    const pick = id ?? (joined.some((p) => p.id === "you") ? spectators[0]?.id : "you");
+    if (!pick || joined.length >= MAX_PLAYERS) return;
+    const person = spectators.find((p) => p.id === pick);
+    if (!person) return;
+    setSpectators((s) => s.filter((p) => p.id !== pick));
+    setJoined((j) => [...j, person]);
+  }
+
+  function spectateSeat(id: string) {
+    if (id === "you") return;
+    const person = joined.find((p) => p.id === id);
+    if (!person) return;
+    setJoined((j) => j.filter((p) => p.id !== id));
+    setSpectators((s) => [...s, person]);
+  }
+
+  function startTable() {
+    if (joined.length < 3 || joined.length > MAX_PLAYERS) return;
+    setWalk({});
+    setTrading(false);
+    setState(createGame(joined, { mode: pickedMode, seed: Date.now() % 100000 }));
+    setScreen("play");
+  }
+
+  const primary = useMemo(
+    () => (state ? buttonsFor(state, mine, !!diceSpin || walking) : []),
+    [state, mine, diceSpin, walking],
+  );
+  const card = state && !held && !walking && state.phase === "card" ? state.pendingCard : null;
+  const centerDie = diceSpin ?? state?.lastRoll;
   const rolling = diceSpin != null;
-  const shownCash = held?.cash ?? me.cash;
-  const shownMoves = held?.moves ?? me.moves;
-  const inDeal = !!(state.offer && (state.offer.from === me.id || state.offer.to === me.id));
+  const shownCash = held?.cash ?? me?.cash ?? 0;
+  const shownMoves = held?.moves ?? me?.moves ?? 0;
+  const inDeal = !!(state && me && state.offer && (state.offer.from === me.id || state.offer.to === me.id));
   const stallOpen = trading || inDeal;
+  const pregame = screen !== "play" || !state || !me;
 
   return (
     <LookCtx.Provider value={look}>
-    <div className="app">
+    <div className={`app ${pregame ? "pregame" : ""}`}>
       <header className="top">
         <div className="brand">DreamPoly</div>
         <div className="top-tools">
@@ -153,6 +201,23 @@ export function App() {
           </button>
         </div>
       </header>
+      {pregame ? (
+        screen === "lobby" ? (
+          <Lobby
+            mode={pickedMode}
+            hostId="you"
+            joined={joined}
+            spectators={spectators}
+            testOn={testOn}
+            onJoin={joinSeat}
+            onSpectate={spectateSeat}
+            onStart={startTable}
+            onBack={() => setScreen("menu")}
+          />
+        ) : (
+          <StartMenu onPick={openLobby} />
+        )
+      ) : (
         <div className="play">
       <div className="roster">
         {state.players.map((p) => (
@@ -165,13 +230,13 @@ export function App() {
           >
             <Portrait player={p} size={26} />
             <b>{p.name}</b>
-            <span>{p.out ? "Out" : `${p.moves}m`}</span>
+            <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
           </div>
         ))}
         <div className="wallet">
           <small>Cash</small>
           <b>${shownCash}</b>
-          <span>{shownMoves} moves</span>
+          {state.mode === "moves" ? <span>{shownMoves} moves</span> : <span>Classic table</span>}
           <ul>
             {state.players.filter((p) => !p.out).map((p) => (
               <li key={p.id} style={{ "--player": p.color } as CSSProperties}>
@@ -229,7 +294,7 @@ export function App() {
               <div className="dash">
                 <Portrait player={me} size={36} />
                 <div className="stats">
-                  <span>{shownMoves} moves</span>
+                  <span>{state.mode === "moves" ? `${shownMoves} moves` : "Classic"}</span>
                 </div>
               </div>
               {card ? (
@@ -334,8 +399,9 @@ export function App() {
         </div>
       </div>
       </div>
+      )}
 
-      {me.moves <= 4 && !me.out && state.mode === "moves" && (
+      {state && me && me.moves <= 4 && !me.out && state.mode === "moves" && (
         <div className="banner">
           Low on moves. Pass GO or collect rent to earn more, rest in Jail, or buy one for ${fuelPrice(me)}.
         </div>
@@ -344,13 +410,13 @@ export function App() {
       {sheet && (
         <div className="sheet" onClick={() => setSheet(null)}>
           <article onClick={(e) => e.stopPropagation()}>
-            {sheet === "more" && (
+            {sheet === "more" && state && me && (
               <>
                 <h2>More</h2>
                 <p>Builds, fuel, trades, and the log stay here so the board stays clear.</p>
                 <div className="row">
-                  <button disabled={!mine || state.phase !== "extra"} onClick={() => act({ type: "fuel" })}>
-                    Buy move ${fuelPrice(me)}
+                  <button disabled={!mine || !state || state.phase !== "extra" || state.mode !== "moves"} onClick={() => act({ type: "fuel" })}>
+                    Buy move ${me ? fuelPrice(me) : ""}
                   </button>
                   <button className="ghost" disabled={!mine || state.phase !== "extra" || me.noteUsed} onClick={() => act({ type: "note" })}>
                     Bank note +$300
@@ -376,6 +442,7 @@ export function App() {
                     {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
                   </button>
                   <button className="ghost" onClick={() => setSheet("log")}>Recent</button>
+                  <button className="ghost" onClick={() => { setSheet(null); setScreen("menu"); setState(null); }}>Leave table</button>
                 </div>
                 <h2>Your companies</h2>
                 {COMPANIES.filter((c) => state.companies[c.id].owner === me.id).map((c) => (
@@ -389,7 +456,7 @@ export function App() {
                 {!COMPANIES.some((c) => state.companies[c.id].owner === me.id) && <p>You do not own a company yet.</p>}
               </>
             )}
-            {sheet === "log" && (
+            {sheet === "log" && state && (
               <>
                 <h2>Recent</h2>
                 <ul className="log">{state.log.map((line, i) => <li key={i}>{line}</li>)}</ul>
@@ -426,7 +493,7 @@ export function App() {
                     <div className="row">
                       <button onClick={() => restart(true)}>New table with test players</button>
                       <button className="ghost" onClick={() => restart(false)}>Just me</button>
-                      <button className="ghost" onClick={() => setState((s) => (actor(s)?.bot ? stepBot(s) : s))}>Step one test move</button>
+                      <button className="ghost" onClick={() => setState((s) => (s && actor(s)?.bot ? stepBot(s) : s))}>Step one test move</button>
                     </div>
                     <button className="ghost" onClick={() => setScenarios(runScenarios())}>Run all scenarios</button>
                     {scenarios && (
@@ -448,16 +515,6 @@ export function App() {
   );
 }
 
-function seats(name: string, avatar: string | null, withBots: boolean) {
-  const you = { id: "you", name, avatar, bot: false, test: false };
-  if (!withBots) return [you];
-  return [
-    you,
-    { id: "nova", name: "Nova", avatar: null, bot: true, test: true },
-    { id: "pixel", name: "Pixel", avatar: null, bot: true, test: true },
-    { id: "orbit", name: "Orbit", avatar: null, bot: true, test: true },
-  ];
-}
 
 function buttonsFor(
   state: State,
@@ -468,6 +525,9 @@ function buttonsFor(
   if (busy) return [];
   if (!mine) return [];
   if (state.phase === "home") {
+    if (state.mode !== "moves") {
+      return [{ label: "Take $200", action: { type: "home", pick: "cash" }, needsYou: true }];
+    }
     return [
       { label: "Take $200", action: { type: "home", pick: "cash" }, needsYou: true },
       { label: "Take 1 move", action: { type: "home", pick: "move" }, ghost: true, needsYou: true },

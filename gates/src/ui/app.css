@@ -1166,6 +1166,182 @@ input {
   to { transform: none; opacity: 1; }
 }
 
+.app.pregame {
+  grid-template-rows: auto minmax(0, 1fr);
+  max-width: none;
+}
+.start-menu, .lobby {
+  min-height: 0;
+  height: 100%;
+  position: relative;
+  overflow: auto;
+}
+.start-menu {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px 8vw 48px;
+  max-width: 920px;
+}
+.start-kicker {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
+}
+.start-menu h1, .lobby-main h1 {
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: clamp(40px, 7vw, 72px);
+  margin: 0 0 12px;
+  line-height: 0.95;
+  text-shadow: 3px 3px 0 #1a1208;
+}
+.start-lead {
+  margin: 0 0 28px;
+  color: var(--muted);
+  max-width: 42rem;
+  line-height: 1.45;
+}
+.start-picks {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 14px;
+  width: min(100%, 720px);
+}
+.mode-card {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 18px 20px;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 3px solid var(--line);
+  box-shadow: 4px 4px 0 #0a080c;
+}
+.mode-card.main {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, #2a2418, var(--panel));
+}
+.mode-card small {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 800;
+}
+.mode-card b {
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 28px;
+  line-height: 1;
+}
+.mode-card span { color: var(--muted); font-size: 13px; font-weight: 500; line-height: 1.4; }
+.lobby { padding: 12px 16px 24px 96px; }
+.lobby-main { max-width: 720px; margin: 0 auto; }
+.lobby-table {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 8px 0 24px;
+}
+.lobby-seat { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; }
+.join-rail {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  bottom: 12px;
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 2;
+}
+.join-plus {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border-radius: 14px;
+  background: #f3e19a;
+  color: #7a2418;
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 4px 0 #c4a24a, 3px 3px 0 #0a080c;
+  padding: 0;
+}
+.join-plus:hover:not(:disabled) { background: #ffe9a8; color: #7a2418; }
+.seat-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.spectate-rail {
+  flex: 1;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 56px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #e24b3c 0%, #c43a32 18%, #2f8f7a 100%);
+  box-shadow: 3px 3px 0 #0a080c;
+}
+.spectate-eye {
+  width: 100%;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  background: #d63d34;
+  color: #fff;
+}
+.spectate-list {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  overflow: auto;
+}
+.spectate-foot {
+  width: 100%;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  background: #e24b3c;
+  color: #fff;
+  font-size: 16px;
+}
+.rail-face {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  min-width: 0;
+}
+.rail-face:hover:not(:disabled) { background: transparent; transform: scale(1.06); box-shadow: none; }
+.rail-ava {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #1a1208;
+  color: #f3eadf;
+  border: 2px solid #fff8;
+  font-weight: 800;
+}
+.rail-ava.big { border-width: 3px; }
+.rail-ava img { width: 100%; height: 100%; object-fit: cover; }
+.rail-face.host .rail-ava { border-color: var(--accent); }
+.lobby-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
 @media (max-width: 760px) {
   .center-actions { width: 100%; }
   .center-actions button { flex: 1; min-width: 0; }
@@ -1173,6 +1349,8 @@ input {
   .trade-swap span { transform: rotate(90deg); }
   .trade-slip { grid-template-columns: 1fr; }
   .trade-slip i { display: none; }
+  .start-picks { grid-template-columns: 1fr; }
+  .lobby { padding-left: 84px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk { animation: none; transition: none; }

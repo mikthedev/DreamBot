@@ -153,3 +153,5 @@ export const START_CASH = 900;
 export const START_MOVES = 10;
 export const STACK_CUT = 3;
 export const HARD_STOP_ROUNDS = 24;
+export const MIN_PLAYERS = 3;
+export const MAX_PLAYERS = 8;

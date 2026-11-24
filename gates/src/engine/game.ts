@@ -272,10 +272,15 @@ function beginTurn(state: State) {
   }
   if (state.round > HARD_STOP_ROUNDS) {
     state.phase = "over";
-    const best = [...live].sort((a, b) => b.moves - a.moves || b.cash - a.cash)[0];
-    const tied = live.filter((p) => p.moves === best.moves && p.cash === best.cash);
+    const best =
+      state.mode === "moves"
+        ? [...live].sort((a, b) => b.moves - a.moves || b.cash - a.cash)[0]
+        : [...live].sort((a, b) => b.cash - a.cash || b.moves - a.moves)[0];
+    const tied = live.filter((p) =>
+      state.mode === "moves" ? p.moves === best.moves && p.cash === best.cash : p.cash === best.cash,
+    );
     state.winnerIds = tied.map((p) => p.id);
-    say(state, "Hard stop. Most moves wins.");
+    say(state, state.mode === "moves" ? "Hard stop. Most moves wins." : "Hard stop. Most cash wins.");
     return;
   }
   const p = actor(state)!;
@@ -290,13 +295,15 @@ function beginTurn(state: State) {
     }
     p.moves -= 1;
   }
-  const held = COMPANIES.filter((c) => state.companies[c.id].owner === p.id).length
-    + STORES.filter((s) => state.stores[s.id] === p.id).length;
-  const upkeep = held * 12;
-  if (upkeep > 0) {
-    const pay = Math.min(upkeep, p.cash);
-    p.cash -= pay;
-    say(state, `${p.name} pays $${pay} upkeep.`);
+  if (state.mode === "moves") {
+    const held = COMPANIES.filter((c) => state.companies[c.id].owner === p.id).length
+      + STORES.filter((s) => state.stores[s.id] === p.id).length;
+    const upkeep = held * 12;
+    if (upkeep > 0) {
+      const pay = Math.min(upkeep, p.cash);
+      p.cash -= pay;
+      say(state, `${p.name} pays $${pay} upkeep.`);
+    }
   }
   if (!p.leftHome && spaceId(p) === "home") {
     p.leftHome = true;

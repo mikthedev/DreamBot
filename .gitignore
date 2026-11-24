@@ -11,3 +11,4 @@ data/
 *.log
 gates/node_modules/
 gates/dist/
+gates/.vercel/

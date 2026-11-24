@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build"
   },
   "dependencies": {
+    "@discord/embedded-app-sdk": "^2.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "simple-icons": "^14.15.0"

@@ -53,12 +53,15 @@ export function StartMenu({
           </span>
         ))}
       </div>
+      <div className="menu-mascot" aria-hidden>
+        <img src="/dreambot.png" alt="" />
+      </div>
       <div className="menu-copy">
         <p className="start-kicker">Insert host</p>
         <h1>
           <span>DreamPoly</span>
         </h1>
-        <p className="start-lead">Host picks the rules. Everyone else joins from the rail, or watches as a spectator.</p>
+        <p className="start-lead">Buy the brands. Spend your moves. Stack rent until the last fortune standing.</p>
         <div className="start-picks">
           <button className="mode-card main" style={{ "--i": 0 } as CSSProperties} onClick={() => pick("moves")}>
             <small>Main game</small>

@@ -1239,6 +1239,24 @@ input {
   align-items: flex-start;
   padding: 24px 8vw 48px;
 }
+.menu-mascot {
+  position: absolute;
+  right: 4vw;
+  top: 50%;
+  width: min(38vw, 420px);
+  transform: translateY(-52%);
+  pointer-events: none;
+  z-index: 1;
+  animation: pawn-bob 3.2s steps(8) infinite;
+  filter: drop-shadow(6px 8px 0 #0a080c);
+}
+.menu-mascot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  mix-blend-mode: lighten;
+}
 .menu-grid,
 .menu-scan {
   position: absolute;
@@ -1276,8 +1294,8 @@ input {
 .menu-floater .pixel-pawn { width: 100%; height: 100%; }
 .menu-copy {
   position: relative;
-  z-index: 1;
-  max-width: 920px;
+  z-index: 2;
+  max-width: 640px;
   animation: menu-in 0.48s steps(8) both;
 }
 .start-kicker {
@@ -1309,9 +1327,11 @@ input {
 }
 .start-lead {
   margin: 0 0 28px;
-  color: var(--muted);
-  max-width: 42rem;
-  line-height: 1.45;
+  color: #e8dcc8;
+  max-width: 28rem;
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: 500;
   animation: menu-in 0.48s steps(8) 0.08s both;
 }
 .start-picks {
@@ -1362,7 +1382,8 @@ input {
 .start-menu.is-out .menu-copy {
   animation: menu-out 0.32s steps(6) both;
 }
-.start-menu.is-out .menu-float { animation: menu-out 0.28s steps(5) both; }
+.start-menu.is-out .menu-float,
+.start-menu.is-out .menu-mascot { animation: menu-out 0.28s steps(5) both; }
 .lobby.is-in {
   animation: lobby-in 0.4s steps(8) both;
 }
@@ -1628,9 +1649,13 @@ input {
   .trade-slip i { display: none; }
   .start-picks { grid-template-columns: 1fr; }
   .lobby { padding-left: 96px; }
+  .menu-mascot { width: 132px; top: 10px; right: 10px; transform: none; }
+}
+@media (max-width: 980px) {
+  .menu-mascot { width: min(36vw, 240px); right: 3vw; top: 16%; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk,
-  .menu-grid, .menu-scan, .menu-floater, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
+  .menu-grid, .menu-scan, .menu-floater, .menu-mascot, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
   .lobby.is-in, .join-rail, .waiting-booth, .stall-btn { animation: none; transition: none; }
 }

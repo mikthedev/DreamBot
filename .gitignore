@@ -9,3 +9,5 @@ venv/
 .DS_Store
 data/
 *.log
+gates/node_modules/
+gates/dist/

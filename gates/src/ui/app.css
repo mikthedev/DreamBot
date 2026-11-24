@@ -116,8 +116,8 @@ body {
     0 0 0 9px #120e0b,
     0 24px 50px rgba(0, 0, 0, .5);
   display: grid;
-  grid-template-columns: 1.7fr repeat(7, 1fr) 1.7fr;
-  grid-template-rows: 1.7fr repeat(7, 1fr) 1.7fr;
+  grid-template-columns: 1.12fr repeat(7, 1fr) 1.12fr;
+  grid-template-rows: 1.12fr repeat(7, 1fr) 1.12fr;
 }
 
 .center {
@@ -237,27 +237,30 @@ body {
   background: var(--band, #6d6458);
   z-index: 1;
 }
-.tile.bottom { padding: 4px 3px 12%; }
-.tile.top { padding: 12% 3px 4px; }
-.tile.left { padding: 3px 3px 3px 12%; }
-.tile.right { padding: 3px 12% 3px 3px; }
-.tile.bottom .band { left: 0; right: 0; bottom: 0; height: 8%; }
-.tile.top .band { left: 0; right: 0; top: 0; height: 8%; }
-.tile.left .band { top: 0; bottom: 0; left: 0; width: 8%; }
-.tile.right .band { top: 0; bottom: 0; right: 0; width: 8%; }
+.tile.bottom { padding: 6px 4px 18px; }
+.tile.top { padding: 18px 4px 6px; }
+.tile.left { padding: 4px 6px 4px 18px; }
+.tile.right { padding: 4px 18px 4px 6px; }
+.tile.bottom .band { left: 0; right: 0; bottom: 0; height: 7px; }
+.tile.top .band { left: 0; right: 0; top: 0; height: 7px; }
+.tile.left .band { top: 0; bottom: 0; left: 0; width: 7px; }
+.tile.right .band { top: 0; bottom: 0; right: 0; width: 7px; }
 
 .deed-body {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-  padding: 4px 2px;
-  position: relative;
+  gap: 6px;
   z-index: 3;
+  pointer-events: none;
 }
+.tile.bottom .deed-body { padding: 8px 4px 16px; }
+.tile.top .deed-body { padding: 16px 4px 8px; }
+.tile.left .deed-body { padding: 6px 6px 6px 16px; }
+.tile.right .deed-body { padding: 6px 16px 6px 6px; }
 .deed-body em {
   font-style: normal;
   font-size: clamp(8px, 16cqmin, 12px);
@@ -302,26 +305,38 @@ body {
 .tile.left .owner-mark { right: 3px; top: 3px; }
 .tile.right .owner-mark { left: 3px; top: 3px; }
 
-.brand-logo {
-  width: clamp(28px, 58cqmin, 48px);
-  height: clamp(28px, 58cqmin, 48px);
-  display: block;
-  object-fit: contain;
-  flex: none;
-  filter: drop-shadow(0 1px 1px rgba(26, 21, 16, .12));
-}
-.brand-logo.img.invert {
-  background: #111;
-  border-radius: 8px;
-  padding: 4px;
-  box-sizing: border-box;
-}
-.brand-fallback {
-  width: clamp(28px, 58cqmin, 48px);
-  height: clamp(28px, 58cqmin, 48px);
+.mark {
+  --mark: #888;
+  width: clamp(34px, 62cqmin, 52px);
+  height: clamp(34px, 62cqmin, 52px);
+  border-radius: 14px;
   display: grid;
   place-items: center;
-  font-size: clamp(14px, 24cqmin, 18px);
+  flex: none;
+  background:
+    radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--mark) 22%, #fff) 0%, #fff 58%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--mark) 28%, transparent),
+    0 4px 10px rgba(26, 21, 16, .12);
+}
+.mark.on-dark {
+  background: radial-gradient(circle at 40% 30%, #2a2a2a, #111);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12), 0 4px 10px rgba(0, 0, 0, .28);
+}
+.brand-logo {
+  width: 62%;
+  height: 62%;
+  display: block;
+  object-fit: contain;
+}
+.brand-logo.img.invert {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  filter: none;
+}
+.brand-fallback {
+  font-size: 14px;
   font-weight: 800;
   color: var(--ink);
 }
@@ -442,8 +457,9 @@ body {
   font-weight: 800;
   color: var(--ink);
   box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
-  transition: left 0.55s cubic-bezier(.22, .8, .24, 1), top 0.55s cubic-bezier(.22, .8, .24, 1);
+  transition: left 0.26s linear, top 0.26s linear;
 }
+.pawn.walking { filter: brightness(1.08); }
 .pawn.acting { outline: 2px solid var(--accent); }
 .pawn img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 
@@ -515,8 +531,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .sheet h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
 .sheet p, .log li { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
-.row.company .brand-logo,
-.row.company .brand-fallback { width: 22px; height: 22px; }
+.row.company .mark { width: 28px; height: 28px; border-radius: 8px; }
 .row.company span { flex: 1; min-width: 120px; }
 input {
   width: 100%;

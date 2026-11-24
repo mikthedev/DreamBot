@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { SimpleIcon } from "simple-icons";
 import {
   siAmazonwebservices,
@@ -62,31 +62,35 @@ const LOGOS: Record<string, LogoSpec> = {
 export function BrandLogo({ id, label }: { id: string; label?: string }) {
   const spec = LOGOS[id];
   const [broken, setBroken] = useState(false);
+  const hex = spec && spec.kind === "si" ? `#${spec.icon.hex}` : id === "azure" ? "#0078D4" : "#1a1510";
 
   if (!spec || broken) {
     return (
-      <span className="brand-fallback" aria-hidden>
-        {(label || id).slice(0, 1)}
+      <span className="mark" style={{ "--mark": hex } as CSSProperties} aria-hidden>
+        <span className="brand-fallback">{(label || id).slice(0, 1)}</span>
       </span>
     );
   }
 
-  if (spec.kind === "si") {
-    return (
+  const art =
+    spec.kind === "si" ? (
       <svg className="brand-logo" viewBox="0 0 24 24" role="img" aria-label={label || spec.icon.title}>
         <path d={spec.icon.path} fill={`#${spec.icon.hex}`} />
       </svg>
+    ) : (
+      <img
+        className={`brand-logo img ${spec.invert ? "invert" : ""}`}
+        src={spec.src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        onError={() => setBroken(true)}
+      />
     );
-  }
 
   return (
-    <img
-      className={`brand-logo img ${spec.invert ? "invert" : ""}`}
-      src={spec.src}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      onError={() => setBroken(true)}
-    />
+    <span className={`mark ${spec.kind === "img" && spec.invert ? "on-dark" : ""}`} style={{ "--mark": hex } as CSSProperties}>
+      {art}
+    </span>
   );
 }

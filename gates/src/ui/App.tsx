@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CARD_LABEL, COMPANIES, STANDS, STORES, STORE_BAND, setOf } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
@@ -18,8 +18,9 @@ import { CornerArt, DieFace } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const ID_KEY = "gates-discord-id";
-const CORNER = 1.7;
+const CORNER = 1.12;
 const TRACK_SUM = CORNER * 2 + 7;
+const STEP_MS = 280;
 
 type Profile = { id: string; username: string; avatar: string | null; linked: boolean };
 
@@ -33,6 +34,8 @@ export function App() {
   );
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
   const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
+  const [walk, setWalk] = useState<Record<string, number>>({});
+  const walking = Object.keys(walk).length > 0;
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
   }, [testOn]);
@@ -49,9 +52,10 @@ export function App() {
     if (state.phase === "over") return;
     const who = actor(state);
     if (!who?.bot) return;
+    if (walking) return;
     const t = window.setTimeout(() => setState((s) => stepBot(s)), 720);
     return () => window.clearTimeout(t);
-  }, [state]);
+  }, [state, walking]);
 
   const me = state.players[0];
   const who = actor(state);
@@ -81,7 +85,7 @@ export function App() {
     setSheet(null);
   }
 
-  const primary = useMemo(() => buttonsFor(state, mine, !!diceSpin), [state, mine, diceSpin]);
+  const primary = useMemo(() => buttonsFor(state, mine, !!diceSpin || walking), [state, mine, diceSpin, walking]);
   const card = state.phase === "card" ? state.pendingCard : null;
   const centerDie = diceSpin ?? state.lastRoll;
   const rolling = diceSpin != null;
@@ -123,7 +127,7 @@ export function App() {
                       <button
                         key={b.label}
                         className={b.ghost ? "ghost" : "go"}
-                        disabled={(!mine && b.needsYou) || !!diceSpin}
+                        disabled={(!mine && b.needsYou) || !!diceSpin || walking}
                         onClick={() => act(b.action)}
                       >
                         {b.label}
@@ -145,18 +149,20 @@ export function App() {
                     <div className="pay-chip">Paid ${state.lastPay.amount}</div>
                   ) : null}
                   <p className="center-prompt">
-                    {state.phase === "over"
-                      ? `Winner: ${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.name).join(", ") || "—"}`
-                      : mine
-                        ? describePhase(state)
-                        : `${who?.name || "Someone"} is playing`}
+                    {walking
+                      ? "Moving…"
+                      : state.phase === "over"
+                        ? `Winner: ${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.name).join(", ") || "—"}`
+                        : mine
+                          ? describePhase(state)
+                          : `${who?.name || "Someone"} is playing`}
                   </p>
                   <div className="center-actions">
                     {primary.map((b) => (
                       <button
                         key={b.label}
                         className={b.ghost ? "ghost" : b.warn ? "warn" : "go"}
-                        disabled={(!mine && b.needsYou) || !!diceSpin}
+                        disabled={(!mine && b.needsYou) || !!diceSpin || walking}
                         onClick={() => (b.roll ? rollThen(b.action) : act(b.action))}
                       >
                         {b.label}
@@ -171,7 +177,7 @@ export function App() {
           {TRACK.map((space) => (
             <Tile key={space.id} space={space} state={state} />
           ))}
-          <Pawns state={state} />
+          <Pawns state={state} walk={walk} setWalk={setWalk} />
         </div>
       </div>
 
@@ -295,6 +301,7 @@ function buttonsFor(
   busy: boolean,
 ): { label: string; action: Action; ghost?: boolean; warn?: boolean; needsYou: boolean; roll?: boolean }[] {
   if (state.phase === "over") return [];
+  if (busy) return [];
   if (!mine) return [];
   if (state.phase === "home") {
     return [
@@ -466,12 +473,79 @@ function storeRent(state: State, ownerId: string) {
   return [25, 50, 75, 100][n - 1] ?? 25;
 }
 
-function Pawns({ state }: { state: State }) {
+function pathBetween(from: number, to: number) {
+  const steps: number[] = [];
+  let i = from;
+  const guard = TRACK_ORDER.length + 2;
+  let n = 0;
+  while (i !== to && n < guard) {
+    i = (i + 1) % TRACK_ORDER.length;
+    steps.push(i);
+    n += 1;
+  }
+  return steps;
+}
+
+function Pawns({
+  state,
+  walk,
+  setWalk,
+}: {
+  state: State;
+  walk: Record<string, number>;
+  setWalk: (next: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)) => void;
+}) {
   const here = actor(state);
-  const living = state.players.filter((p) => !p.out);
-  const groups = new Map<string, typeof living>();
-  for (const p of living) {
-    const id = TRACK_ORDER[p.stand];
+  const shown = useRef<Record<string, number>>({});
+  const live = state.players.filter((p) => !p.out);
+  const destKey = live.map((p) => `${p.id}:${p.stand}`).join("|");
+
+  useEffect(() => {
+    setWalk((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const p of live) {
+        if (shown.current[p.id] == null) shown.current[p.id] = p.stand;
+        if (shown.current[p.id] !== p.stand && next[p.id] == null) {
+          next[p.id] = shown.current[p.id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [destKey, live, setWalk]);
+
+  useEffect(() => {
+    if (!Object.keys(walk).length) return;
+    const t = window.setTimeout(() => {
+      setWalk((prev) => {
+        const next = { ...prev };
+        for (const id of Object.keys(next)) {
+          const p = state.players.find((x) => x.id === id);
+          if (!p) {
+            delete next[id];
+            continue;
+          }
+          const route = pathBetween(next[id], p.stand);
+          if (!route.length) {
+            shown.current[id] = p.stand;
+            delete next[id];
+          } else {
+            next[id] = route[0];
+            shown.current[id] = route[0];
+            if (route[0] === p.stand) delete next[id];
+          }
+        }
+        return next;
+      });
+    }, STEP_MS);
+    return () => window.clearTimeout(t);
+  }, [walk, destKey, setWalk, state.players]);
+
+  const groups = new Map<string, typeof live>();
+  for (const p of live) {
+    const idx = walk[p.id] ?? shown.current[p.id] ?? p.stand;
+    const id = TRACK_ORDER[idx];
     const list = groups.get(id) ?? [];
     list.push(p);
     groups.set(id, list);
@@ -487,13 +561,14 @@ function Pawns({ state }: { state: State }) {
       pawns.push(
         <span
           key={p.id}
-          className={`pawn ${p.id === here?.id ? "acting" : ""}`}
+          className={`pawn ${p.id === here?.id ? "acting" : ""} ${walk[p.id] != null ? "walking" : ""}`}
           title={p.name}
           style={{
             left: `${(box.x + box.w * (base.cx + ox)) * 100}%`,
             top: `${(box.y + box.h * (base.cy + oy)) * 100}%`,
             background: p.avatar ? undefined : p.color,
             zIndex: p.id === here?.id ? 2 : 1,
+            transitionDuration: `${STEP_MS}ms`,
           }}
         >
           {p.avatar ? <img src={p.avatar} alt="" /> : p.name.slice(0, 1)}
@@ -517,14 +592,11 @@ function cellBox(col: number, row: number) {
 }
 
 function anchor(space: (typeof TRACK)[number]) {
-  if (space.id === "home") return { cx: 0.55, cy: 0.34 };
-  if (space.id === "market") return { cx: 0.32, cy: 0.34 };
-  if (space.id === "dream") return { cx: 0.32, cy: 0.68 };
-  if (space.id === "rest") return { cx: 0.62, cy: 0.68 };
-  if (space.side === "bottom") return { cx: 0.5, cy: 0.34 };
-  if (space.side === "top") return { cx: 0.5, cy: 0.66 };
-  if (space.side === "left") return { cx: 0.66, cy: 0.5 };
-  return { cx: 0.34, cy: 0.5 };
+  if (space.id === "home") return { cx: 0.52, cy: 0.42 };
+  if (space.id === "market") return { cx: 0.48, cy: 0.42 };
+  if (space.id === "dream") return { cx: 0.48, cy: 0.58 };
+  if (space.id === "rest") return { cx: 0.52, cy: 0.58 };
+  return { cx: 0.5, cy: 0.5 };
 }
 
 function slotOffset(index: number, count: number): [number, number] {

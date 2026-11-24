@@ -889,10 +889,18 @@ button:disabled { opacity: 0.4; cursor: default; }
   animation: sheet-in 0.26s ease;
 }
 .sheet.is-stall {
+  display: grid;
+  place-items: center;
   justify-content: center;
   align-items: center;
-  padding: 18px;
+  padding: 24px;
   background: rgba(8, 6, 10, .78);
+}
+.sheet.is-stall article {
+  width: min(640px, calc(100% - 32px));
+  height: auto;
+  max-height: min(88vh, 720px);
+  border-left: 0;
 }
 .stall-menu {
   position: relative;
@@ -2039,9 +2047,10 @@ input {
 .rail-face.host .rail-ava { border-color: var(--accent); }
 .lobby-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; width: min(100%, 720px); }
 
+.sheet.is-stall article.how-card,
 .how-card {
-  width: min(920px, 100%);
-  max-height: min(88vh, 760px);
+  width: min(1100px, calc(100vw - 48px));
+  max-height: min(90vh, 820px);
   overflow: auto;
   background:
     repeating-linear-gradient(0deg, #1a1520 0 28px, #1e1824 28px 56px);

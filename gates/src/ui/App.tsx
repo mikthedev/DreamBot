@@ -51,6 +51,7 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [leaveWarn, setLeaveWarn] = useState(false);
   const [brokeShake, setBrokeShake] = useState(0);
+  const [menuMuffle, setMenuMuffle] = useState(false);
   const [mix, setMix] = useState(() => getMix());
   const diveWait = useRef<number[]>([]);
   const [pickedMode, setPickedMode] = useState<Mode>("moves");
@@ -185,6 +186,7 @@ export function App() {
     setSpectators([]);
     setScreen("lobby");
     setState(null);
+    setMenuMuffle(false);
   }
 
   function joinSeat(id?: string) {
@@ -292,8 +294,8 @@ export function App() {
   }, [pregame]);
 
   useEffect(() => {
-    muffleMusic(dive !== "idle" || (!pregame && peeking));
-  }, [pregame, peeking, dive]);
+    muffleMusic(dive !== "idle" || menuMuffle || (!pregame && peeking));
+  }, [pregame, peeking, dive, menuMuffle]);
 
   useEffect(() => {
     if (!seatHover) return;
@@ -335,12 +337,13 @@ export function App() {
             onJoin={joinSeat}
             onSpectate={spectateSeat}
             onStart={() => startTable()}
-            onBack={() => setScreen("menu")}
+            onBack={() => { setMenuMuffle(false); setScreen("menu"); }}
+            onMuffle={setMenuMuffle}
             onSeatBots={seatBots}
             onPlayBots={playWithBots}
           />
         ) : (
-          <StartMenu onPick={openLobby} />
+          <StartMenu onPick={openLobby} onMuffle={setMenuMuffle} />
         )
       ) : (
         <div className="play">

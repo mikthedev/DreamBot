@@ -73,24 +73,44 @@ export function Lobby({
   onBack: () => void;
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
+  const seated = joined.length > 0;
+  const kick = [...joined].reverse().find((p) => p.id !== hostId);
   return (
     <div className="lobby">
       <div className="join-rail" aria-label="Join and spectators">
-        <button className="join-plus" title="Join the table" onClick={() => onJoin()}>
-          +
-        </button>
-        <div className="seat-stack">
-          {joined.map((p) => (
-            <button
-              key={p.id}
-              className={`rail-face ${p.id === hostId ? "host" : ""}`}
-              title={p.id === hostId ? `${p.name} (host)` : `Move ${p.name} to spectators`}
-              onClick={() => p.id !== hostId && onSpectate(p.id)}
-            >
-              <RailFace person={p} />
-            </button>
-          ))}
-        </div>
+        {seated ? (
+          <div className="join-in">
+            {ready ? (
+              <button className="start-pip" title="Start table" onClick={onStart}>
+                S
+              </button>
+            ) : null}
+            <div className="join-card">
+              <button
+                className="join-minus"
+                title={kick ? `Unseat ${kick.name}` : "Table is open"}
+                onClick={() => kick && onSpectate(kick.id)}
+                disabled={!kick}
+              >
+                −
+              </button>
+              {joined.map((p) => (
+                <button
+                  key={p.id}
+                  className={`rail-face ${p.id === hostId ? "host" : ""}`}
+                  title={p.id === hostId ? `${p.name} (host)` : `Move ${p.name} to spectators`}
+                  onClick={() => p.id !== hostId && onSpectate(p.id)}
+                >
+                  <RailFace person={p} />
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <button className="join-plus" title="Join the table" onClick={() => onJoin()}>
+            +
+          </button>
+        )}
         <div className="spectate-rail">
           <div className="spectate-eye" title="Spectators">
             <EyeIcon />

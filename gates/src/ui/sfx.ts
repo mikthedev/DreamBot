@@ -42,7 +42,7 @@ const MUSIC_VOL_KEY = "gates-music-vol";
 const SFX_VOL_KEY = "gates-sfx-vol";
 const MUSIC_MAX = 0.2;
 const OPEN_HZ = 18000;
-const MUFFLE_HZ = 720;
+const MUFFLE_HZ = 480;
 
 const cache = new Map<SfxName, HTMLAudioElement>();
 let hoverAt = 0;
@@ -141,7 +141,6 @@ export function armAudio() {
 
 export function setSoundtrack(next: "menu" | "play") {
   track = next;
-  if (next === "menu") muffleMusic(false);
   if (!musicOn) return;
   ensureGraph();
   void startTrack(next);
@@ -149,14 +148,14 @@ export function setSoundtrack(next: "menu" | "play") {
 
 export function muffleMusic(on: boolean) {
   muffled = on;
+  ensureGraph();
   if (!ctx || !filter || !musicGain) return;
   const now = ctx.currentTime;
-  const hz = on ? MUFFLE_HZ : OPEN_HZ;
   filter.frequency.cancelScheduledValues(now);
   musicGain.gain.cancelScheduledValues(now);
-  filter.frequency.setValueAtTime(Math.max(80, filter.frequency.value), now);
-  filter.frequency.exponentialRampToValueAtTime(hz, now + 0.16);
-  musicGain.gain.setTargetAtTime(targetGain(), now, 0.08);
+  filter.Q.setTargetAtTime(on ? 1.4 : 0.7, now, 0.05);
+  filter.frequency.setTargetAtTime(on ? MUFFLE_HZ : OPEN_HZ, now, 0.05);
+  musicGain.gain.setTargetAtTime(targetGain(), now, 0.05);
 }
 
 function targetGain() {

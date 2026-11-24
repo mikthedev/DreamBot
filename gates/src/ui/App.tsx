@@ -279,22 +279,15 @@ export function App() {
   const stallOpen = trading || inDeal;
   const pregame = screen !== "play" || !state || !me;
   const ownerHover = !!(state && hoverId && tileOwner(hoverId, state));
-  const muffled =
-    !pregame &&
-    (!!focusOwner ||
-      ownerHover ||
-      !!openGroup ||
-      stallOpen ||
-      !!sheet ||
-      helpOpen ||
-      leaveWarn ||
-      dive !== "idle");
+  const peeking = !!(focusOwner || ownerHover || openGroup || stallOpen || sheet || helpOpen || leaveWarn);
 
   useEffect(() => {
     setSoundtrack(pregame ? "menu" : "play");
-    if (pregame && dive === "idle") muffleMusic(false);
-    else muffleMusic(muffled || dive !== "idle");
-  }, [pregame, muffled, dive]);
+  }, [pregame]);
+
+  useEffect(() => {
+    muffleMusic(dive !== "idle" || (!pregame && peeking));
+  }, [pregame, peeking, dive]);
 
   return (
     <LookCtx.Provider value={look}>

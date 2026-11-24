@@ -1,4 +1,4 @@
-import { COMPANIES, STANDS, companiesIn, setOf } from "./data";
+import { COMPANIES, companiesIn } from "./data";
 import { actor, anySet, apply, fuelPrice, type Action, type State } from "./game";
 
 export function botAction(state: State): Action {
@@ -13,20 +13,7 @@ export function botAction(state: State): Action {
     return { type: "store", pick: "skip" };
   }
   if (state.phase === "card") return { type: "card" };
-  if (state.phase === "path") {
-    const set = STANDS[p.stand].set;
-    const alley = setOf(set).alley;
-    const free = p.freeAlley || p.quiet > 0;
-    const maxRent = Math.max(
-      ...companiesIn(set).map((co) => {
-        const own = state.companies[co.id];
-        if (!own.owner || own.owner === p.id) return 0;
-        return co.rent[own.level];
-      }),
-    );
-    if ((free || p.cash >= alley) && maxRent > alley) return { type: "path", pick: "alley" };
-    return { type: "path", pick: "walk" };
-  }
+  if (state.phase === "path") return { type: "path", pick: "walk" };
   if (state.phase === "land" && state.land) {
     const co = COMPANIES.find((c) => c.id === state.land)!;
     if (p.cash - co.price >= 400) return { type: "land", pick: "buy" };

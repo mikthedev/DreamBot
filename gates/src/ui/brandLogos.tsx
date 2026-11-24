@@ -59,48 +59,36 @@ const LOGOS: Record<string, LogoSpec> = {
   epic: { kind: "si", icon: siEpicgames },
 };
 
-/** Mostly dark or white marks that need a lifted pad on cream tiles. */
-const CONTRAST_PAD = new Set([
-  "apple",
-  "uber",
-  "openai",
-  "steam",
-  "xai",
-  "microsoft",
-  "disney",
-  "waymo",
-  "intel",
-  "netflix",
-  "tesla",
-  "epic",
-  "anthropic",
-]);
+const INK = "#1a1510";
 
 export function BrandLogo({ id, label }: { id: string; label?: string }) {
   const spec = LOGOS[id];
   const [broken, setBroken] = useState(false);
-  const pad = CONTRAST_PAD.has(id);
 
   if (!spec || broken) {
     return (
-      <span className={`logo-well ${pad ? "lift" : ""}`} aria-hidden>
-        <span className="brand-fallback">{(label || id).slice(0, 1)}</span>
+      <span className="brand-fallback" aria-hidden>
+        {(label || id).slice(0, 1)}
       </span>
     );
   }
 
-  const inner =
-    spec.kind === "si" ? (
+  if (spec.kind === "si") {
+    return (
       <svg className="brand-logo" viewBox="0 0 24 24" role="img" aria-label={label || spec.icon.title}>
-        <path d={spec.icon.path} fill={`#${spec.icon.hex}`} />
+        <path d={spec.icon.path} fill={INK} />
       </svg>
-    ) : (
-      <img className="brand-logo img" src={spec.src} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
     );
+  }
 
   return (
-    <span className={`logo-well ${pad ? "lift" : ""}`} aria-hidden>
-      {inner}
-    </span>
+    <img
+      className="brand-logo img"
+      src={spec.src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={() => setBroken(true)}
+    />
   );
 }

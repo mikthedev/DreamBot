@@ -131,49 +131,38 @@ body {
   color: var(--ink);
   text-align: center;
   position: relative;
-  z-index: 1;
+  z-index: 8;
 }
-.brand-lockup { position: relative; width: min(76%, 420px); }
-.logo {
-  font-family: Georgia, "Iowan Old Style", Palatino, serif;
-  font-size: clamp(26px, 4.2vw, 56px);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 0.95;
-  color: #8b2f28;
+.table-core {
+  width: min(88%, 360px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
-.logo-rule {
-  width: 64%;
-  height: 2px;
-  margin: 10px auto 8px;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 80%, #8b2f28), transparent);
-}
-.logo-sub {
-  font-size: clamp(8px, 1vw, 11px);
-  letter-spacing: 0.22em;
+.dice-row { display: flex; gap: 10px; justify-content: center; }
+.center-prompt {
+  margin: 0;
+  font-size: clamp(12px, 1.6vw, 15px);
   font-weight: 650;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--felt-deep) 85%, var(--ink));
+  color: var(--ink);
+  line-height: 1.3;
 }
-.center.dealing .logo,
-.center.dealing .logo-sub,
-.center.dealing .logo-rule { display: none; }
-.center.rolling-ready .brand-lockup { min-height: 110px; }
-.roll-callout span {
-  display: block;
-  letter-spacing: 0.2em;
-  font-size: 10px;
+.center-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.center-actions button { min-width: 7.5rem; }
+.pay-chip {
+  background: #8b2f28;
+  color: #fff8f2;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
   font-weight: 700;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--felt-deep) 90%, var(--ink));
-}
-.roll-callout b {
-  display: block;
-  margin-top: 6px;
-  font-size: clamp(15px, 1.8vw, 20px);
-  font-family: Georgia, "Iowan Old Style", Palatino, serif;
-  color: #8b2f28;
-  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .chance {
@@ -205,17 +194,11 @@ body {
   line-height: 1.35;
 }
 .die {
-  position: absolute;
-  left: 50%;
-  top: calc(100% + 10px);
-  width: 52px;
-  height: 52px;
-  margin-left: -26px;
-  animation: toss 0.7s cubic-bezier(.2, .7, .2, 1) forwards;
-  pointer-events: none;
+  width: 46px;
+  height: 46px;
+  display: block;
 }
 .die.spinning { animation: wobble 0.18s ease-in-out infinite; }
-.die.away { opacity: 0; animation: none; }
 .die-svg { width: 100%; height: 100%; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .2)); }
 
 /* —— Tiles (unified deed + store) —— */
@@ -334,43 +317,22 @@ body {
 .tile.left .owner-mark { right: 3px; top: 3px; }
 .tile.right .owner-mark { left: 3px; top: 3px; }
 
-.logo-well {
-  display: grid;
-  place-items: center;
-  width: clamp(20px, 40cqmin, 32px);
-  height: clamp(20px, 40cqmin, 32px);
-  border-radius: 9px;
-  background: linear-gradient(165deg, #fffefb 0%, #eae4da 100%);
-  border: 1px solid var(--tile-edge);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .9),
-    0 2px 5px rgba(26, 21, 16, .14);
+.brand-logo {
+  width: clamp(22px, 48cqmin, 40px);
+  height: clamp(22px, 48cqmin, 40px);
+  display: block;
+  object-fit: contain;
   flex: none;
 }
-.logo-well.lift {
-  background: linear-gradient(165deg, #2e2a26 0%, #1a1714 100%);
-  border-color: #12100e;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .08),
-    0 2px 6px rgba(0, 0, 0, .28);
-}
-.logo-well .brand-logo {
-  width: 70%;
-  height: 70%;
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  border-radius: 0;
-  box-shadow: none;
-  object-fit: contain;
-}
-.logo-well.lift .brand-logo { filter: brightness(1.08) contrast(1.05); }
 .brand-fallback {
-  font-size: clamp(9px, 18cqmin, 12px);
+  width: clamp(22px, 48cqmin, 40px);
+  height: clamp(22px, 48cqmin, 40px);
+  display: grid;
+  place-items: center;
+  font-size: clamp(12px, 22cqmin, 16px);
   font-weight: 800;
   color: var(--ink);
 }
-.logo-well.lift .brand-fallback { color: #f2ebe2; }
 
 .tile.hot {
   z-index: 5;
@@ -496,8 +458,7 @@ body {
 /* —— Dock —— */
 .foot { display: flex; flex-direction: column; gap: 8px; }
 .dock {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
   gap: 14px;
   align-items: center;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -525,7 +486,7 @@ button {
   cursor: pointer;
   transition: background 0.15s ease, transform 0.12s ease;
 }
-button.go { min-width: 7rem; }
+button.go { min-width: 6.5rem; }
 button.ghost {
   background: transparent;
   color: var(--muted);
@@ -562,7 +523,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 .sheet h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
 .sheet p, .log li { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
-.row.company .logo-well { width: 22px; height: 22px; }
+.row.company .brand-logo,
+.row.company .brand-fallback { width: 22px; height: 22px; }
 .row.company span { flex: 1; min-width: 120px; }
 input {
   width: 100%;
@@ -603,9 +565,8 @@ input {
 }
 
 @media (max-width: 760px) {
-  .dock { grid-template-columns: 1fr; }
-  .actions { width: 100%; }
-  .actions button { flex: 1; }
+  .center-actions { width: 100%; }
+  .center-actions button { flex: 1; min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pawn, .die, .chance, .sheet article, .tile.hot, button { animation: none; transition: none; }

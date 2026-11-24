@@ -10,13 +10,12 @@ import {
   START_MOVES,
   STORES,
   companiesIn,
-  setOf,
   type CardId,
   type Company,
   type SetId,
   type StoreId,
 } from "./data";
-import { stepAlongTrack } from "./track";
+import { passedGo, tileAt, wrapIndex } from "./track";
 
 export type Mode = "moves" | "classic";
 
@@ -29,6 +28,7 @@ export type Player = {
   test: boolean;
   cash: number;
   moves: number;
+  /** Index on the 32-space board. Next roll starts from here. */
   stand: number;
   sparks: number;
   fuelBuys: number;
@@ -62,8 +62,9 @@ export type State = {
   deck: CardId[];
   pendingCard: CardId | null;
   land: string | null;
-  forcedRoll: 1 | 2 | 3 | null;
-  lastRoll: 1 | 2 | 3 | null;
+  lastPay: { to: string; amount: number } | null;
+  forcedRoll: [number, number] | null;
+  lastRoll: [number, number] | null;
   rollTick: number;
   log: string[];
   winnerIds: string[];
@@ -135,6 +136,7 @@ export function createGame(
     deck: shuffle([...CARDS], seed),
     pendingCard: null,
     land: null,
+    lastPay: null,
     forcedRoll: null,
     lastRoll: null,
     rollTick: 0,
@@ -190,8 +192,12 @@ export function anySet(state: State, playerId: string) {
   );
 }
 
-function stand() {
-  return STANDS;
+function spaceId(p: Player) {
+  return tileAt(p.stand);
+}
+
+function d6(state: State) {
+  return 1 + Math.floor(nextRng(state) * 6);
 }
 
 function beginTurn(state: State) {
@@ -213,6 +219,7 @@ function beginTurn(state: State) {
   const p = actor(state)!;
   state.movesBoughtThisTurn = false;
   state.land = null;
+  state.lastPay = null;
   if (state.mode === "moves") {
     if (p.moves <= 0) {
       eliminate(state, p, "out of moves");
@@ -221,46 +228,9 @@ function beginTurn(state: State) {
     }
     p.moves -= 1;
   }
-  const here = stand()[p.stand];
-  if (here.id === "home" && p.leftHome) {
-    state.phase = "home";
-    say(state, `${p.name}: GO — cash or a move.`);
-    return;
-  }
-  arrive(state, p);
-}
-
-function arrive(state: State, p: Player) {
-  const here = stand()[p.stand];
-  if (here.id === "home" && !p.leftHome) {
+  if (!p.leftHome && spaceId(p) === "home") {
     p.leftHome = true;
     say(state, `${p.name} leaves GO.`);
-  }
-  if (here.store) {
-    const owner = state.stores[here.store];
-    if (owner && owner !== p.id) {
-      const n = STORES.filter((s) => state.stores[s.id] === owner).length;
-      const rent = [25, 50, 75, 100][n - 1] ?? 25;
-      payCash(state, p, player(state, owner), rent, false);
-      spark(state, p);
-    } else if (owner === p.id) {
-      spark(state, p);
-    }
-    if (!owner) {
-      state.phase = "store";
-      say(state, `${p.name} can buy ${here.label} for $150.`);
-      return;
-    }
-  }
-  if (here.id === "dream") {
-    drawCard(state, p);
-    return;
-  }
-  if (here.id === "market") {
-    say(state, `${p.name}: next trade is free.`);
-  }
-  if (here.id === "rest") {
-    say(state, `${p.name} is just visiting Jail.`);
   }
   state.phase = "path";
 }
@@ -372,75 +342,50 @@ export function apply(prev: State, action: Action): State {
     }
     if (p.note) settleNote(state, p);
     p.freeAlley = false;
-    arrive(state, p);
+    restOnSpace(state, p);
     return state;
   }
 
   if (action.type === "store" && state.phase === "store") {
-    const here = stand()[p.stand];
-    if (action.pick === "buy" && here.store && p.cash >= 150) {
+    const here = STANDS.find((s) => s.id === spaceId(p));
+    if (action.pick === "buy" && here?.store && p.cash >= 150) {
       p.cash -= 150;
       state.stores[here.store] = p.id;
       say(state, `${p.name} buys ${here.label}.`);
     }
-    if (stand()[p.stand].id === "dream") drawCard(state, p);
-    else state.phase = "path";
+    restOnSpace(state, p);
     return state;
   }
 
   if (action.type === "card" && state.phase === "card") {
     resolveCard(state, p);
     state.pendingCard = null;
-    state.phase = "path";
+    restOnSpace(state, p);
     return state;
   }
 
   if (action.type === "path" && state.phase === "path") {
-    const set = stand()[p.stand].set;
-    const alley = setOf(set).alley;
-    const free = p.freeAlley || p.quiet > 0;
-    if (action.pick === "alley" && (free || p.cash >= alley)) {
-      if (!free) p.cash -= alley;
-      if (p.quiet > 0 && !p.freeAlley) p.quiet -= 1;
-      if (p.freeAlley) p.freeAlley = false;
-      say(state, `${p.name} takes the ${setOf(set).label} alley.`);
-      advance(state, p);
-      return state;
-    }
-    const roll = state.forcedRoll ?? (1 + Math.floor(nextRng(state) * 3));
+    const a = state.forcedRoll?.[0] ?? d6(state);
+    const b = state.forcedRoll?.[1] ?? d6(state);
     state.forcedRoll = null;
-    const die = (p.nudge && roll !== 2 ? 2 : roll) as 1 | 2 | 3;
-    p.nudge = false;
-    state.lastRoll = die;
+    let steps = a + b;
+    if (p.nudge) {
+      steps = Math.min(12, steps + 1);
+      p.nudge = false;
+    }
+    state.lastRoll = [a, b];
     state.rollTick += 1;
-    const landId = stepAlongTrack(stand()[p.stand].id, die);
-    const co = COMPANIES.find((c) => c.id === landId);
-    state.land = co ? co.id : null;
-    if (co) {
-      say(state, `${p.name} rolled ${die} and landed on ${co.name}.`);
-    } else {
-      say(state, `${p.name} rolled ${die} → ${landId} (no property).`);
-      advance(state, p);
-      return state;
+    const from = p.stand;
+    if (passedGo(from, steps) && p.leftHome) {
+      p.cash += 200;
+      p.lapKey += 1;
+      say(state, `${p.name} passed GO (+$200).`);
     }
-    const own = state.companies[co.id];
-    if (own.owner && own.owner !== p.id) {
-      if (p.openHouse) {
-        p.openHouse = null;
-        say(state, "Open house — no rent.");
-      } else {
-        payCash(state, p, player(state, own.owner), rentOf(state, co), true, co.set);
-      }
-      spark(state, p);
-      if (!p.out) advance(state, p);
-      return state;
-    }
-    if (own.owner === p.id) {
-      spark(state, p);
-      advance(state, p);
-      return state;
-    }
-    state.phase = "land";
+    p.stand = wrapIndex(from + steps);
+    const id = spaceId(p);
+    state.land = id;
+    say(state, `${p.name} rolled ${a}+${b} (${steps}) → ${labelOf(id)}.`);
+    resolveLanding(state, p, id);
     return state;
   }
 
@@ -454,7 +399,7 @@ export function apply(prev: State, action: Action): State {
       say(state, `${p.name} leaves ${co.name}.`);
     }
     spark(state, p);
-    advance(state, p);
+    restOnSpace(state, p);
     return state;
   }
 
@@ -607,17 +552,102 @@ function resolveCard(state: State, p: Player) {
     if (set) p.openHouse = set;
   }
   if (card === "detour") {
-    p.stand = (p.stand + 1) % STANDS.length;
-    say(state, `${p.name} detours.`);
+    p.stand = wrapIndex(p.stand + 4);
+    say(state, `${p.name} detours to ${labelOf(spaceId(p))}.`);
   }
 }
 
-function advance(state: State, p: Player) {
-  p.stand = (p.stand + 1) % STANDS.length;
-  if (STANDS[p.stand].id === "home") p.lapKey += 1;
-  state.land = null;
+function resolveLanding(state: State, p: Player, id: string) {
+  const stand = STANDS.find((s) => s.id === id);
+  const co = COMPANIES.find((c) => c.id === id);
+
+  if (id === "home") {
+    if (p.leftHome) {
+      state.phase = "home";
+      say(state, `${p.name} lands on GO.`);
+      return;
+    }
+    restOnSpace(state, p);
+    return;
+  }
+
+  if (stand?.store) {
+    const owner = state.stores[stand.store];
+    if (owner && owner !== p.id) {
+      const n = STORES.filter((s) => state.stores[s.id] === owner).length;
+      const rent = [25, 50, 75, 100][n - 1] ?? 25;
+      const paid = takeRent(state, p, player(state, owner), rent, false);
+      say(state, `${p.name} pays $${paid} at ${stand.label}.`);
+      spark(state, p);
+      restOnSpace(state, p);
+      return;
+    }
+    if (owner === p.id) {
+      spark(state, p);
+      restOnSpace(state, p);
+      return;
+    }
+    state.phase = "store";
+    say(state, `${p.name} can buy ${stand.label} for $150.`);
+    return;
+  }
+
+  if (id === "dream") {
+    drawCard(state, p);
+    return;
+  }
+  if (id === "market") {
+    say(state, `${p.name}: next trade is free.`);
+    restOnSpace(state, p);
+    return;
+  }
+  if (id === "rest") {
+    say(state, `${p.name} is just visiting Jail.`);
+    restOnSpace(state, p);
+    return;
+  }
+
+  if (co) {
+    const own = state.companies[co.id];
+    if (own.owner && own.owner !== p.id) {
+      if (p.openHouse) {
+        p.openHouse = null;
+        say(state, "Open house — no rent.");
+      } else {
+        const paid = takeRent(state, p, player(state, own.owner), rentOf(state, co), true, co.set);
+        say(state, `${p.name} pays $${paid} rent on ${co.name}.`);
+      }
+      spark(state, p);
+      restOnSpace(state, p);
+      return;
+    }
+    if (own.owner === p.id) {
+      spark(state, p);
+      restOnSpace(state, p);
+      return;
+    }
+    state.phase = "land";
+    return;
+  }
+
+  restOnSpace(state, p);
+}
+
+function takeRent(state: State, from: Player, to: Player, printed: number, stackSplit: boolean, set?: SetId) {
+  const before = from.cash;
+  payCash(state, from, to, printed, stackSplit, set);
+  const paid = Math.max(0, before - from.cash);
+  if (paid > 0) state.lastPay = { to: to.id, amount: paid };
+  return paid;
+}
+
+function restOnSpace(state: State, p: Player) {
   state.phase = "extra";
   if (p.cash < 80) p.freeAlley = true;
+}
+
+function labelOf(id: string) {
+  return STANDS.find((s) => s.id === id)?.label || COMPANIES.find((c) => c.id === id)?.name || id;
 }
 
 function finishTurn(state: State) {
@@ -639,11 +669,16 @@ export function company(id: string) {
 export function describePhase(state: State): string {
   const p = actor(state);
   if (!p || state.phase === "over") return state.winnerIds.length ? "Game over" : "";
-  if (state.phase === "home") return "You're on GO";
-  if (state.phase === "store") return `Buy ${STANDS[p.stand].label}?`;
+  const here = labelOf(spaceId(p));
+  if (state.phase === "home") return "GO — cash or a move";
+  if (state.phase === "store") return `Buy ${here}?`;
   if (state.phase === "card") return "Casino card";
-  if (state.phase === "path") return "Roll the dice — 1, 2, or 3 spaces";
+  if (state.phase === "path") return "Roll two dice";
   if (state.phase === "land") return state.land ? `Buy ${company(state.land).name}?` : "Buy?";
-  if (state.phase === "extra") return "Build, buy a move, or end";
+  if (state.lastPay) {
+    const who = player(state, state.lastPay.to);
+    return `Paid $${state.lastPay.amount} to ${who.name}`;
+  }
+  if (state.phase === "extra") return `On ${here}`;
   return "";
 }

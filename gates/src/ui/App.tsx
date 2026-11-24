@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { CARD_LABEL, COMPANIES, STANDS, STORES, STORE_BAND, setOf } from "../engine/data";
+import { TRACK_ORDER } from "../engine/track";
 import { stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
 import {
@@ -31,7 +32,7 @@ export function App() {
     createGame(seats("You", null, true), { seed: Date.now() % 100000 }),
   );
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
-  const [diceSpin, setDiceSpin] = useState<1 | 2 | 3 | null>(null);
+  const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
   }, [testOn]);
@@ -64,7 +65,7 @@ export function App() {
     if (diceSpin != null) return;
     let n = 0;
     const spin = window.setInterval(() => {
-      setDiceSpin((1 + Math.floor(Math.random() * 3)) as 1 | 2 | 3);
+      setDiceSpin([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
       n += 1;
       if (n >= 10) {
         window.clearInterval(spin);
@@ -109,33 +110,61 @@ export function App() {
 
       <div className="stage">
         <div className="board" aria-label="DreamPoly board">
-          <div className={`center ${card ? "dealing" : ""} ${state.phase === "path" && mine ? "rolling-ready" : ""}`}>
-            <div className="brand-lockup">
+          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""}`}>
+            <div className="table-core">
               {card ? (
-                <article className="chance" key={card}>
-                  <span>Casino</span>
-                  <b>{CARD_LABEL[card]}</b>
-                </article>
-              ) : state.phase === "path" && mine ? (
-                <div className="roll-callout">
-                  <span>Your roll</span>
-                  <b>{rolling ? "Rolling…" : "Tap Roll dice"}</b>
-                </div>
+                <>
+                  <article className="chance" key={card}>
+                    <span>Casino</span>
+                    <b>{CARD_LABEL[card]}</b>
+                  </article>
+                  <div className="center-actions">
+                    {primary.map((b) => (
+                      <button
+                        key={b.label}
+                        className={b.ghost ? "ghost" : "go"}
+                        disabled={(!mine && b.needsYou) || !!diceSpin}
+                        onClick={() => act(b.action)}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
               ) : (
                 <>
-                  <div className="logo">DreamPoly</div>
-                  <div className="logo-rule" />
-                  <div className="logo-sub">Pass GO · collect $200</div>
+                  <div className="dice-row" key={rolling ? "spin" : state.rollTick}>
+                    <span className={`die ${rolling ? "spinning" : ""}`} aria-hidden>
+                      <DieFace n={centerDie?.[0] ?? 6} />
+                    </span>
+                    <span className={`die ${rolling ? "spinning" : ""}`} aria-hidden>
+                      <DieFace n={centerDie?.[1] ?? 5} />
+                    </span>
+                  </div>
+                  {state.lastPay && mine && state.phase === "extra" ? (
+                    <div className="pay-chip">Paid ${state.lastPay.amount}</div>
+                  ) : null}
+                  <p className="center-prompt">
+                    {state.phase === "over"
+                      ? `Winner: ${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.name).join(", ") || "—"}`
+                      : mine
+                        ? describePhase(state)
+                        : `${who?.name || "Someone"} is playing`}
+                  </p>
+                  <div className="center-actions">
+                    {primary.map((b) => (
+                      <button
+                        key={b.label}
+                        className={b.ghost ? "ghost" : b.warn ? "warn" : "go"}
+                        disabled={(!mine && b.needsYou) || !!diceSpin}
+                        onClick={() => (b.roll ? rollThen(b.action) : act(b.action))}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                    <button className="ghost" onClick={() => setSheet("more")}>More</button>
+                  </div>
                 </>
-              )}
-              {centerDie != null && !card && (
-                <div
-                  key={rolling ? "spin" : state.rollTick}
-                  className={`die ${rolling ? "spinning" : ""} ${card ? "away" : ""}`}
-                  aria-hidden
-                >
-                  <DieFace n={centerDie} />
-                </div>
               )}
             </div>
           </div>
@@ -159,26 +188,6 @@ export function App() {
               <b>${me.cash}</b>
               <span>{me.moves} moves {me.moves <= 4 && !me.out ? "· running thin" : ""}</span>
             </div>
-          </div>
-          <div className="prompt">
-            {state.phase === "over"
-              ? `Winner: ${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.name).join(", ") || "—"}`
-              : mine
-                ? describePhase(state)
-                : `${who?.name || "Someone"} is playing`}
-          </div>
-          <div className="actions">
-            {primary.map((b) => (
-              <button
-                key={b.label}
-                className={b.ghost ? "ghost" : b.warn ? "warn" : "go"}
-                disabled={(!mine && b.needsYou) || !!diceSpin}
-                onClick={() => (b.roll ? rollThen(b.action) : act(b.action))}
-              >
-                {b.label}
-              </button>
-            ))}
-            <button className="ghost" onClick={() => setSheet("more")}>More</button>
           </div>
         </div>
       </footer>
@@ -301,12 +310,8 @@ function buttonsFor(
   }
   if (state.phase === "card") return [{ label: "Continue", action: { type: "card" }, needsYou: true }];
   if (state.phase === "path") {
-    const set = setOf(STANDS[state.players.find((p) => p.id === actor(state)?.id)?.stand ?? 0].set);
     if (busy) return [];
-    return [
-      { label: "Roll dice", action: { type: "path", pick: "walk" }, needsYou: true, roll: true },
-      { label: `Alley $${set.alley}`, action: { type: "path", pick: "alley" }, ghost: true, needsYou: true },
-    ];
+    return [{ label: "Roll dice", action: { type: "path", pick: "walk" }, needsYou: true, roll: true }];
   }
   if (state.phase === "land" && state.land) {
     const co = COMPANIES.find((c) => c.id === state.land)!;
@@ -340,8 +345,9 @@ function Tile({ space, state }: { space: (typeof TRACK)[number]; state: State })
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
   const here = actor(state);
-  const hot = state.land === space.id;
-  const standHere = !!here && STANDS[here.stand]?.id === space.id && !state.land && state.phase !== "path";
+  const hereId = here ? TRACK_ORDER[here.stand] : null;
+  const hot = hereId === space.id;
+  const standHere = false;
 
   if (co) {
     const own = state.companies[co.id];
@@ -466,7 +472,7 @@ function Pawns({ state }: { state: State }) {
   const living = state.players.filter((p) => !p.out);
   const groups = new Map<string, typeof living>();
   for (const p of living) {
-    const id = p.id === here?.id && state.land ? state.land : STANDS[p.stand].id;
+    const id = TRACK_ORDER[p.stand];
     const list = groups.get(id) ?? [];
     list.push(p);
     groups.set(id, list);

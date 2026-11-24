@@ -254,16 +254,20 @@ export function CornerArt({ id }: { id: string }) {
   );
 }
 
-export function DieFace({ n }: { n: 1 | 2 | 3 }) {
+export function DieFace({ n }: { n: number }) {
+  const face = Math.min(6, Math.max(1, Math.round(n)));
   const pips: Record<number, [number, number][]> = {
     1: [[12, 12]],
     2: [[7.5, 7.5], [16.5, 16.5]],
     3: [[7.2, 7.2], [12, 12], [16.8, 16.8]],
+    4: [[7.2, 7.2], [16.8, 7.2], [7.2, 16.8], [16.8, 16.8]],
+    5: [[7.2, 7.2], [16.8, 7.2], [12, 12], [7.2, 16.8], [16.8, 16.8]],
+    6: [[7.2, 7.2], [16.8, 7.2], [7.2, 12], [16.8, 12], [7.2, 16.8], [16.8, 16.8]],
   };
   return (
     <svg viewBox="0 0 24 24" className="die-svg" aria-hidden>
       <rect x="1.2" y="1.2" width="21.6" height="21.6" rx="4" fill="#fffaf2" stroke="#1b140c" strokeWidth="1.6" />
-      {pips[n].map(([cx, cy]) => (
+      {pips[face].map(([cx, cy]) => (
         <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="2" fill="#b42318" />
       ))}
     </svg>

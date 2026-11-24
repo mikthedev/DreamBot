@@ -19,7 +19,7 @@ function four() {
 }
 
 export function runScenarios(): ScenarioResult[] {
-  return [fullBotTable(), homeIsAChoice(), fuelGetsExpensive(), cloudPaysChips(), brokeMustWalk(), outOfMovesFreesBoard()];
+  return [fullBotTable(), homeIsAChoice(), fuelGetsExpensive(), cloudPaysChips(), stayOnLandedTile(), outOfMovesFreesBoard()];
 }
 
 function fullBotTable(): ScenarioResult {
@@ -45,13 +45,13 @@ function fullBotTable(): ScenarioResult {
 function homeIsAChoice(): ScenarioResult {
   let s = createGame(four(), { seed: 2 });
   const you = s.players[0];
-  s.turn = 3;
-  you.stand = 0;
+  you.stand = 28;
   you.leftHome = true;
   you.moves = 4;
   for (const id of ["discord", "reddit", "instagram"]) s.companies[id] = { owner: "you", level: 0 };
-  s.phase = "extra";
-  s = apply(s, { type: "end" });
+  s.phase = "path";
+  s.forcedRoll = [2, 2];
+  s = apply(s, { type: "path", pick: "walk" });
   const before = s.players[0].cash;
   const moves = s.players[0].moves;
   if (s.phase !== "home") return { id: "home", name: "Home is cash or a move", ok: false, detail: s.phase };
@@ -82,10 +82,10 @@ function cloudPaysChips(): ScenarioResult {
     { seed: 4 },
   );
   s.turn = 0;
-  s.players[0].stand = 3;
+  s.players[0].stand = 12;
   s.players[0].cash = 400;
   s.phase = "path";
-  s.forcedRoll = 3;
+  s.forcedRoll = [1, 2];
   for (const id of ["aws", "azure", "gcloud"]) s.companies[id] = { owner: "cloud", level: 2 };
   for (const id of ["intel", "amd", "nvidia"]) s.companies[id] = { owner: "chips", level: 0 };
   const cloudBefore = s.players[1].cash;
@@ -103,14 +103,21 @@ function cloudPaysChips(): ScenarioResult {
   };
 }
 
-function brokeMustWalk(): ScenarioResult {
+function stayOnLandedTile(): ScenarioResult {
   let s = createGame(four(), { seed: 5 });
   s.phase = "path";
-  s.players[0].cash = 10;
-  s.players[0].stand = 0;
-  s = apply(s, { type: "path", pick: "alley" });
-  const ok = s.land !== null || s.log.some((l) => l.includes("rolls"));
-  return { id: "alley", name: "Too poor for the alley means you walk", ok, detail: s.log.at(-1) || "" };
+  s.players[0].stand = 2;
+  s.forcedRoll = [1, 1];
+  s = apply(s, { type: "path", pick: "walk" });
+  const stayed = s.players[0].stand === 4 && s.land === "app";
+  s = apply(s, { type: "store", pick: "skip" });
+  const ok = stayed && s.players[0].stand === 4 && s.phase === "extra";
+  return {
+    id: "stay",
+    name: "You stay on the tile you rolled onto",
+    ok,
+    detail: ok ? "Reddit +2 stays on App Store" : `stand ${s.players[0].stand} phase ${s.phase}`,
+  };
 }
 
 function outOfMovesFreesBoard(): ScenarioResult {

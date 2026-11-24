@@ -36,9 +36,16 @@ export const TRACK: { id: string; col: number; row: number; side: Side }[] = [
 ];
 
 export const TRACK_ORDER = TRACK.map((t) => t.id);
+export const TRACK_LEN = TRACK_ORDER.length;
 
-export function stepAlongTrack(from: string, steps: number): string {
-  const i = TRACK_ORDER.indexOf(from);
-  const start = i >= 0 ? i : 0;
-  return TRACK_ORDER[(start + steps) % TRACK_ORDER.length];
+export function tileAt(index: number) {
+  return TRACK_ORDER[((index % TRACK_LEN) + TRACK_LEN) % TRACK_LEN];
+}
+
+export function wrapIndex(index: number) {
+  return ((index % TRACK_LEN) + TRACK_LEN) % TRACK_LEN;
+}
+
+export function passedGo(from: number, steps: number) {
+  return from + steps >= TRACK_LEN;
 }

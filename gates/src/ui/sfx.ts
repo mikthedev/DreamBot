@@ -8,7 +8,8 @@ export type SfxName =
   | "upgrade"
   | "move"
   | "death"
-  | "warning";
+  | "warning"
+  | "peek";
 
 const FILES: Record<SfxName, string> = {
   hover: "/sfx/hover.wav",
@@ -21,6 +22,7 @@ const FILES: Record<SfxName, string> = {
   move: "/sfx/move.wav",
   death: "/sfx/death.wav",
   warning: "/sfx/warning.wav",
+  peek: "/sfx/peek.wav",
 };
 
 const VOL: Record<SfxName, number> = {
@@ -34,6 +36,7 @@ const VOL: Record<SfxName, number> = {
   move: 0.32,
   death: 0.6,
   warning: 0.55,
+  peek: 0.42,
 };
 
 const MUSIC_MUTE_KEY = "gates-music";

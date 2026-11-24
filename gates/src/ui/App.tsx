@@ -289,6 +289,11 @@ export function App() {
     muffleMusic(dive !== "idle" || (!pregame && peeking));
   }, [pregame, peeking, dive]);
 
+  useEffect(() => {
+    if (!focusOwner) return;
+    sfx("peek");
+  }, [focusOwner]);
+
   return (
     <LookCtx.Provider value={look}>
     <div className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""}`}>

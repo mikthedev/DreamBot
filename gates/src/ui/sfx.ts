@@ -13,7 +13,8 @@ export type SfxName =
   | "confirm"
   | "market"
   | "dice"
-  | "owner";
+  | "owner"
+  | "cash";
 
 const FILES: Record<SfxName, string> = {
   hover: "/sfx/hover.wav",
@@ -31,6 +32,7 @@ const FILES: Record<SfxName, string> = {
   market: "/sfx/market.wav",
   dice: "/sfx/dice.mp3",
   owner: "/sfx/owner.wav",
+  cash: "/sfx/cash.mp3",
 };
 
 const VOL: Record<SfxName, number> = {
@@ -49,6 +51,7 @@ const VOL: Record<SfxName, number> = {
   market: 0.5,
   dice: 0.55,
   owner: 0.5,
+  cash: 0.45,
 };
 
 const MUSIC_MUTE_KEY = "gates-music";
@@ -127,7 +130,7 @@ export function sfxPlayHover(rate?: unknown) {
 }
 
 export function sfxCash(delta: number) {
-  sfx("click", delta < 0 ? 0.78 : 1.22);
+  sfx("cash", delta < 0 ? 0.82 : 1.18);
 }
 
 export function getMix() {

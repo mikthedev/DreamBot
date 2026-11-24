@@ -1633,6 +1633,7 @@ function Pawns({
 }) {
   const here = actor(state);
   const shown = useRef<Record<string, number>>({});
+  const span = useRef<Record<string, number>>({});
   const live = state.players.filter((p) => !p.out);
   const destKey = live.map((p) => `${p.id}:${p.stand}`).join("|");
 
@@ -1644,6 +1645,7 @@ function Pawns({
         if (shown.current[p.id] == null) shown.current[p.id] = p.stand;
         if (shown.current[p.id] !== p.stand && next[p.id] == null) {
           next[p.id] = shown.current[p.id];
+          span.current[p.id] = pathBetween(shown.current[p.id], p.stand).length;
           changed = true;
         }
       }
@@ -1654,7 +1656,18 @@ function Pawns({
   useEffect(() => {
     if (!Object.keys(walk).length) return;
     const t = window.setTimeout(() => {
-      sfx("move");
+      let rate = 1;
+      for (const id of Object.keys(walk)) {
+        const p = state.players.find((x) => x.id === id);
+        if (!p) continue;
+        const left = pathBetween(walk[id], p.stand).length;
+        const total = span.current[id] || left;
+        const after = Math.max(0, left - 1);
+        const progress = total <= 0 ? 1 : 1 - after / total;
+        const land = after === 0 ? 0.1 : 0;
+        rate = Math.max(rate, 1 + 0.22 * progress * progress + land);
+      }
+      sfx("move", rate);
       setWalk((prev) => {
         const next = { ...prev };
         for (const id of Object.keys(next)) {
@@ -1667,10 +1680,14 @@ function Pawns({
           if (!route.length) {
             shown.current[id] = p.stand;
             delete next[id];
+            delete span.current[id];
           } else {
             next[id] = route[0];
             shown.current[id] = route[0];
-            if (route[0] === p.stand) delete next[id];
+            if (route[0] === p.stand) {
+              delete next[id];
+              delete span.current[id];
+            }
           }
         }
         return next;

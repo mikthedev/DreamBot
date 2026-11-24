@@ -1189,16 +1189,27 @@ input {
 }
 @keyframes pawn-bob {
   0% { transform: translate(0, 0); }
-  50% { transform: translate(4px, -12px); }
+  50% { transform: translate(3px, -8px); }
   100% { transform: translate(0, 0); }
 }
-@keyframes grid-shift {
-  from { background-position: 0 0, 0 0; }
-  to { background-position: 16px 16px, 16px 16px; }
+@keyframes bill-fall {
+  0% { transform: translate(0, -18vh) rotate(-8deg); opacity: 0; }
+  8% { opacity: 0.85; }
+  100% { transform: translate(22px, 108vh) rotate(10deg); opacity: 0.7; }
 }
-@keyframes scan-drift {
-  from { transform: translateY(0); }
-  to { transform: translateY(8px); }
+@keyframes stamp-drift {
+  0% { transform: translate(0, 0) rotate(-6deg); }
+  50% { transform: translate(10px, -14px) rotate(8deg); }
+  100% { transform: translate(0, 0) rotate(-6deg); }
+}
+@keyframes chip-tumble {
+  0% { transform: translate(0, 0) rotate(0); }
+  50% { transform: translate(-8px, 12px) rotate(18deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+@keyframes vault-shift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 56px 0, 0 28px; }
 }
 @keyframes lobby-in {
   from { opacity: 0; transform: translate(0, 12px); }
@@ -1242,13 +1253,12 @@ input {
 .menu-mascot {
   position: absolute;
   right: 4vw;
-  top: 50%;
-  width: min(38vw, 420px);
-  transform: translateY(-52%);
+  bottom: 7%;
+  width: 132px;
   pointer-events: none;
   z-index: 1;
-  animation: pawn-bob 3.2s steps(8) infinite;
-  filter: drop-shadow(6px 8px 0 #0a080c);
+  animation: pawn-bob 2.8s steps(6) infinite;
+  filter: drop-shadow(4px 5px 0 #0a080c);
 }
 .menu-mascot img {
   display: block;
@@ -1257,41 +1267,74 @@ input {
   image-rendering: pixelated;
   mix-blend-mode: lighten;
 }
-.menu-grid,
-.menu-scan {
+.menu-field {
   position: absolute;
   inset: 0;
+  overflow: hidden;
   pointer-events: none;
 }
-.menu-grid {
+.menu-vault {
+  position: absolute;
+  inset: 0;
   background:
-    linear-gradient(rgba(230, 195, 90, .05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(230, 195, 90, .05) 1px, transparent 1px);
-  background-size: 16px 16px;
-  mask-image: radial-gradient(ellipse at 30% 40%, #000 30%, transparent 72%);
-  animation: grid-shift 12s steps(24) infinite;
+    repeating-linear-gradient(90deg, transparent 0 52px, rgba(230, 195, 90, .05) 52px 56px),
+    repeating-linear-gradient(0deg, #100e14 0 14px, #161218 14px 28px);
+  mask-image: radial-gradient(ellipse at 70% 50%, #000 18%, transparent 78%);
+  animation: vault-shift 16s steps(28) infinite;
 }
-.menu-scan {
-  background: repeating-linear-gradient(180deg, transparent 0 3px, rgba(0,0,0,.12) 3px 4px);
-  opacity: 0.35;
-  animation: scan-drift 6s steps(8) infinite;
-}
-.menu-float {
+.menu-bill {
   position: absolute;
-  inset: 8% 6% 10% 48%;
-  pointer-events: none;
+  top: -10%;
+  left: calc(42% + var(--i) * 4.6%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 58px;
+  height: 30px;
+  padding: 0 7px;
+  background: linear-gradient(180deg, #3f9464, #1d5a3a);
+  border: 2px solid #9fd9b4;
+  color: #eaffef;
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  box-shadow: 2px 2px 0 #0a080c;
+  animation: bill-fall 11s steps(22) infinite;
+  animation-delay: calc(var(--i) * -0.85s);
 }
-.menu-floater {
+.menu-bill:nth-child(odd) {
+  width: 50px;
+  height: 26px;
+  background: linear-gradient(180deg, #c9a24a, #7a5a18);
+  border-color: #f0d78c;
+  color: #1a1208;
+}
+.menu-bill b { font-size: 16px; line-height: 1; }
+.menu-bill small { font-size: 11px; font-weight: 800; letter-spacing: 0.04em; }
+.menu-stamp {
   position: absolute;
-  width: 42px;
-  height: 52px;
-  left: calc(8% + var(--i) * 16%);
-  top: calc(12% + var(--i) * 14%);
-  animation: pawn-bob 2.4s steps(6) infinite;
-  animation-delay: calc(var(--i) * -0.35s);
-  filter: drop-shadow(3px 3px 0 #0a080c);
+  right: calc(8% + var(--i) * 11%);
+  top: calc(16% + var(--i) * 24%);
+  font-family: "Pixelify Sans", Outfit, sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  color: #e6c35a;
+  border: 3px solid #e6c35a88;
+  padding: 4px 10px;
+  opacity: 0.32;
+  animation: stamp-drift 5.5s steps(8) infinite;
+  animation-delay: calc(var(--i) * -1.4s);
 }
-.menu-floater .pixel-pawn { width: 100%; height: 100%; }
+.menu-chip {
+  position: absolute;
+  right: calc(12% + var(--i) * 16%);
+  top: calc(32% + var(--i) * 26%);
+  width: 36px;
+  height: 36px;
+  animation: chip-tumble 3.4s steps(6) infinite;
+  animation-delay: calc(var(--i) * -1.1s);
+  filter: drop-shadow(2px 2px 0 #0a080c);
+}
+.menu-chip .pixel-die { width: 100%; height: 100%; }
 .menu-copy {
   position: relative;
   z-index: 2;
@@ -1382,7 +1425,7 @@ input {
 .start-menu.is-out .menu-copy {
   animation: menu-out 0.32s steps(6) both;
 }
-.start-menu.is-out .menu-float,
+.start-menu.is-out .menu-field,
 .start-menu.is-out .menu-mascot { animation: menu-out 0.28s steps(5) both; }
 .lobby.is-in {
   animation: lobby-in 0.4s steps(8) both;
@@ -1649,13 +1692,10 @@ input {
   .trade-slip i { display: none; }
   .start-picks { grid-template-columns: 1fr; }
   .lobby { padding-left: 96px; }
-  .menu-mascot { width: 132px; top: 10px; right: 10px; transform: none; }
-}
-@media (max-width: 980px) {
-  .menu-mascot { width: min(36vw, 240px); right: 3vw; top: 16%; transform: none; }
+  .menu-mascot { width: 96px; bottom: auto; top: 10px; right: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk,
-  .menu-grid, .menu-scan, .menu-floater, .menu-mascot, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
+  .menu-vault, .menu-bill, .menu-stamp, .menu-chip, .menu-mascot, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
   .lobby.is-in, .join-rail, .waiting-booth, .stall-btn { animation: none; transition: none; }
 }

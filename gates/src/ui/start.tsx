@@ -4,6 +4,8 @@ import { COLORS, type Mode } from "../engine/game";
 import { PixelDie, PixelPawn } from "./marks";
 
 const PIECE_KEY = "gates-piece-color";
+const BILLS = [20, 50, 100, 200, 500, 10, 50, 100, 20, 200, 50, 100];
+const STAMPS = ["GO", "RENT", "DEED"];
 
 export type SeatPerson = {
   id: string;
@@ -44,14 +46,25 @@ export function StartMenu({
 
   return (
     <div className={`start-menu ${leaving ? "is-out" : ""}`}>
-      <div className="menu-grid" aria-hidden />
-      <div className="menu-scan" aria-hidden />
-      <div className="menu-float" aria-hidden>
-        {COLORS.slice(0, 5).map((c, i) => (
-          <span key={c} className="menu-floater" style={{ "--i": i, "--pawn": c } as CSSProperties}>
-            <PixelPawn color={c} />
+      <div className="menu-field" aria-hidden>
+        <div className="menu-vault" />
+        {BILLS.map((n, i) => (
+          <span key={`bill-${i}`} className="menu-bill" style={{ "--i": i } as CSSProperties}>
+            <b>$</b>
+            <small>{n}</small>
           </span>
         ))}
+        {STAMPS.map((label, i) => (
+          <span key={label} className="menu-stamp" style={{ "--i": i } as CSSProperties}>
+            {label}
+          </span>
+        ))}
+        <span className="menu-chip" style={{ "--i": 0 } as CSSProperties}>
+          <PixelDie n={5} />
+        </span>
+        <span className="menu-chip" style={{ "--i": 1 } as CSSProperties}>
+          <PixelDie n={2} />
+        </span>
       </div>
       <div className="menu-mascot" aria-hidden>
         <img src="/dreambot.png" alt="" />

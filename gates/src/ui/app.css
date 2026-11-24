@@ -1165,6 +1165,53 @@ input {
   from { transform: translateX(12px); opacity: 0.5; }
   to { transform: none; opacity: 1; }
 }
+@keyframes menu-in {
+  from { opacity: 0; transform: translate(0, 16px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes menu-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translate(8px, -12px); }
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translate(0, 20px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes title-snap {
+  0% { opacity: 0; transform: translate(0, 24px) scale(0.92); filter: drop-shadow(3px 3px 0 #1a1208); }
+  40% { opacity: 1; transform: translate(-2px, -4px); }
+  70% { transform: translate(2px, 2px); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes insert-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.25; }
+}
+@keyframes pawn-bob {
+  0% { transform: translate(0, 0); }
+  50% { transform: translate(4px, -12px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes grid-shift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 16px 16px, 16px 16px; }
+}
+@keyframes scan-drift {
+  from { transform: translateY(0); }
+  to { transform: translateY(8px); }
+}
+@keyframes lobby-in {
+  from { opacity: 0; transform: translate(0, 12px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rail-in {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes start-pulse {
+  0%, 100% { box-shadow: 4px 4px 0 #0a080c, inset 0 2px 0 #fff4cc; }
+  50% { box-shadow: 4px 4px 0 #0a080c, inset 0 2px 0 #fff4cc, 0 0 0 3px #e6c35a55; }
+}
 
 .app.pregame {
   grid-template-rows: auto minmax(0, 1fr);
@@ -1182,7 +1229,47 @@ input {
   justify-content: center;
   align-items: flex-start;
   padding: 24px 8vw 48px;
+}
+.menu-grid,
+.menu-scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.menu-grid {
+  background:
+    linear-gradient(rgba(230, 195, 90, .05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(230, 195, 90, .05) 1px, transparent 1px);
+  background-size: 16px 16px;
+  mask-image: radial-gradient(ellipse at 30% 40%, #000 30%, transparent 72%);
+  animation: grid-shift 12s steps(24) infinite;
+}
+.menu-scan {
+  background: repeating-linear-gradient(180deg, transparent 0 3px, rgba(0,0,0,.12) 3px 4px);
+  opacity: 0.35;
+  animation: scan-drift 6s steps(8) infinite;
+}
+.menu-float {
+  position: absolute;
+  inset: 8% 6% 10% 48%;
+  pointer-events: none;
+}
+.menu-floater {
+  position: absolute;
+  width: 42px;
+  height: 52px;
+  left: calc(8% + var(--i) * 16%);
+  top: calc(12% + var(--i) * 14%);
+  animation: pawn-bob 2.4s steps(6) infinite;
+  animation-delay: calc(var(--i) * -0.35s);
+  filter: drop-shadow(3px 3px 0 #0a080c);
+}
+.menu-floater .pixel-pawn { width: 100%; height: 100%; }
+.menu-copy {
+  position: relative;
+  z-index: 1;
   max-width: 920px;
+  animation: menu-in 0.48s steps(8) both;
 }
 .start-kicker {
   margin: 0 0 8px;
@@ -1191,6 +1278,7 @@ input {
   text-transform: uppercase;
   color: var(--accent);
   font-weight: 700;
+  animation: insert-blink 1.15s steps(1) infinite;
 }
 .start-menu h1, .lobby-main h1 {
   font-family: "Pixelify Sans", Outfit, sans-serif;
@@ -1199,11 +1287,21 @@ input {
   line-height: 0.95;
   text-shadow: 3px 3px 0 #1a1208;
 }
+.start-menu h1 span {
+  display: inline-block;
+  animation: title-snap 0.55s steps(6) both;
+  background: linear-gradient(180deg, #fff4cc, var(--accent) 55%, #a8883a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(3px 3px 0 #1a1208);
+}
 .start-lead {
   margin: 0 0 28px;
   color: var(--muted);
   max-width: 42rem;
   line-height: 1.45;
+  animation: menu-in 0.48s steps(8) 0.08s both;
 }
 .start-picks {
   display: grid;
@@ -1222,11 +1320,21 @@ input {
   color: var(--text);
   border: 3px solid var(--line);
   box-shadow: 4px 4px 0 #0a080c;
+  animation: card-in 0.4s steps(6) both;
+  animation-delay: calc(0.16s + var(--i, 0) * 0.1s);
+  transition: transform 0.08s steps(2), border-color 0.08s steps(2), box-shadow 0.08s steps(2);
 }
 .mode-card.main {
   border-color: var(--accent);
   background: linear-gradient(180deg, #2a2418, var(--panel));
 }
+.mode-card:hover:not(:disabled) {
+  transform: translate(-3px, -3px);
+  border-color: var(--accent);
+  box-shadow: 7px 7px 0 #0a080c, 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+.mode-card:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 2px 2px 0 #0a080c; }
 .mode-card small {
   font-size: 10px;
   letter-spacing: 0.16em;
@@ -1240,6 +1348,22 @@ input {
   line-height: 1;
 }
 .mode-card span { color: var(--muted); font-size: 13px; font-weight: 500; line-height: 1.4; }
+.start-menu.is-out .menu-copy {
+  animation: menu-out 0.32s steps(6) both;
+}
+.start-menu.is-out .menu-float { animation: menu-out 0.28s steps(5) both; }
+.lobby.is-in {
+  animation: lobby-in 0.4s steps(8) both;
+}
+.lobby.is-in .join-rail {
+  animation: rail-in 0.36s steps(6) both;
+}
+.lobby.is-in .waiting-booth {
+  animation: card-in 0.42s steps(6) 0.08s both;
+}
+.lobby.is-in .start-big:not(:disabled) {
+  animation: start-pulse 1.8s steps(4) infinite;
+}
 .lobby { padding: 12px 16px 24px 108px; }
 .lobby-main { max-width: 720px; margin: 0 auto; }
 .waiting-booth {
@@ -1470,5 +1594,7 @@ input {
   .lobby { padding-left: 96px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk { animation: none; transition: none; }
+  .pawn, .pixel-die, .chance, .sheet article, .hop-inner, .pay-chip, .tile, .float-card, button, .trade-desk,
+  .menu-grid, .menu-scan, .menu-floater, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
+  .lobby.is-in, .join-rail, .waiting-booth, .start-big { animation: none; transition: none; }
 }

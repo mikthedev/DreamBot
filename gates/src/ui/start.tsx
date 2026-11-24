@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { MAX_PLAYERS, MIN_PLAYERS } from "../engine/data";
 import { COLORS, type Mode } from "../engine/game";
 import { PixelDie, PixelPawn } from "./marks";
@@ -34,22 +34,43 @@ export function StartMenu({
 }: {
   onPick: (mode: Mode) => void;
 }) {
+  const [leaving, setLeaving] = useState<Mode | null>(null);
+
+  function pick(mode: Mode) {
+    if (leaving) return;
+    setLeaving(mode);
+    window.setTimeout(() => onPick(mode), 340);
+  }
+
   return (
-    <div className="start-menu">
-      <p className="start-kicker">Dream Team table</p>
-      <h1>DreamPoly</h1>
-      <p className="start-lead">Host picks the rules. Everyone else joins from the rail, or watches as a spectator.</p>
-      <div className="start-picks">
-        <button className="mode-card main" onClick={() => onPick("moves")}>
-          <small>Main game</small>
-          <b>DreamPoly</b>
-          <span>Moves, stack rent, Market deals, and the board as it is now.</span>
-        </button>
-        <button className="mode-card" onClick={() => onPick("classic")}>
-          <small>Other table</small>
-          <b>Classic</b>
-          <span>Cash and bankruptcy. No move meter. Play until the bank takes you.</span>
-        </button>
+    <div className={`start-menu ${leaving ? "is-out" : ""}`}>
+      <div className="menu-grid" aria-hidden />
+      <div className="menu-scan" aria-hidden />
+      <div className="menu-float" aria-hidden>
+        {COLORS.slice(0, 5).map((c, i) => (
+          <span key={c} className="menu-floater" style={{ "--i": i, "--pawn": c } as CSSProperties}>
+            <PixelPawn color={c} />
+          </span>
+        ))}
+      </div>
+      <div className="menu-copy">
+        <p className="start-kicker">Insert host</p>
+        <h1>
+          <span>DreamPoly</span>
+        </h1>
+        <p className="start-lead">Host picks the rules. Everyone else joins from the rail, or watches as a spectator.</p>
+        <div className="start-picks">
+          <button className="mode-card main" style={{ "--i": 0 } as CSSProperties} onClick={() => pick("moves")}>
+            <small>Main game</small>
+            <b>DreamPoly</b>
+            <span>Moves, stack rent, Market deals, and the board as it is now.</span>
+          </button>
+          <button className="mode-card" style={{ "--i": 1 } as CSSProperties} onClick={() => pick("classic")}>
+            <small>Other table</small>
+            <b>Classic</b>
+            <span>Cash and bankruptcy. No move meter. Play until the bank takes you.</span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -83,7 +104,7 @@ export function Lobby({
   const [spectateOpen, setSpectateOpen] = useState(true);
 
   return (
-    <div className="lobby">
+    <div className="lobby is-in">
       <div className="join-rail" aria-label="Join and spectators">
         {!inTable ? (
           <button className="join-plus" title="Join the table" onClick={() => onJoin(youId)}>

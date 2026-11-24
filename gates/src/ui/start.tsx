@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { MAX_PLAYERS, MIN_PLAYERS } from "../engine/data";
 import { COLORS, type Mode } from "../engine/game";
 import { PixelDie, PixelPawn } from "./marks";
+import { sfx, sfxHover } from "./sfx";
 
 const PIECE_KEY = "gates-piece-color";
 const BILLS = [20, 50, 100, 200, 500, 10, 50, 100, 20, 200, 50, 100];
@@ -40,6 +41,7 @@ export function StartMenu({
 
   function pick(mode: Mode) {
     if (leaving) return;
+    sfx("enter");
     setLeaving(mode);
     window.setTimeout(() => onPick(mode), 340);
   }
@@ -76,12 +78,12 @@ export function StartMenu({
         </h1>
         <p className="start-lead">Buy the brands. Spend your moves. Stack rent until the last fortune standing.</p>
         <div className="start-picks">
-          <button className="mode-card main" style={{ "--i": 0 } as CSSProperties} onClick={() => pick("moves")}>
+          <button className="mode-card main" style={{ "--i": 0 } as CSSProperties} onMouseEnter={sfxHover} onClick={() => pick("moves")}>
             <small>Main game</small>
             <b>DreamPoly</b>
             <span>Moves, stack rent, Market deals, and the board as it is now.</span>
           </button>
-          <button className="mode-card" style={{ "--i": 1 } as CSSProperties} onClick={() => pick("classic")}>
+          <button className="mode-card" style={{ "--i": 1 } as CSSProperties} onMouseEnter={sfxHover} onClick={() => pick("classic")}>
             <small>Other table</small>
             <b>Classic</b>
             <span>Cash and bankruptcy. No move meter. Play until the bank takes you.</span>
@@ -123,7 +125,7 @@ export function Lobby({
     <div className="lobby is-in">
       <div className="join-rail" aria-label="Join and spectators">
         {!inTable ? (
-          <button className="join-plus" title="Join the table" onClick={() => onJoin(youId)}>
+          <button className="join-plus" title="Join the table" onClick={() => { sfx("click"); onJoin(youId); }}>
             +
           </button>
         ) : null}
@@ -131,7 +133,7 @@ export function Lobby({
           <div className="join-in">
             <div className="join-card">
               {inTable ? (
-                <button className="join-minus" title="Watch as a spectator" onClick={() => onSpectate(youId)}>
+                <button className="join-minus" title="Watch as a spectator" onClick={() => { sfx("back"); onSpectate(youId); }}>
                   −
                 </button>
               ) : null}
@@ -154,7 +156,7 @@ export function Lobby({
                   key={p.id}
                   className="rail-face"
                   title={p.id === youId ? "You are watching" : `Seat ${p.name}`}
-                  onClick={() => onJoin(p.id)}
+                  onClick={() => { sfx("click"); onJoin(p.id); }}
                 >
                   <RailFace person={p} />
                 </button>
@@ -164,7 +166,7 @@ export function Lobby({
           <button
             className="spectate-foot"
             title={spectateOpen ? "Hide spectators" : "Show spectators"}
-            onClick={() => setSpectateOpen((v) => !v)}
+            onClick={() => { sfx("click"); setSpectateOpen((v) => !v); }}
           >
             {spectateOpen ? "▾" : "▴"}
           </button>
@@ -179,19 +181,19 @@ export function Lobby({
         </p>
         <WaitingBooth />
         <div className="lobby-actions">
-          <button className="stall-btn primary" disabled={!ready} onClick={onStart}>
+          <button className="stall-btn primary" disabled={!ready} onClick={() => { sfx("enter"); onStart(); }}>
             <b>Start</b>
             <small>{ready ? "The stall is open" : `${MIN_PLAYERS - joined.length} more to open`}</small>
           </button>
-          <button className="stall-btn bots" onClick={onSeatBots}>
+          <button className="stall-btn bots" onClick={() => { sfx("click"); onSeatBots(); }}>
             <b>Seat bots</b>
             <small>Fill empty chairs</small>
           </button>
-          <button className="stall-btn playbots" onClick={onPlayBots}>
+          <button className="stall-btn playbots" onClick={() => { sfx("enter"); onPlayBots(); }}>
             <b>Play with bots</b>
             <small>You plus three</small>
           </button>
-          <button className="stall-btn back" onClick={onBack}>
+          <button className="stall-btn back" onClick={() => { sfx("back"); onBack(); }}>
             <b>◀ Back</b>
             <small>Leave table</small>
           </button>
@@ -212,6 +214,7 @@ function WaitingBooth() {
   }, [color]);
 
   function toss() {
+    sfx("click");
     setSpin(true);
     window.setTimeout(() => {
       setDice([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
@@ -222,7 +225,7 @@ function WaitingBooth() {
   return (
     <div className="waiting-booth">
       <div className="booth-stage">
-        <button type="button" className={`booth-pawn ${hop ? "hop" : ""}`} onClick={() => setHop((n) => n + 1)} title="Your piece">
+        <button type="button" className={`booth-pawn ${hop ? "hop" : ""}`} onClick={() => { sfx("move"); setHop((n) => n + 1); }} title="Your piece">
           <PixelPawn color={color} />
         </button>
         <button type="button" className="booth-dice" onClick={toss} title="Toss while you wait">
@@ -238,7 +241,7 @@ function WaitingBooth() {
             type="button"
             className={`swatch ${c === color ? "on" : ""}`}
             style={{ background: c }}
-            onClick={() => setColor(c)}
+            onClick={() => { sfx("click"); setColor(c); }}
             aria-label={c}
           />
         ))}

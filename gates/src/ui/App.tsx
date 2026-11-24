@@ -21,6 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
+import { sfx, sfxHover } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
 import { CornerArt, PixelDie, PixelPawn } from "./marks";
@@ -43,6 +44,7 @@ export function App() {
   const [sheet, setSheet] = useState<null | "more" | "test" | "log">(null);
   const [trading, setTrading] = useState(false);
   const skipMarketOpen = useRef(false);
+  const lowWarn = useRef(false);
   const [look, setLook] = useState<Look>(() => (localStorage.getItem(LOOK_KEY) === "icon" ? "icon" : "pawn"));
   const [screen, setScreen] = useState<"menu" | "lobby" | "play">("menu");
   const [dive, setDive] = useState<"idle" | "cover" | "open">("idle");
@@ -84,11 +86,30 @@ export function App() {
     const turnBot = actor(state)?.bot;
     const offerBot = state.offer && state.players.find((p) => p.id === state.offer?.to)?.bot;
     if (!turnBot && !offerBot) return;
-    const t = window.setTimeout(() => setState((s) => (s ? stepBot(s) : s)), offerBot ? 900 : 720);
+    const t = window.setTimeout(
+      () =>
+        setState((s) => {
+          if (!s) return s;
+          const next = stepBot(s);
+          cuePlay(s, next, { type: "end" });
+          return next;
+        }),
+      offerBot ? 900 : 720,
+    );
     return () => window.clearTimeout(t);
   }, [state, walking]);
 
   const me = state?.players[0];
+  useEffect(() => {
+    if (!state || !me || state.mode !== "moves" || me.out) return;
+    if (me.moves > 4) {
+      lowWarn.current = false;
+      return;
+    }
+    if (lowWarn.current) return;
+    lowWarn.current = true;
+    sfx("warning");
+  }, [state, me]);
   const who = state ? actor(state) : undefined;
   const mine = !!(me && who?.id === me.id && !me.out);
 
@@ -108,11 +129,17 @@ export function App() {
   }, [mine, walking, diceSpin, state?.phase, me?.freeTrade, state?.rollTick, state?.offer]);
 
   function act(action: Action) {
-    setState((s) => (s ? apply(s, action) : s));
+    setState((s) => {
+      if (!s) return s;
+      const next = apply(s, action);
+      cuePlay(s, next, action);
+      return next;
+    });
   }
 
   function rollThen(action: Action) {
     if (diceSpin != null || !me) return;
+    sfx("click");
     setHeld({ cash: me.cash, moves: me.moves });
     let n = 0;
     const spin = window.setInterval(() => {
@@ -257,10 +284,10 @@ export function App() {
       <header className="top">
         <div className="brand">DreamPoly</div>
         <div className="top-tools">
-          <button className="ghost tiny" onClick={() => setLook((cur) => (cur === "pawn" ? "icon" : "pawn"))}>
+          <button className="ghost tiny" onClick={() => { sfx("click"); setLook((cur) => (cur === "pawn" ? "icon" : "pawn")); }}>
             {look === "pawn" ? "Characters" : "Discord icons"}
           </button>
-          <button className="ghost tiny" onClick={() => setSheet("test")}>
+          <button className="ghost tiny" onClick={() => { sfx("click"); setSheet("test"); }}>
             {testOn ? "Test tools" : "Test off"}
           </button>
         </div>
@@ -300,7 +327,7 @@ export function App() {
             key={p.id}
             className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id || ownerPeek === p.id ? "peek" : ""}`}
             style={{ "--player": p.color } as CSSProperties}
-            onMouseEnter={() => setSeatHover(p.id)}
+            onMouseEnter={() => { sfxHover(); setSeatHover(p.id); }}
             onMouseLeave={() => setSeatHover(null)}
           >
             <Portrait player={p} size={26} />
@@ -321,7 +348,7 @@ export function App() {
               </li>
             ))}
           </ul>
-          <button type="button" className="help-go" title="How this table works" onClick={() => setHelpOpen(true)}>
+          <button type="button" className="help-go" title="How this table works" onClick={() => { sfx("click"); setHelpOpen(true); }}>
             ?
           </button>
         </div>
@@ -329,7 +356,15 @@ export function App() {
           type="button"
           className="board-close"
           title={sheet === "more" ? "Back to the board" : "Leave table"}
-          onClick={() => (sheet === "more" ? setSheet(null) : setLeaveWarn(true))}
+          onClick={() => {
+            if (sheet === "more") {
+              sfx("back");
+              setSheet(null);
+            } else {
+              sfx("warning");
+              setLeaveWarn(true);
+            }
+          }}
         >
           ◀
         </button>
@@ -423,11 +458,11 @@ export function App() {
                   </button>
                 ))}
                 {mine && state.phase === "extra" && !walking && !diceSpin ? (
-                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => setTrading(true)}>
+                  <button className={me.freeTrade ? "go" : "ghost"} onClick={() => { sfx("click"); setTrading(true); }}>
                     {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
                   </button>
                 ) : null}
-                <button className="more-go" onClick={() => setSheet("more")}>More</button>
+                <button className="more-go" onClick={() => { sfx("click"); setSheet("more"); }}>More</button>
               </div>
                 </>
               )}
@@ -491,14 +526,14 @@ export function App() {
       )}
 
       {helpOpen && state ? (
-        <div className="sheet is-stall" onClick={() => setHelpOpen(false)}>
+        <div className="sheet is-stall" onClick={() => { sfx("back"); setHelpOpen(false); }}>
           <article className="how-card" onClick={(e) => e.stopPropagation()}>
-            <HowToPlay mode={state.mode} onClose={() => setHelpOpen(false)} />
+            <HowToPlay mode={state.mode} onClose={() => { sfx("enter"); setHelpOpen(false); }} />
           </article>
         </div>
       ) : null}
       {leaveWarn ? (
-        <div className="sheet is-stall" onClick={() => setLeaveWarn(false)}>
+        <div className="sheet is-stall" onClick={() => { sfx("back"); setLeaveWarn(false); }}>
           <article className="stall-menu leave-box" onClick={(e) => e.stopPropagation()}>
             <p className="start-kicker">Warning</p>
             <h2>Leave this table?</h2>
@@ -508,6 +543,7 @@ export function App() {
                 className="stall-act leave"
                 type="button"
                 onClick={() => {
+                  sfx("death");
                   setLeaveWarn(false);
                   setSheet(null);
                   setHelpOpen(false);
@@ -518,7 +554,7 @@ export function App() {
                 <b>Leave</b>
                 <span>Back to menu</span>
               </button>
-              <button className="stall-act fuel" type="button" onClick={() => setLeaveWarn(false)}>
+              <button className="stall-act fuel" type="button" onClick={() => { sfx("click"); setLeaveWarn(false); }}>
                 <b>Stay</b>
                 <span>Keep playing</span>
               </button>
@@ -527,7 +563,7 @@ export function App() {
         </div>
       ) : null}
       {sheet && (
-        <div className={`sheet ${sheet === "more" ? "is-stall is-pass" : ""}`} onClick={() => setSheet(null)}>
+        <div className={`sheet ${sheet === "more" ? "is-stall is-pass" : ""}`} onClick={() => { sfx("back"); setSheet(null); }}>
           <article className={sheet === "more" ? "stall-menu" : ""} onClick={(e) => e.stopPropagation()}>
             {sheet === "more" && state && me && (
               <MoreStall
@@ -536,11 +572,12 @@ export function App() {
                 mine={mine}
                 onAct={(action) => act(action)}
                 onTrade={() => {
+                  sfx("click");
                   setSheet(null);
                   setTrading(true);
                 }}
-                onLog={() => setSheet("log")}
-                onLeave={() => setLeaveWarn(true)}
+                onLog={() => { sfx("click"); setSheet("log"); }}
+                onLeave={() => { sfx("warning"); setLeaveWarn(true); }}
               />
             )}
             {sheet === "log" && state && (
@@ -903,6 +940,29 @@ function HowToPlay({ mode, onClose }: { mode: Mode; onClose: () => void }) {
   );
 }
 
+function samePay(a: State["lastPay"], b: State["lastPay"]) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.to === b.to && a.amount === b.amount && a.via === b.via && a.viaAmount === b.viaAmount;
+}
+
+function cuePlay(prev: State, next: State, action: Action) {
+  const you = prev.players[0]?.id;
+  if (action.type === "build") sfx("upgrade");
+  if (action.type === "fuel" || action.type === "license" || (action.type === "store" && action.pick === "buy") || (action.type === "land" && action.pick === "buy")) {
+    sfx("pay");
+  }
+  if (action.type === "note" || action.type === "home" || action.type === "sell") sfx("received");
+  if (action.type === "offer" && action.pick === "accept") sfx("enter");
+  if (action.type === "offer" && action.pick === "decline") sfx("back");
+  if (action.type === "trade") sfx("enter");
+  if (!samePay(prev.lastPay, next.lastPay) && next.lastPay && you) {
+    if (next.lastPay.to === you) sfx("received");
+    else if (actor(prev)?.id === you) sfx("pay");
+  }
+  if (next.players.some((p) => p.out && !prev.players.find((x) => x.id === p.id)?.out)) sfx("death");
+}
+
 function buttonsFor(
   state: State,
   mine: boolean,
@@ -1014,10 +1074,14 @@ function Tile({
   const facts = spaceFacts(space, state);
 
   const bind = {
-    onMouseEnter: () => onHover(space.id),
+    onMouseEnter: () => {
+      sfxHover();
+      onHover(space.id);
+    },
     onMouseLeave: () => onHover(null),
     onClick: (e: { stopPropagation: () => void }) => {
       e.stopPropagation();
+      sfx("click");
       onOpen();
     },
     onContextMenu: (e: { preventDefault: () => void; stopPropagation: () => void }) => {
@@ -1418,6 +1482,7 @@ function Pawns({
   useEffect(() => {
     if (!Object.keys(walk).length) return;
     const t = window.setTimeout(() => {
+      sfx("move");
       setWalk((prev) => {
         const next = { ...prev };
         for (const id of Object.keys(next)) {

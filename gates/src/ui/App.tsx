@@ -39,6 +39,8 @@ export function App() {
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [openGroup, setOpenGroup] = useState<SetId | "store" | null>(null);
   const [seatHover, setSeatHover] = useState<string | null>(null);
+  const [ownerPeek, setOwnerPeek] = useState<string | null>(null);
+  const focusOwner = seatHover ?? ownerPeek;
   const walking = Object.keys(walk).length > 0;
   useEffect(() => {
     localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
@@ -111,11 +113,12 @@ export function App() {
           {testOn ? "Test tools" : "Test off"}
         </button>
       </header>
+        <div className="play">
       <div className="roster">
         {state.players.map((p) => (
           <div
             key={p.id}
-            className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id ? "peek" : ""}`}
+            className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id || ownerPeek === p.id ? "peek" : ""}`}
             style={{ "--player": p.color } as CSSProperties}
             onMouseEnter={() => setSeatHover(p.id)}
             onMouseLeave={() => setSeatHover(null)}
@@ -129,12 +132,16 @@ export function App() {
 
       <div className="stage">
         <div
-          className={`board ${openGroup ? "is-grouping" : ""}`}
+          className={`board ${openGroup ? "is-grouping" : ""} ${focusOwner ? "is-peeking" : ""}`}
           aria-label="DreamPoly board"
           onClick={(e) => {
             const t = e.target as HTMLElement;
-            if (!t.closest(".tile, .float-card, .group-card")) setOpenGroup(null);
+            if (!t.closest(".tile, .float-card, .group-card")) {
+              setOpenGroup(null);
+              setOwnerPeek(null);
+            }
           }}
+          onContextMenu={(e) => e.preventDefault()}
         >
           <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${!mine && !walking ? "idle" : "live"}`}>
             <div className="table-core">
@@ -192,17 +199,25 @@ export function App() {
               walk={walk}
               you={me.id}
               grouped={inGroup(space.id, openGroup)}
+              held={!!focusOwner && tileOwner(space.id, state) === focusOwner}
               onHover={setHoverId}
               onOpen={() => {
                 const g = groupOf(space.id);
+                setOwnerPeek(null);
                 setOpenGroup((cur) => (g && cur === g ? null : g));
+              }}
+              onOwnerPeek={() => {
+                const oid = tileOwner(space.id, state);
+                if (!oid) return;
+                setOpenGroup(null);
+                setOwnerPeek((cur) => (cur === oid ? null : oid));
               }}
             />
           ))}
-          {seatHover ? (
+          {focusOwner ? (
             <Holdings
               state={state}
-              player={state.players.find((p) => p.id === seatHover)!}
+              player={state.players.find((p) => p.id === focusOwner)!}
             />
           ) : openGroup ? (
             <GroupCard group={openGroup} state={state} />
@@ -211,6 +226,7 @@ export function App() {
           )}
           <Pawns state={state} walk={walk} setWalk={setWalk} />
         </div>
+      </div>
       </div>
 
       {me.moves <= 4 && !me.out && state.mode === "moves" && (
@@ -386,22 +402,34 @@ function inGroup(id: string, group: SetId | "store" | null) {
   return groupOf(id) === group;
 }
 
+function tileOwner(id: string, state: State) {
+  const co = COMPANIES.find((c) => c.id === id);
+  if (co) return state.companies[co.id].owner;
+  const store = STORES.find((s) => s.id === id);
+  if (store) return state.stores[store.id];
+  return null;
+}
+
 function Tile({
   space,
   state,
   walk,
   you,
   grouped,
+  held,
   onHover,
   onOpen,
+  onOwnerPeek,
 }: {
   space: (typeof TRACK)[number];
   state: State;
   walk: Record<string, number>;
   you: string;
   grouped: boolean;
+  held: boolean;
   onHover: (id: string | null) => void;
   onOpen: () => void;
+  onOwnerPeek: () => void;
 }) {
   const stand = STANDS.find((s) => s.id === space.id);
   const co = COMPANIES.find((c) => c.id === space.id);
@@ -417,6 +445,11 @@ function Tile({
       e.stopPropagation();
       onOpen();
     },
+    onContextMenu: (e: { preventDefault: () => void; stopPropagation: () => void }) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onOwnerPeek();
+    },
   };
 
   if (co && facts) {
@@ -426,6 +459,7 @@ function Tile({
         space={space}
         hot={hot}
         grouped={grouped}
+        held={held}
         you={you}
         name={co.name}
         logoId={co.id}
@@ -460,6 +494,7 @@ function Tile({
       space={space}
       hot={hot}
       grouped={grouped}
+      held={held}
       you={you}
       name={facts.name}
       logoId={space.id}
@@ -474,6 +509,7 @@ type TileBind = {
   onMouseEnter: () => void;
   onMouseLeave: () => void;
   onClick: (e: { stopPropagation: () => void }) => void;
+  onContextMenu: (e: { preventDefault: () => void; stopPropagation: () => void }) => void;
 };
 
 function spaceFacts(space: (typeof TRACK)[number], state: State) {
@@ -612,6 +648,7 @@ function DeedTile({
   space,
   hot,
   grouped,
+  held,
   you,
   name,
   logoId,
@@ -623,6 +660,7 @@ function DeedTile({
   space: (typeof TRACK)[number];
   hot: boolean;
   grouped: boolean;
+  held: boolean;
   you: string;
   name: string;
   logoId: string;
@@ -633,7 +671,7 @@ function DeedTile({
 }) {
   return (
     <div
-      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""} ${ownedClass(owner, you)}`}
+      className={`tile deed ${space.side} id-${space.id} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""} ${held ? "held" : ""} ${ownedClass(owner, you)}`}
       style={
         {
           gridColumn: space.col,
@@ -663,6 +701,7 @@ function StoreTile({
   space,
   hot,
   grouped,
+  held,
   you,
   name,
   logoId,
@@ -673,6 +712,7 @@ function StoreTile({
   space: (typeof TRACK)[number];
   hot: boolean;
   grouped: boolean;
+  held: boolean;
   you: string;
   name: string;
   logoId: string;
@@ -682,7 +722,7 @@ function StoreTile({
 }) {
   return (
     <div
-      className={`tile store-tile ${space.side} id-${space.id} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""} ${ownedClass(owner, you)}`}
+      className={`tile store-tile ${space.side} id-${space.id} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""} ${held ? "held" : ""} ${ownedClass(owner, you)}`}
       style={
         {
           gridColumn: space.col,

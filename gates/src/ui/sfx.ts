@@ -59,13 +59,12 @@ const SFX_MUTE_KEY = "gates-sfx";
 const MUSIC_VOL_KEY = "gates-music-vol";
 const SFX_VOL_KEY = "gates-sfx-vol";
 const MUSIC_MAX = 0.2;
-const OPEN_HZ = 12000;
+const OPEN_HZ = 18000;
 const MUFFLE_HZ = 480;
 
 const cache = new Map<SfxName, HTMLAudioElement>();
 let hoverAt = 0;
 let playHoverAt = 0;
-let liveSfx = 0;
 type Kind = "menu" | "play";
 type BedGraph = {
   ver: 2;
@@ -108,22 +107,12 @@ function node(name: SfxName) {
 
 export function sfx(name: SfxName, rate = 1) {
   if (!sfxOn || sfxLevel <= 0) return;
-  if (liveSfx > 7) return;
   const src = node(name);
   const shot = src.cloneNode(true) as HTMLAudioElement;
   shot.volume = Math.min(1, VOL[name] * sfxLevel);
   shot.preservesPitch = false;
-  shot.playbackRate = Math.min(1.35, Math.max(0.78, rate));
-  liveSfx += 1;
-  const done = () => {
-    liveSfx = Math.max(0, liveSfx - 1);
-    shot.removeEventListener("ended", done);
-    shot.removeEventListener("error", done);
-    shot.src = "";
-  };
-  shot.addEventListener("ended", done);
-  shot.addEventListener("error", done);
-  void shot.play().catch(done);
+  shot.playbackRate = Math.min(2, Math.max(0.65, rate));
+  void shot.play().catch(() => {});
 }
 
 export function sfxHover() {
@@ -221,9 +210,9 @@ export function muffleMusic(on: boolean) {
   g.filter.frequency.cancelScheduledValues(now);
   g.musicGain.gain.cancelScheduledValues(now);
   g.filter.Q.cancelScheduledValues(now);
-  g.filter.Q.setTargetAtTime(on ? 1.1 : 0.7, now, 0.12);
-  g.filter.frequency.setTargetAtTime(on ? MUFFLE_HZ : OPEN_HZ, now, 0.12);
-  g.musicGain.gain.setTargetAtTime(targetGain(), now, 0.08);
+  g.filter.Q.setTargetAtTime(on ? 1.4 : 0.7, now, 0.05);
+  g.filter.frequency.setTargetAtTime(on ? MUFFLE_HZ : OPEN_HZ, now, 0.05);
+  g.musicGain.gain.setTargetAtTime(targetGain(), now, 0.05);
 }
 
 function targetGain() {
@@ -261,42 +250,15 @@ function ensureGraph(): BedGraph | null {
   filter.connect(ctx.destination);
   graph = { ver: 2, ctx, musicGain, filter, buffers: {}, loading: {}, voice: null, kind: null };
   w.__dreamBed = graph;
-  ctx.onstatechange = () => {
-    if (ctx.state === "running") keepBedAlive();
+  const resume = () => {
+    if (ctx.state !== "running") void ctx.resume().catch(() => {});
   };
+  ctx.onstatechange = resume;
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) resume();
+  });
+  window.addEventListener("focus", resume);
   return graph;
-}
-
-function firstLoud(data: Float32Array) {
-  for (let i = 0; i < data.length; i++) if (Math.abs(data[i]) > 0.004) return i;
-  return 0;
-}
-
-function lastLoud(data: Float32Array) {
-  for (let i = data.length - 1; i >= 0; i--) if (Math.abs(data[i]) > 0.004) return i;
-  return data.length - 1;
-}
-
-function seamBuffer(ctx: AudioContext, src: AudioBuffer) {
-  const ch0 = src.getChannelData(0);
-  const start = firstLoud(ch0);
-  const end = lastLoud(ch0) + 1;
-  const span = Math.max(2, end - start);
-  const fade = Math.min(Math.floor(src.sampleRate * 0.04), Math.floor(span / 10));
-  const outLen = Math.max(fade * 2, span - fade);
-  const out = ctx.createBuffer(src.numberOfChannels, outLen, src.sampleRate);
-  for (let c = 0; c < src.numberOfChannels; c++) {
-    const a = src.getChannelData(c);
-    const b = out.getChannelData(c);
-    for (let i = 0; i < outLen; i++) b[i] = a[start + i] ?? 0;
-    for (let i = 0; i < fade; i++) {
-      const t = i / fade;
-      const head = a[start + i] ?? 0;
-      const tail = a[end - fade + i] ?? 0;
-      b[i] = head * t + tail * (1 - t);
-    }
-  }
-  return out;
 }
 
 async function decodeKind(kind: Kind) {
@@ -306,11 +268,10 @@ async function decodeKind(kind: Kind) {
   if (!g.loading[kind]) {
     g.loading[kind] = fetch(kind === "menu" ? "/music/menu.mp3" : "/music/play.mp3")
       .then((r) => r.arrayBuffer())
-      .then((buf) => g.ctx.decodeAudioData(buf))
+      .then((buf) => g.ctx.decodeAudioData(buf.slice(0)))
       .then((raw) => {
-        const looped = seamBuffer(g.ctx, raw);
-        g.buffers[kind] = looped;
-        return looped;
+        g.buffers[kind] = raw;
+        return raw;
       })
       .catch(() => null);
   }
@@ -324,20 +285,14 @@ function applyMusicGain() {
 }
 
 function stopVoice(g: BedGraph) {
-  const voice = g.voice;
-  g.voice = null;
-  if (!voice) return;
-  voice.onended = null;
+  if (!g.voice) return;
   try {
-    voice.stop();
+    g.voice.stop();
   } catch {
     /* already ended */
   }
-  try {
-    voice.disconnect();
-  } catch {
-    /* already gone */
-  }
+  g.voice.disconnect();
+  g.voice = null;
 }
 
 function pauseAll() {
@@ -351,56 +306,28 @@ async function startTrack(kind: Kind) {
   const token = ++playGen;
   const g = ensureGraph();
   if (!g || !musicOn) return;
-  try {
-    await g.ctx.resume();
-  } catch {
-    /* autoplay / Discord hold */
-  }
+  await g.ctx.resume().catch(() => {});
   if (token !== playGen) return;
   if (g.kind === kind && g.voice) return;
   const buf = await decodeKind(kind);
   if (token !== playGen || !buf || !musicOn) return;
-  const now = g.ctx.currentTime;
-  g.musicGain.gain.cancelScheduledValues(now);
-  g.musicGain.gain.setValueAtTime(g.musicGain.gain.value, now);
-  g.musicGain.gain.linearRampToValueAtTime(0.0001, now + 0.04);
   stopVoice(g);
   const voice = g.ctx.createBufferSource();
   voice.buffer = buf;
   voice.loop = true;
-  voice.loopStart = 0;
-  voice.loopEnd = buf.duration;
+  voice.loopStart = 0.04;
+  voice.loopEnd = Math.max(0.08, buf.duration - 0.04);
   voice.connect(g.musicGain);
   voice.onended = () => {
-    if (g.voice !== voice) return;
+    if (g.voice !== voice || g.kind !== kind || !musicOn) return;
     g.voice = null;
-    if (musicOn && g.kind) void startTrack(g.kind);
+    void startTrack(kind);
   };
-  try {
-    voice.start();
-  } catch {
-    return;
-  }
+  voice.start(0);
   g.voice = voice;
   g.kind = kind;
-  const later = g.ctx.currentTime;
-  g.musicGain.gain.cancelScheduledValues(later);
-  g.musicGain.gain.setValueAtTime(0.0001, later);
-  g.musicGain.gain.linearRampToValueAtTime(targetGain(), later + 0.08);
-}
-
-function keepBedAlive() {
-  const g = graph;
-  if (!g || !musicOn || !track) return;
-  void g.ctx.resume().then(() => {
-    if (!g.voice) void startTrack(track ?? "menu");
-  }).catch(() => {});
 }
 
 if (typeof window !== "undefined") {
   window.addEventListener("pointerdown", armAudio, { once: true });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") keepBedAlive();
-  });
-  window.addEventListener("focus", keepBedAlive);
 }

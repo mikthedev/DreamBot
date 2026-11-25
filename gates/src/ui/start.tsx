@@ -108,6 +108,8 @@ export function Lobby({
   onBack,
   onSeatBots,
   onPlayBots,
+  onInvite,
+  canInvite,
 }: {
   mode: Mode;
   youId: string;
@@ -119,6 +121,8 @@ export function Lobby({
   onBack: () => void;
   onSeatBots: () => void;
   onPlayBots: () => void;
+  onInvite?: () => void;
+  canInvite?: boolean;
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
   const inTable = joined.some((p) => p.id === youId);
@@ -181,9 +185,16 @@ export function Lobby({
         <p className="start-lead">
           {joined.length}/{MAX_PLAYERS} at the table. Need {MIN_PLAYERS} to start.
           {inTable ? " Hit − to watch from the spectator rail." : " You are watching. Hit + to sit."}
+          {canInvite ? " Invite friends from Discord — they land in this waiting room." : ""}
         </p>
         <WaitingBooth />
         <div className="lobby-actions">
+          {onInvite ? (
+            <button className="stall-btn primary" disabled={!canInvite} onMouseEnter={sfxHover} onClick={() => { sfx("click"); onInvite(); }}>
+              <b>Invite from Discord</b>
+              <small>{canInvite ? "Pick people in this server" : "Open this table from Discord"}</small>
+            </button>
+          ) : null}
           <button className="stall-btn primary" disabled={!ready} onMouseEnter={sfxHover} onClick={() => { sfx("enter"); onStart(); }}>
             <b>Start</b>
             <small>{ready ? "The stall is open" : `${MIN_PLAYERS - joined.length} more to open`}</small>

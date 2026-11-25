@@ -21,6 +21,7 @@ import {
   type State,
 } from "../engine/game";
 import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
+import { inviteFriends, readRoom, useDiscord, writeRoom } from "./discord";
 import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
@@ -38,6 +39,11 @@ const STEP_MS = 220;
 type Profile = { id: string; username: string; avatar: string | null; linked: boolean };
 
 export function App() {
+  const discord = useDiscord();
+  const youId = discord.user?.id || "you";
+  const [hostId, setHostId] = useState<string | null>(null);
+  const roomSeq = useRef(0);
+  const isHost = !discord.instanceId || (hostId ? hostId === youId : true);
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) !== "off");
   const [discordId, setDiscordId] = useState(() => localStorage.getItem(ID_KEY) || "");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -86,6 +92,7 @@ export function App() {
   useEffect(() => {
     if (!state || state.phase === "over") return;
     if (walking) return;
+    if (discord.instanceId && !isHost) return;
     const turnBot = actor(state)?.bot;
     const offerBot = state.offer && state.players.find((p) => p.id === state.offer?.to)?.bot;
     if (!turnBot && !offerBot) return;
@@ -101,9 +108,9 @@ export function App() {
       offerBot ? 900 : 720,
     );
     return () => window.clearTimeout(t);
-  }, [state, walking]);
+  }, [state, walking, isHost, discord.instanceId]);
 
-  const me = state?.players[0];
+  const me = state?.players.find((p) => p.id === youId) ?? (!discord.instanceId ? state?.players[0] : undefined);
   useEffect(() => {
     if (!state || !me || state.mode !== "moves" || me.out) return;
     if (me.moves > 4) {
@@ -137,6 +144,14 @@ export function App() {
   }, [trading]);
 
   function act(action: Action) {
+    if (discord.instanceId && !isHost) {
+      roomSeq.current += 1;
+      void writeRoom(discord.instanceId, {
+        seq: roomSeq.current,
+        pending: { from: youId, action },
+      });
+      return;
+    }
     setState((s) => {
       if (!s) return s;
       const next = apply(s, action);
@@ -168,8 +183,10 @@ export function App() {
   }, [walking, diceSpin]);
 
   function restart(withBots: boolean) {
-    const name = profile?.username || "You";
-    const people = guestPool(name, profile?.avatar ?? null, withBots);
+    const name = discord.user?.name || profile?.username || "You";
+    const people = guestPool(name, discord.user?.avatar ?? profile?.avatar ?? null, withBots).map((p, i) =>
+      i === 0 ? { ...p, id: youId } : p,
+    );
     setJoined([people[0]]);
     setSpectators(people.slice(1));
     setScreen("lobby");
@@ -179,27 +196,28 @@ export function App() {
   }
 
   function openLobby(mode: Mode) {
-    const name = profile?.username || "You";
-    const you: SeatPerson = { id: "you", name, avatar: profile?.avatar ?? null, color: savedPieceColor() };
+    const name = discord.user?.name || profile?.username || "You";
+    const you: SeatPerson = { id: youId, name, avatar: discord.user?.avatar ?? profile?.avatar ?? null, color: savedPieceColor() };
     setPickedMode(mode);
     setJoined([you]);
     setSpectators([]);
     setScreen("lobby");
     setState(null);
+    if (discord.instanceId && !hostId) setHostId(youId);
   }
 
   function joinSeat(id?: string) {
-    const pick = id ?? "you";
+    const pick = id ?? youId;
     if (!pick || joined.length >= MAX_PLAYERS) return;
     if (joined.some((p) => p.id === pick)) return;
     const fromWatch = spectators.find((p) => p.id === pick);
     const you: SeatPerson = {
-      id: "you",
-      name: profile?.username || "You",
-      avatar: profile?.avatar ?? null,
+      id: youId,
+      name: discord.user?.name || profile?.username || "You",
+      avatar: discord.user?.avatar ?? profile?.avatar ?? null,
       color: savedPieceColor(),
     };
-    const person = fromWatch ?? (pick === "you" ? you : undefined);
+    const person = fromWatch ?? (pick === youId ? you : undefined);
     if (!person) return;
     setSpectators((s) => s.filter((p) => p.id !== pick));
     setJoined((j) => [...j, person]);
@@ -213,7 +231,7 @@ export function App() {
   }
 
   function painted(people: SeatPerson[]) {
-    return people.map((p) => (p.id === "you" ? { ...p, color: savedPieceColor() } : p));
+    return people.map((p) => (p.id === youId || p.id === "you" ? { ...p, id: youId, color: savedPieceColor() } : p));
   }
 
   function clearDiveWaits() {
@@ -249,8 +267,10 @@ export function App() {
   }
 
   function seatBots() {
-    const name = profile?.username || "You";
-    const pool = guestPool(name, profile?.avatar ?? null, true);
+    const name = discord.user?.name || profile?.username || "You";
+    const pool = guestPool(name, discord.user?.avatar ?? profile?.avatar ?? null, true).map((p, i) =>
+      i === 0 ? { ...p, id: youId } : p,
+    );
     const humans = joined.filter((p) => !p.bot);
     const bots = pool.filter((p) => p.bot);
     const next = [...humans];
@@ -264,8 +284,10 @@ export function App() {
   }
 
   function playWithBots() {
-    const name = profile?.username || "You";
-    const pool = guestPool(name, profile?.avatar ?? null, true);
+    const name = discord.user?.name || profile?.username || "You";
+    const pool = guestPool(name, discord.user?.avatar ?? profile?.avatar ?? null, true).map((p, i) =>
+      i === 0 ? { ...p, id: youId } : p,
+    );
     const table = painted(pool.slice(0, 4));
     setJoined(table);
     setSpectators([]);
@@ -273,6 +295,66 @@ export function App() {
   }
 
   useEffect(() => () => clearDiveWaits(), []);
+
+  useEffect(() => {
+    if (!discord.people.length) return;
+    setSpectators((s) => {
+      const known = new Set([...joined, ...s].map((p) => p.id));
+      const extra = discord.people
+        .filter((p) => p.id !== youId && !known.has(p.id))
+        .map((p) => ({ id: p.id, name: p.name, avatar: p.avatar }));
+      return extra.length ? [...s, ...extra] : s;
+    });
+  }, [discord.people, youId]);
+
+  useEffect(() => {
+    const roomId = discord.instanceId;
+    if (!roomId) return;
+    let stop = false;
+    const tick = async () => {
+      const room = await readRoom(roomId);
+      if (stop || !room) return;
+      if (typeof room.seq === "number" && room.seq > roomSeq.current) roomSeq.current = room.seq;
+      if (room.hostId && room.hostId !== hostId) setHostId(room.hostId);
+      if (!isHost) {
+        if (room.mode) setPickedMode(room.mode);
+        if (Array.isArray(room.joined)) setJoined(room.joined);
+        if (Array.isArray(room.spectators)) setSpectators(room.spectators);
+        if (room.screen === "lobby" || room.screen === "play" || room.screen === "menu") setScreen(room.screen);
+        if (room.state) setState(room.state);
+      } else if (room.pending?.action && state) {
+        const action = room.pending.action as Action;
+        setState((s) => {
+          if (!s) return s;
+          const next = apply(s, action);
+          cuePlay(s, next, action);
+          return next;
+        });
+        roomSeq.current += 1;
+        void writeRoom(roomId, { seq: roomSeq.current, pending: null, hostId: hostId || youId });
+      }
+    };
+    const t = window.setInterval(() => void tick(), 900);
+    void tick();
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [discord.instanceId, isHost, hostId, youId, state]);
+
+  useEffect(() => {
+    if (!discord.instanceId || !isHost) return;
+    roomSeq.current += 1;
+    void writeRoom(discord.instanceId, {
+      seq: roomSeq.current,
+      hostId: hostId || youId,
+      screen,
+      mode: pickedMode,
+      joined,
+      spectators,
+      state,
+    });
+  }, [discord.instanceId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state]);
 
   const primary = useMemo(
     () => (state ? buttonsFor(state, mine, !!diceSpin || walking) : []),
@@ -336,7 +418,7 @@ export function App() {
         screen === "lobby" ? (
           <Lobby
             mode={pickedMode}
-            youId="you"
+            youId={youId}
             joined={joined}
             spectators={spectators}
             onJoin={joinSeat}
@@ -345,6 +427,8 @@ export function App() {
             onBack={() => { setMenuMuffle(false); setScreen("menu"); }}
             onSeatBots={seatBots}
             onPlayBots={playWithBots}
+            onInvite={() => void inviteFriends().catch(() => {})}
+            canInvite={discord.ready}
           />
         ) : (
           <StartMenu onPick={openLobby} onMuffle={setMenuMuffle} />

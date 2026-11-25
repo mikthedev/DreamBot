@@ -21,7 +21,7 @@ import {
 } from "../engine/game";
 import { BootCurtain, PocketDesk, usePocketDesk } from "./boot";
 import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
-import { apiPath, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
+import { apiPath, connectDiscord, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
 import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxHover, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { THEME_KEY, THEMES, applyTheme, savedTheme, type ThemeId } from "./theme";
 import { TRACK } from "../engine/track";
@@ -88,13 +88,17 @@ export function App() {
   const [seatId] = useState(() => {
     try {
       const cur = sessionStorage.getItem("gates-seat");
-      if (cur) return cur;
-      const id = `seat-${Math.random().toString(36).slice(2, 8)}`;
-      sessionStorage.setItem("gates-seat", id);
-      return id;
+      if (cur && cur !== "you") return cur;
     } catch {
-      return "you";
+      /* ignore */
     }
+    const id = `seat-${Math.random().toString(36).slice(2, 10)}`;
+    try {
+      sessionStorage.setItem("gates-seat", id);
+    } catch {
+      /* ignore */
+    }
+    return id;
   });
   const youId = discord.user?.id || seatId;
   const [hostId, setHostId] = useState<string | null>(null);
@@ -107,6 +111,7 @@ export function App() {
   const stateRef = useRef<State | null>(null);
   const isHostRef = useRef(false);
   const pushTimer = useRef(0);
+  const lookTimer = useRef(0);
   const hostIdRef = useRef<string | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const appliedSeq = useRef(0);
@@ -542,7 +547,7 @@ export function App() {
   }
 
   function painted(people: SeatPerson[]) {
-    return people.map((p) => (p.id === youId || p.id === "you" ? { ...p, id: youId, ...savedLooks() } : p));
+    return people.map((p) => (p.id === youId ? { ...p, ...savedLooks() } : p));
   }
 
   function applyLooks(patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) {
@@ -575,7 +580,11 @@ export function App() {
     if (!roomId) return;
     const cur = joined.find((p) => p.id === youId);
     if (!cur) return;
-    void writeRoom(roomId, { sit: { ...cur, ...patch } });
+    const person = { ...cur, ...patch };
+    window.clearTimeout(lookTimer.current);
+    lookTimer.current = window.setTimeout(() => {
+      void writeRoom(roomId, { sit: person });
+    }, 160);
   }
 
   function clearDiveWaits() {
@@ -676,7 +685,7 @@ export function App() {
     const look = selfLook(discord.user, profile);
     const mineId = discord.user?.id;
     const paint = (p: SeatPerson) =>
-      p.id === "you" || p.id === seatId || (mineId && p.id === mineId)
+      p.id === seatId || (mineId && p.id === mineId)
         ? { ...p, id: mineId || p.id, name: look.name, avatar: look.avatar }
         : p;
     setJoined((j) => j.map(paint));
@@ -765,10 +774,13 @@ export function App() {
         if (room.screen === "lobby" || room.screen === "play" || room.screen === "menu") setScreen(room.screen);
         const nextState = room.state as State | undefined;
         const seq = Number(room.seq || 0);
-        if (nextState && (seq > appliedSeq.current || !stateRef.current || playStamp(stateRef.current) !== playStamp(nextState))) {
-          appliedSeq.current = seq;
+        if (seq && seq < appliedSeq.current) return;
+        if (nextState && (!stateRef.current || playStamp(stateRef.current) !== playStamp(nextState))) {
+          appliedSeq.current = Math.max(appliedSeq.current, seq);
           stateRef.current = nextState;
           setState(nextState);
+        } else if (seq > appliedSeq.current) {
+          appliedSeq.current = seq;
         }
         return;
       }
@@ -817,10 +829,21 @@ export function App() {
     };
   }, [roomId, hostId, youId]);
 
+  const lastHostPush = useRef("");
   useEffect(() => {
     if (!roomId || !isHost) return;
+    const stamp = [
+      screen,
+      pickedMode,
+      joined.map((p) => p.id).join(","),
+      spectators.map((p) => p.id).join(","),
+      stateRef.current ? playStamp(stateRef.current) : "",
+      hostId || youId,
+    ].join("#");
+    if (stamp === lastHostPush.current) return;
     window.clearTimeout(pushTimer.current);
     pushTimer.current = window.setTimeout(() => {
+      lastHostPush.current = stamp;
       roomSeq.current += 1;
       void writeRoom(roomId, {
         asHost: true,
@@ -833,7 +856,7 @@ export function App() {
         spectators,
         state: stateRef.current,
       });
-    }, 80);
+    }, 120);
     return () => window.clearTimeout(pushTimer.current);
   }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state, discord.user, profile]);
 
@@ -978,6 +1001,8 @@ export function App() {
             onKick={kickSeat}
             onPlayBots={playWithBots}
             onLooks={applyLooks}
+            needAuth={discord.framed && !discord.authed}
+            onConnect={() => void connectDiscord()}
           />
         ) : (
           <StartMenu
@@ -3507,7 +3532,7 @@ function Pawns({
       }
       return changed ? next : prev;
     });
-  }, [destKey, live, setWalk]);
+  }, [destKey, setWalk]);
 
   useEffect(() => {
     if (!Object.keys(walk).length) return;
@@ -3550,7 +3575,7 @@ function Pawns({
       });
     }, STEP_MS);
     return () => window.clearTimeout(t);
-  }, [walk, destKey, setWalk, state.players]);
+  }, [walk, destKey, setWalk]);
 
   const groups = new Map<string, typeof live>();
   for (const p of live) {

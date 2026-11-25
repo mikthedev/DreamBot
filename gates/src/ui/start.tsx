@@ -209,6 +209,8 @@ export function Lobby({
   onKick,
   onPlayBots,
   onLooks,
+  needAuth,
+  onConnect,
 }: {
   mode: Mode;
   youId: string;
@@ -226,6 +228,8 @@ export function Lobby({
   onKick: (id: string) => void;
   onPlayBots: () => void;
   onLooks: (patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) => void;
+  needAuth?: boolean;
+  onConnect?: () => void;
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
   const inTable = joined.some((p) => p.id === youId);
@@ -362,6 +366,12 @@ export function Lobby({
           </div>
 
           <aside className="wait-me" aria-label="Wardrobe">
+            {needAuth ? (
+              <button type="button" className="stall-btn primary wait-auth" onClick={() => { sfx("click"); onConnect?.(); }}>
+                <b>Use my Discord</b>
+                <small>So the table can see your name</small>
+              </button>
+            ) : null}
             <WaitingBooth
               you={joined.find((p) => p.id === youId) || { id: youId, name: "You", avatar: null, ...savedLooks() }}
               onLooks={onLooks}
@@ -432,7 +442,7 @@ function ChairRow({
             {p ? (
               <>
                 <SeatMark person={p} />
-                <span>{p.id === youId ? "You" : p.name}</span>
+                <span>{p.id === youId ? "You" : p.name && p.name !== "You" ? p.name : "Guest"}</span>
                 {p.id === hostId ? <em className="chair-tag host">host</em> : p.bot ? <em className="chair-tag">bot</em> : null}
                 {isHost && p.bot ? (
                   <button type="button" className="seat-kick" title={`Remove ${p.name}`} onClick={() => { sfx("back"); onKick(p.id); }}>

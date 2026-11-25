@@ -128,7 +128,9 @@ export function isDiscordFrame() {
 
 let presenceStart = 0;
 let lastPresence: { details?: string; state?: string; party?: number } = {};
-const OAUTH_SCOPES = ["identify", "rpc.activities.write"];
+let oauthClient = "";
+let oauthBusy = false;
+const OAUTH_SCOPES = ["identify"];
 
 function presencePayload(withArt: boolean) {
   const count = lastPresence.party ?? disc.people.length;
@@ -178,26 +180,56 @@ async function pullPeople() {
   }
 }
 
-async function authorizeCode(clientId: string) {
+function withTime<T>(work: Promise<T>, ms: number) {
+  return new Promise<T>((resolve, reject) => {
+    const t = window.setTimeout(() => reject(new Error("timeout")), ms);
+    work.then(
+      (v) => {
+        window.clearTimeout(t);
+        resolve(v);
+      },
+      (err) => {
+        window.clearTimeout(t);
+        reject(err);
+      },
+    );
+  });
+}
+
+async function authorizeCode(clientId: string, force = false) {
   if (!sdk) return "";
-  const redirectUri = `https://${clientId}.discordsays.com`;
+  if (!force) {
+    try {
+      const silent = await withTime(
+        sdk.commands.authorize({
+          client_id: clientId,
+          response_type: "code",
+          state: "",
+          prompt: "none",
+          scope: OAUTH_SCOPES,
+        }),
+        2500,
+      );
+      if (silent.code) return silent.code;
+    } catch {
+      /* show the consent screen */
+    }
+  }
   try {
-    const silent = await sdk.commands.authorize({
+    const asked = await sdk.commands.authorize({
       client_id: clientId,
       response_type: "code",
-      redirect_uri: redirectUri,
       state: "",
-      prompt: "none",
+      prompt: "consent",
       scope: OAUTH_SCOPES,
     });
-    if (silent.code) return silent.code;
+    if (asked.code) return asked.code;
   } catch {
-    /* need the consent screen */
+    /* SDK may not take prompt=consent */
   }
   const asked = await sdk.commands.authorize({
     client_id: clientId,
     response_type: "code",
-    redirect_uri: redirectUri,
     state: "",
     scope: OAUTH_SCOPES,
   });
@@ -214,33 +246,36 @@ async function oauthReady() {
   }
 }
 
-async function tryOAuth(clientId: string) {
-  if (!sdk || disc.authed) return;
+async function tryOAuth(clientId: string, force = false) {
+  if (!sdk || disc.authed || oauthBusy) return;
   if (!(await oauthReady())) return;
-  const code = await authorizeCode(clientId);
-  if (!code) return;
-  const tok = await fetch(apiPath("/api/token"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code,
-      redirect_uri: `https://${clientId}.discordsays.com`,
-    }),
-  });
-  const body = (await tok.json()) as { access_token?: string; user?: VoiceUser; error?: string };
-  if (body.user?.id) rememberUser(face(body.user));
-  if (!body.access_token) {
-    console.warn("DreamPoly Discord login failed", tok.status, body.error || "");
-    return;
-  }
+  oauthBusy = true;
   try {
+    const code = await authorizeCode(clientId, force);
+    if (!code) return;
+    const tok = await fetch(apiPath("/api/token"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        redirect_uri: `https://${clientId}.discordsays.com`,
+      }),
+    });
+    const body = (await tok.json()) as { access_token?: string; user?: VoiceUser; error?: string };
+    if (body.user?.id) rememberUser(face(body.user));
+    if (!body.access_token) {
+      console.warn("DreamPoly Discord login failed", tok.status, body.error || "");
+      return;
+    }
     const auth = await sdk.commands.authenticate({ access_token: body.access_token });
     if (auth.user) rememberUser(face(auth.user));
     disc.authed = true;
     bump();
     publishActivity();
   } catch (err) {
-    console.warn("DreamPoly Discord authenticate", err);
+    console.warn("DreamPoly Discord login", err);
+  } finally {
+    oauthBusy = false;
   }
 }
 
@@ -255,6 +290,7 @@ export async function bootDiscord() {
     (window.location.hostname.endsWith("discordsays.com") ? window.location.hostname.split(".")[0] : "") ||
     "1527356150427816007";
   if (!clientId || !/^\d+$/.test(clientId)) return;
+  oauthClient = clientId;
   const { DiscordSDK } = await import("@discord/embedded-app-sdk");
   sdk = new DiscordSDK(clientId) as unknown as Sdk;
   await sdk.ready();
@@ -274,13 +310,20 @@ export async function bootDiscord() {
   window.setInterval(() => void pullPeople(), 2500);
   let tries = 0;
   window.setInterval(() => {
-    if (disc.authed || tries >= 4) return;
+    if (disc.authed || tries >= 8) return;
     void (async () => {
       if (!(await oauthReady())) return;
       tries += 1;
-      await tryOAuth(clientId).catch(() => undefined);
+      await tryOAuth(clientId, tries > 1).catch(() => undefined);
     })();
-  }, 6000);
+  }, 4000);
+}
+
+export async function connectDiscord() {
+  if (disc.authed) return;
+  const clientId = oauthClient;
+  if (!clientId) return;
+  await tryOAuth(clientId, true);
 }
 
 export async function readRoom(id: string) {

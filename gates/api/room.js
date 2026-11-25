@@ -1,10 +1,26 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import { patchRoom } from "./roomPeople.js";
 
 const g = globalThis;
+const FILE = "/tmp/poly-rooms.json";
 
 function rooms() {
-  if (!g.__polyRooms) g.__polyRooms = new Map();
+  if (g.__polyRooms) return g.__polyRooms;
+  try {
+    const raw = JSON.parse(readFileSync(FILE, "utf8"));
+    g.__polyRooms = new Map(Object.entries(raw || {}));
+  } catch {
+    g.__polyRooms = new Map();
+  }
   return g.__polyRooms;
+}
+
+function persist(store) {
+  try {
+    writeFileSync(FILE, JSON.stringify(Object.fromEntries(store)));
+  } catch {
+    /* instance-local only */
+  }
 }
 
 function mintCode(store) {
@@ -50,5 +66,6 @@ export default async function handler(req, res) {
   const cur = store.get(id) || {};
   const saved = patchRoom(cur, incoming, id, cur.code || incoming.code || mintCode(store));
   store.set(id, saved);
+  persist(store);
   res.status(200).json(saved);
 }

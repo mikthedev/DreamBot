@@ -22,7 +22,7 @@ import {
 import { BootCurtain, PocketDesk, usePocketDesk } from "./boot";
 import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, TableLinkStrip, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
 import { apiPath, connectDiscord, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
-import { linkCopy, pingLabel, startGuestNet, startHostNet, type LinkKind, type NetHandle, type PeerInfo, type SnapMsg, type WireMsg } from "./net";
+import { linkCopy, pingLabel, startGuestNet, startHostNet, uniqueIds, type LinkKind, type LinkPath, type NetHandle, type PeerInfo, type SnapMsg, type WireMsg } from "./net";
 import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxHover, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { THEME_KEY, THEMES, applyTheme, savedTheme, type ThemeId } from "./theme";
 import { TRACK } from "../engine/track";
@@ -106,10 +106,10 @@ function realName(...names: (string | null | undefined)[]) {
   }) || "";
 }
 
-function selfLook(user: { id?: string; name: string; avatar: string | null } | null | undefined, profile: Profile | null) {
+function selfLook(user: { id?: string; name: string; avatar: string | null } | null | undefined, profile: Profile | null, wire = false) {
   const id = user?.id || profile?.id;
   return {
-    name: user?.name || profile?.username || "You",
+    name: realName(user?.name, profile?.username) || (wire ? "Player" : "You"),
     avatar: user?.avatar || profile?.avatar || (id ? `${apiPath("/api/face")}?id=${encodeURIComponent(id)}` : null),
   };
 }
@@ -162,6 +162,8 @@ export function App() {
   const [linkPing, setLinkPing] = useState<number | null>(null);
   const [linkPeers, setLinkPeers] = useState<PeerInfo[]>([]);
   const [linkWarn, setLinkWarn] = useState<string | null>(null);
+  const [linkPath, setLinkPath] = useState<LinkPath>("down");
+  const askedAuth = useRef(false);
   const roomId = tableId;
   const isHost = hostSeatRef.current === seatId || (!!hostId && (hostId === youId || hostId === seatId));
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) === "on");
@@ -404,11 +406,7 @@ export function App() {
 
   function act(action: Action) {
     if (roomId && !isHostRef.current) {
-      if (!netRef.current?.live()) {
-        setLinkWarn("Wait until you are linked to the host.");
-        return;
-      }
-      netRef.current.send({ t: "action", action });
+      netRef.current?.send({ t: "action", action });
       return;
     }
     setState((s) => {
@@ -586,6 +584,8 @@ export function App() {
     setLinkPing(null);
     setLinkPeers([]);
     setLinkWarn(null);
+    setLinkPath("down");
+    askedAuth.current = false;
   }
 
   function leaveTable() {
@@ -623,7 +623,7 @@ export function App() {
     if (!pick || joined.length >= MAX_PLAYERS) return;
     if (joined.some((p) => p.id === pick)) return;
     const fromWatch = spectators.find((p) => p.id === pick);
-    const look = selfLook(discord.user, profile);
+    const look = selfLook(discord.user, profile, true);
     const you: SeatPerson = {
       id: youId,
       name: look.name,
@@ -852,7 +852,7 @@ export function App() {
     if (!discord.people.length) return;
     setJoined((j) => {
       let changed = false;
-      const next = j.map((p) => {
+      let next = j.map((p) => {
         if (p.bot) return p;
         const live = discord.people.find((x) => x.id === p.id);
         if (!live?.name) return p;
@@ -861,9 +861,25 @@ export function App() {
         changed = true;
         return { ...p, name: live.name, avatar: live.avatar || p.avatar };
       });
+      const named = new Set(next.map((p) => p.id));
+      const leftover = discord.people.filter((p) => p.id !== youId && !named.has(p.id));
+      const blanks = next.filter((p) => !p.bot && p.id !== youId && (!p.name || p.name === "You" || p.name === "Guest" || p.name === "Player"));
+      if (leftover.length === 1 && blanks.length === 1) {
+        const live = leftover[0];
+        next = next.map((p) => (p.id === blanks[0].id ? { ...p, id: live.id, name: live.name, avatar: live.avatar || p.avatar } : p));
+        changed = true;
+      }
       return changed ? next : j;
     });
-  }, [discord.people]);
+  }, [discord.people, youId]);
+
+  useEffect(() => {
+    if (askedAuth.current) return;
+    if (screen !== "lobby" && screen !== "play") return;
+    if (!discord.framed || !discord.ready || discord.authed) return;
+    askedAuth.current = true;
+    void connectDiscord();
+  }, [screen, discord.framed, discord.ready, discord.authed]);
 
   useEffect(() => {
     if (!isHost || !discord.people.length) return;
@@ -972,6 +988,8 @@ export function App() {
       const handle = startHostNet({
         roomId,
         youId,
+        publicId: hostId || youId,
+        aliases: uniqueIds(youId, seatId, hostId),
         onMsg: (from, msg) => hostMsgRef.current(from, msg),
         onPeers: (peers) => {
           setLinkPeers(peers);
@@ -980,7 +998,16 @@ export function App() {
           const lost = peers.some((p) => p.status === "lost");
           setLinkPing(live.length ? worst : null);
           setLinkStatus(lost ? "lost" : live.some((p) => p.status === "weak") ? "weak" : live.length ? "linked" : "calling");
-          setLinkWarn(lost ? "A player lost the direct link. They need this Activity still open." : live.some((p) => p.status === "weak") ? "A player has high ping to you." : null);
+          setLinkPath(handle.path());
+          setLinkWarn(
+            lost
+              ? "A player dropped. They need this Activity still open."
+              : live.some((p) => p.status === "weak")
+                ? "A player has a slow link to you."
+                : handle.path() === "relay"
+                  ? "Players are on your table. Keep this Activity open."
+                  : null,
+          );
         },
       });
       netRef.current = handle;
@@ -998,6 +1025,7 @@ export function App() {
       roomId,
       youId,
       hostId,
+      aliases: uniqueIds(youId, seatId),
       onMsg: (msg) => {
         if (msg.t === "closed") {
           resetLocalTable();
@@ -1009,10 +1037,11 @@ export function App() {
         setLinkPing(info.ping);
         setLinkStatus(info.status);
         setLinkPeers([info]);
+        setLinkPath(info.path);
         setLinkWarn(info.warn);
-        if (info.status === "linked" && !greeted) {
+        if ((info.status === "linked" || info.path !== "down") && !greeted) {
           greeted = true;
-          const look = selfLook(discord.user, profile);
+          const look = selfLook(discord.user, profile, true);
           handle.send({
             t: "hello",
             person: { id: youId, name: look.name, avatar: look.avatar, ...savedLooks() },
@@ -1043,7 +1072,7 @@ export function App() {
     pushTimer.current = window.setTimeout(() => {
       lastHostPush.current = stamp;
       netRef.current?.broadcast(takeSnap());
-    }, 80);
+    }, netRef.current?.path() === "direct" ? 80 : 400);
     return () => window.clearTimeout(pushTimer.current);
   }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state]);
 
@@ -1197,7 +1226,7 @@ export function App() {
               ping: linkPing,
               linked: linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length,
               warn: linkWarn,
-              ...linkCopy(linkRole, linkStatus, linkPing, linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length),
+              ...linkCopy(linkRole, linkStatus, linkPing, linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length, linkPath),
               pings: {
                 ...Object.fromEntries(linkPeers.map((p) => [p.id, p.ping])),
                 ...(linkRole === "guest" && hostId ? { [hostId]: linkPing } : {}),
@@ -1222,7 +1251,7 @@ export function App() {
           ping={linkPing}
           linked={linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length}
           warn={linkWarn}
-          {...linkCopy(linkRole, linkStatus, linkPing, linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length)}
+          {...linkCopy(linkRole, linkStatus, linkPing, linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length, linkPath)}
         />
       ) : null}
       <div className="roster">

@@ -282,7 +282,7 @@ export function Lobby({
             <h1>Waiting room</h1>
             <p className="wait-sub">
               {ready ? "Table is ready." : `Need ${need} more.`}
-              {isHost ? " This match runs on your computer." : ` Linked to ${host?.name || hostName}'s computer.`}
+              {isHost ? " Share the code." : ` ${host?.name || hostName} starts.`}
               {inTable ? "" : " Sit an open chair."}
             </p>
           </div>
@@ -318,6 +318,17 @@ export function Lobby({
           )}
         </header>
         {link ? <TableLinkStrip {...link} /> : null}
+        {needAuth ? (
+          <div className="wait-auth">
+            <div>
+              <b>Use your Discord</b>
+              <p>The table needs your account so you are not shown as a guest.</p>
+            </div>
+            <button type="button" className="stall-btn primary" onClick={() => { sfx("click"); onConnect?.(); }}>
+              <b>Sign in</b>
+            </button>
+          </div>
+        ) : null}
 
         <div className="wait-body">
           <div className="wait-stage">
@@ -441,14 +452,16 @@ export function TableLinkStrip({
   title: string;
   note: string;
 }) {
-  const tone = warn || status === "lost" ? "bad" : status === "weak" || status === "calling" ? "wait" : "ok";
+  const tone = status === "lost" ? "bad" : status === "linked" && !warn ? "ok" : "wait";
   return (
-    <div className={`link-meter is-${tone} is-${role}`} role="status">
+    <div className={`link-meter is-${tone} is-${role}`} role="status" title={warn || `${title}. ${note}`}>
       <i className="link-dot" aria-hidden />
-      <div>
+      <div className="link-copy">
         <b>{title}</b>
-        <small>{note}{role === "host" && linked ? "" : ping != null && role === "guest" ? ` · ${Math.round(ping)}ms` : ""}</small>
+        <small>{note}</small>
       </div>
+      {ping != null && role === "guest" ? <span className="link-ping">{Math.round(ping)}ms</span> : null}
+      {role === "host" && linked ? <span className="link-ping">{linked} in</span> : null}
       {warn ? <em className="link-warn">{warn}</em> : null}
     </div>
   );
@@ -577,7 +590,7 @@ function WaitingBooth({
         type="button"
         className={`look-stage ${hop ? "hop" : ""}`}
         onClick={() => { sfx("move"); setHop((n) => n + 1); }}
-        title={look === "pawn" ? "Your piece" : "Your icon"}
+        aria-label={look === "pawn" ? "Your piece" : "Your icon"}
       >
         <span className="look-spot" aria-hidden />
         <SeatMark person={you} studio />

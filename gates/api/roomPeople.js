@@ -86,6 +86,7 @@ export function mergeWire(curList, incoming) {
       to: String(s.to || ""),
       kind: String(s.kind || ""),
       sdp: s.sdp || null,
+      payload: s.payload || null,
       candidate: s.candidate || null,
       at: Date.now(),
     });

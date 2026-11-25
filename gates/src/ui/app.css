@@ -3424,8 +3424,8 @@ input {
   width: min(100%, 1080px);
   height: 100%;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--bg);
   border: 4px solid var(--trim);
@@ -3433,6 +3433,7 @@ input {
 }
 .wait-bar {
   display: grid;
+  flex: none;
   grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 10px;
@@ -3446,46 +3447,102 @@ input {
 .link-meter {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex: none;
+  flex-wrap: nowrap;
+  height: 36px;
+  max-height: 36px;
   margin: 0;
-  padding: 8px 12px;
-  background: #16120e;
-  border-bottom: 2px solid var(--trim);
-  color: var(--text);
+  padding: 0 12px;
+  overflow: hidden;
+  color: var(--ink-deep);
+  background:
+    linear-gradient(180deg, #fff8dc, #e8d5a0);
+  border-bottom: 3px solid var(--trim);
 }
 .play > .link-meter {
   grid-column: 1 / -1;
-  border: 2px solid var(--line);
+  height: 36px;
+  max-height: 36px;
+  border: 3px solid var(--trim);
   margin: 0 0 8px;
-  box-shadow: 2px 2px 0 var(--hard);
+  box-shadow: 3px 3px 0 var(--hard);
 }
 .link-meter .link-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   flex: none;
   border-radius: 50%;
-  background: #6a7a4a;
-  box-shadow: 0 0 0 2px #1a1814, 0 0 8px #8fbc5a88;
+  background: #2f6b32;
+  box-shadow: 0 0 0 2px #fff8dc;
 }
-.link-meter.is-wait .link-dot { background: #c9a24a; box-shadow: 0 0 0 2px #1a1814, 0 0 8px #e6c35a88; }
-.link-meter.is-bad .link-dot { background: #c45a5a; box-shadow: 0 0 0 2px #1a1814, 0 0 8px #f0808088; }
+.link-meter.is-wait .link-dot { background: #b45309; }
+.link-meter.is-bad .link-dot { background: #9f2d2d; }
+.link-meter.is-bad {
+  background: linear-gradient(180deg, #ffe4c8, #e8b48a);
+}
+.link-meter .link-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+}
 .link-meter b {
-  display: block;
+  flex: none;
   font-family: var(--display);
   font-size: 15px;
-  line-height: 1.1;
+  line-height: 1;
+  white-space: nowrap;
 }
 .link-meter small {
-  display: block;
-  color: var(--muted);
-  font-size: 11px;
+  min-width: 0;
+  color: #5c4a28;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.link-meter .link-warn {
-  flex: 1 1 180px;
-  font-style: normal;
-  font-size: 11px;
-  color: #f0c4a8;
+.link-meter .link-ping {
+  flex: none;
+  font-family: "Press Start 2P", var(--display), sans-serif;
+  font-size: 8px;
+  padding: 3px 5px;
+  background: #1a1410;
+  color: #fde68a;
+  border: 2px solid #3a2a20;
+}
+.link-meter .link-warn { display: none; }
+.wait-auth {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: none;
+  height: 40px;
+  max-height: 40px;
+  margin: 0;
+  padding: 0 12px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #2a2218, #1a1410);
+  border-bottom: 3px solid var(--trim);
+  color: var(--text);
+}
+.wait-auth b {
+  font-family: var(--display);
+  font-size: 16px;
+  white-space: nowrap;
+}
+.wait-auth p {
+  display: none;
+}
+.wait-auth .stall-btn {
+  flex: none;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
 }
 .chair-tag.ping { font-size: 9px; }
 .chair-tag.ping.is-bad { color: #f0a0a0; }
@@ -3633,6 +3690,7 @@ input {
   opacity: 0.7;
 }
 .wait-body {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
   display: grid;
@@ -4179,6 +4237,7 @@ input {
 }
 .wait-dock {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   gap: 10px;
   align-items: stretch;

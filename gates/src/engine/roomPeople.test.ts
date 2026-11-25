@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { foldRoom, mergePending, mergePerson, mergeWire, patchRoom, remapStateIds, sameHost } from "../../api/roomPeople.js";
+import { signalForMe, uniqueIds } from "../ui/net";
 
 describe("room people and turns", () => {
   it("keeps a Discord name when the host later publishes Guest", () => {
@@ -47,6 +48,18 @@ describe("room people and turns", () => {
     expect(state.players[0].name).toBe("Alex");
     expect(state.companies.discord.owner).toBe("99");
     expect(state.stores.shop).toBe("99");
+  });
+
+  it("delivers a handshake to every id the host might be using", () => {
+    const me = uniqueIds("seat-aa", "99");
+    expect(signalForMe({ from: "guest", to: "seat-aa" }, me, "99")).toBe(true);
+    expect(signalForMe({ from: "guest", to: "99" }, me, "99")).toBe(true);
+    expect(signalForMe({ from: "99", to: "guest" }, me, "99")).toBe(false);
+  });
+
+  it("stores a table-link pack on the wire", () => {
+    const once = mergeWire([], { signal: { from: "g", to: "h", kind: "pack", payload: "{\"t\":\"hello\"}", nid: "p1" } });
+    expect(once[0].payload).toContain("hello");
   });
 
   it("keeps handshake signals until they are acked", () => {

@@ -877,6 +877,7 @@ export function App() {
     if (askedAuth.current) return;
     if (screen !== "lobby" && screen !== "play") return;
     if (!discord.framed || !discord.ready || discord.authed) return;
+    if (/^\d{8,}$/.test(discord.user?.id || "")) return;
     askedAuth.current = true;
     void connectDiscord();
   }, [screen, discord.framed, discord.ready, discord.authed]);
@@ -1217,7 +1218,7 @@ export function App() {
             onKick={kickSeat}
             onPlayBots={playWithBots}
             onLooks={applyLooks}
-            needAuth={discord.framed && !discord.authed}
+            needAuth={discord.framed && !discord.authed && !/^\d{8,}$/.test(discord.user?.id || "")}
             onConnect={() => void connectDiscord()}
             people={discord.people}
             link={{

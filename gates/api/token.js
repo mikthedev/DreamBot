@@ -9,30 +9,23 @@ async function discordMe(accessToken) {
 function readCode(req) {
   const raw = req.body;
   if (raw && typeof raw === "object" && !Buffer.isBuffer(raw)) {
-    return {
-      code: String(raw.code || "").trim(),
-      redirect: typeof raw.redirect_uri === "string" ? raw.redirect_uri.trim() : "",
-    };
+    return String(raw.code || "").trim();
   }
   try {
     const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw || "");
     const parsed = JSON.parse(text || "{}");
-    return {
-      code: String(parsed.code || "").trim(),
-      redirect: typeof parsed.redirect_uri === "string" ? parsed.redirect_uri.trim() : "",
-    };
+    return String(parsed.code || "").trim();
   } catch {
-    return { code: "", redirect: "" };
+    return "";
   }
 }
 
-async function exchangeCode(clientId, secret, code, redirectUri) {
+async function exchangeCode(clientId, secret, code) {
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: secret,
     grant_type: "authorization_code",
     code,
-    redirect_uri: redirectUri,
   });
   const r = await fetch("https://discord.com/api/oauth2/token", {
     method: "POST",
@@ -52,7 +45,7 @@ export default async function handler(req, res) {
     res.status(405).json({ error: "method" });
     return;
   }
-  const { code, redirect } = readCode(req);
+  const code = readCode(req);
   const clientId =
     process.env.DISCORD_CLIENT_ID || process.env.VITE_DISCORD_CLIENT_ID || "1527356150427816007";
   const secret = process.env.DISCORD_CLIENT_SECRET;
@@ -60,12 +53,8 @@ export default async function handler(req, res) {
     res.status(501).json({ error: "oauth not configured" });
     return;
   }
-  const redirectUri =
-    redirect && redirect.startsWith(`https://${clientId}.discordsays.com`)
-      ? redirect
-      : `https://${clientId}.discordsays.com`;
   try {
-    const attempt = await exchangeCode(clientId, secret, code, redirectUri);
+    const attempt = await exchangeCode(clientId, secret, code);
     if (!attempt.data?.access_token) {
       res.status(400).json({ error: attempt.data?.error || "token" });
       return;

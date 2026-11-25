@@ -209,7 +209,7 @@ async function authorizeCode(clientId: string, force = false) {
           prompt: "none",
           scope: OAUTH_SCOPES,
         }),
-        4000,
+        8000,
       );
       return silent.code || "";
     } catch {
@@ -218,13 +218,18 @@ async function authorizeCode(clientId: string, force = false) {
   }
   if (oauthPrompted) return "";
   oauthPrompted = true;
-  const asked = await sdk.commands.authorize({
-    client_id: clientId,
-    response_type: "code",
-    state: "",
-    scope: OAUTH_SCOPES,
-  });
-  return asked.code || "";
+  try {
+    const asked = await sdk.commands.authorize({
+      client_id: clientId,
+      response_type: "code",
+      state: "",
+      scope: OAUTH_SCOPES,
+    });
+    return asked.code || "";
+  } catch (err) {
+    oauthPrompted = false;
+    throw err;
+  }
 }
 
 async function oauthReady() {
@@ -247,10 +252,7 @@ async function tryOAuth(clientId: string, force = false) {
     const tok = await fetch(apiPath("/api/token"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code,
-        redirect_uri: `https://${clientId}.discordsays.com`,
-      }),
+      body: JSON.stringify({ code }),
     });
     const body = (await tok.json()) as { access_token?: string; user?: VoiceUser; error?: string };
     if (body.user?.id) rememberUser(face(body.user));
@@ -258,9 +260,13 @@ async function tryOAuth(clientId: string, force = false) {
       console.warn("DreamPoly Discord login failed", tok.status, body.error || "");
       return;
     }
-    const auth = await sdk.commands.authenticate({ access_token: body.access_token });
-    if (auth.user) rememberUser(face(auth.user));
-    disc.authed = true;
+    try {
+      const auth = await sdk.commands.authenticate({ access_token: body.access_token });
+      if (auth.user) rememberUser(face(auth.user));
+    } catch (err) {
+      console.warn("DreamPoly Discord authenticate", err);
+    }
+    disc.authed = !!disc.user?.id;
     bump();
     publishActivity();
   } catch (err) {

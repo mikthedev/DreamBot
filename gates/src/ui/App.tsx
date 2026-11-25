@@ -154,7 +154,10 @@ export function App() {
     return id;
   });
   const hostSeatRef = useRef<string | null>(null);
-  const youId = discord.user?.id || seatId;
+  const [discordId, setDiscordId] = useState(() => localStorage.getItem(ID_KEY) || "");
+  const [profile, setProfile] = useState<Profile | null>(null);
+  // Prefer a real Discord snowflake. Local-only Mike looked "authed" via saved id + bot lookup while friends stayed You.
+  const youId = discord.user?.id || profile?.id || (/^\d{8,}$/.test(discordId) ? discordId : "") || seatId;
   const youIdRef = useRef(youId);
   youIdRef.current = youId;
   const [hostId, setHostId] = useState<string | null>(null);
@@ -189,8 +192,6 @@ export function App() {
   const roomId = tableId;
   const isHost = hostSeatRef.current === seatId || (!!hostId && (hostId === youId || hostId === seatId));
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) === "on");
-  const [discordId, setDiscordId] = useState(() => localStorage.getItem(ID_KEY) || "");
-  const [profile, setProfile] = useState<Profile | null>(null);
   const [sheet, setSheet] = useState<null | "more" | "test" | "log">(null);
   const [trading, setTrading] = useState(false);
   const skipMarketOpen = useRef(false);
@@ -778,8 +779,15 @@ export function App() {
     publishHost({ screen: "play", mode: pickedMode, joined: people, state: next });
   }
 
-  function startTable(people = joined) {
-    if (roomId && !isHostRef.current) return;
+  async function seatsFromRoom(fallback: SeatPerson[]) {
+    if (!roomId) return fallback;
+    const room = await readRoom(roomId);
+    if (!Array.isArray(room?.joined) || !room.joined.length) return fallback;
+    const mine = fallback.find((p) => p.id === youId) || fallback[0];
+    return keepMineLooks(room.joined as SeatPerson[], mine, youId);
+  }
+
+  function beginDive(people: SeatPerson[]) {
     if (people.length < 3 || people.length > MAX_PLAYERS) return;
     if (dive !== "idle") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -796,6 +804,14 @@ export function App() {
         diveWait.current.push(window.setTimeout(() => setDive("idle"), 620));
       }, 520),
     );
+  }
+
+  function startTable(people = joined) {
+    if (roomId && !isHostRef.current) return;
+    void seatsFromRoom(people).then((seats) => {
+      setJoined(seats);
+      beginDive(seats);
+    });
   }
 
   function seatBots() {
@@ -1175,27 +1191,26 @@ export function App() {
         resetLocalTable();
         return;
       }
-      if (
-        !guestShouldApply(
-          room as { seq?: number; screen?: string; state?: unknown },
-          appliedSeq.current,
-          screenRef.current,
-          !!stateRef.current,
-        )
-      ) {
-        return;
-      }
+      const shouldPlay = guestShouldApply(
+        room as { seq?: number; screen?: string; state?: unknown },
+        appliedSeq.current,
+        screenRef.current,
+        !!stateRef.current,
+      );
+      const roomJoined = Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : [];
+      const seatsChanged = roomJoined.length > 0 && seatKey(roomJoined) !== seatKey(joinedRef.current);
+      if (!shouldPlay && !seatsChanged) return;
       applySnapRef.current({
         t: "snap",
-        seq: Number(room.seq || 0),
-        screen: (room.screen as SnapMsg["screen"]) || "lobby",
+        seq: Number(room.seq || appliedSeq.current),
+        screen: (room.screen as SnapMsg["screen"]) || screenRef.current || "lobby",
         mode: (room.mode as Mode) || "moves",
         hostId: String(room.hostId || ""),
         hostName: publicSeatName(String(room.hostName || ""), "Host"),
         code: String(room.code || ""),
-        joined: Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : [],
+        joined: roomJoined,
         spectators: Array.isArray(room.spectators) ? (room.spectators as SeatPerson[]) : [],
-        state: (room.state as State) || null,
+        state: shouldPlay ? ((room.state as State) || null) : stateRef.current,
       });
     };
     void tick();
@@ -1206,13 +1221,25 @@ export function App() {
     };
   }, [roomId, isHost]);
 
-  // Host applies guest moves that arrived over HTTPS when the peer pipe is dead.
+  // Host pulls guest sits + pending moves from the room (Discord has no WebRTC).
   useEffect(() => {
     if (!roomId || !isHost) return;
     let stop = false;
     const tick = async () => {
       const room = await readRoom(roomId);
       if (stop || !room) return;
+      if (Array.isArray(room.joined) && screenRef.current !== "play") {
+        const incoming = room.joined as SeatPerson[];
+        setJoined((cur) => {
+          const mine = cur.find((p) => p.id === youIdRef.current);
+          const next = keepMineLooks(incoming, mine, youIdRef.current);
+          return seatKey(cur) === seatKey(next) ? cur : next;
+        });
+        if (Array.isArray(room.spectators)) setSpectators(room.spectators as SeatPerson[]);
+        if (room.hostId) setHostId(String(room.hostId));
+        if (room.hostName) setTableHostName(publicSeatName(String(room.hostName), "Host"));
+        if (room.code) setLobbyCode(String(room.code));
+      }
       const pending = Array.isArray(room.pending) ? room.pending : [];
       if (!pending.length) return;
       const acks: string[] = [];
@@ -1231,6 +1258,7 @@ export function App() {
       }
       if (acks.length) void writeRoom(roomId, { ack: acks });
     };
+    void tick();
     const t = window.setInterval(() => void tick(), 700);
     return () => {
       stop = true;

@@ -244,7 +244,10 @@ async function oauthReady() {
 
 async function tryOAuth(clientId: string, force = false) {
   if (!sdk || disc.authed || oauthBusy) return;
-  if (!(await oauthReady())) return;
+  if (!(await oauthReady())) {
+    console.warn("DreamPoly Discord login: oauth not configured on the host");
+    return;
+  }
   oauthBusy = true;
   try {
     const code = await authorizeCode(clientId, force);
@@ -258,6 +261,8 @@ async function tryOAuth(clientId: string, force = false) {
     if (body.user?.id) rememberUser(face(body.user));
     if (!body.access_token) {
       console.warn("DreamPoly Discord login failed", tok.status, body.error || "");
+      // Allow another authorize attempt — a bad token exchange used to leave everyone stuck as You.
+      oauthPrompted = false;
       return;
     }
     try {
@@ -269,7 +274,9 @@ async function tryOAuth(clientId: string, force = false) {
     disc.authed = !!disc.user?.id;
     bump();
     publishActivity();
+    await pullPeople();
   } catch (err) {
+    oauthPrompted = false;
     console.warn("DreamPoly Discord login", err);
   } finally {
     oauthBusy = false;

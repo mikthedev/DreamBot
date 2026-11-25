@@ -20,13 +20,15 @@ function readCode(req) {
   }
 }
 
-async function exchangeCode(clientId, secret, code) {
+async function exchangeCode(clientId, secret, code, redirectUri) {
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: secret,
     grant_type: "authorization_code",
     code,
   });
+  // Activity authorize usually omits redirect_uri; some clients still bind the portal placeholder.
+  if (redirectUri) body.set("redirect_uri", redirectUri);
   const r = await fetch("https://discord.com/api/oauth2/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -54,7 +56,10 @@ export default async function handler(req, res) {
     return;
   }
   try {
-    const attempt = await exchangeCode(clientId, secret, code);
+    let attempt = await exchangeCode(clientId, secret, code);
+    if (!attempt.data?.access_token) {
+      attempt = await exchangeCode(clientId, secret, code, "https://127.0.0.1");
+    }
     if (!attempt.data?.access_token) {
       res.status(400).json({ error: attempt.data?.error || "token" });
       return;

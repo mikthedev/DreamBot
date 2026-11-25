@@ -11,6 +11,45 @@ describe("table sync over the room API (Discord has no WebRTC)", () => {
     expect(publicSeatName("Alex")).toBe("Alex");
   });
 
+  it("keeps a guest sit when the host later publishes without them", () => {
+    let room = patchRoom(
+      {},
+      {
+        asHost: true,
+        claimHost: "111",
+        hostId: "111",
+        hostName: "HostFriend",
+        screen: "lobby",
+        mode: "moves",
+        joined: [{ id: "111", name: "HostFriend", avatar: null }],
+        spectators: [],
+        state: null,
+        seq: 1,
+      },
+      "inst-2",
+      "KEEP",
+    );
+    room = patchRoom(room, { sit: { id: "222", name: "Joiner", avatar: null } }, "inst-2", "KEEP");
+    room = patchRoom(
+      room,
+      {
+        asHost: true,
+        claimHost: "111",
+        hostId: "111",
+        wasHost: "111",
+        hostName: "HostFriend",
+        screen: "lobby",
+        mode: "moves",
+        joined: [{ id: "111", name: "HostFriend", avatar: null }],
+        spectators: [],
+        seq: 2,
+      },
+      "inst-2",
+      "KEEP",
+    );
+    expect(room.joined.map((p: { id: string }) => p.id).sort()).toEqual(["111", "222"]);
+  });
+
   it("lets a guest enter play from a room poll after the host starts", () => {
     const host = { id: "111", name: "HostFriend", avatar: null };
     const guest = { id: "222", name: "Joiner", avatar: null };

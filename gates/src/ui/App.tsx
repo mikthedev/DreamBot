@@ -86,11 +86,23 @@ function logoOf(c: { id: string; logo?: string; name?: string }) {
 function playStamp(s: State) {
   return [
     s.phase,
+    s.turn,
     s.round,
     s.rollTick,
+    s.land || "",
+    s.goLand || "",
+    s.rentDue ? `${s.rentDue.to}:${s.rentDue.amount}` : "",
+    s.offer ? `${s.offer.from}:${s.offer.to}:${s.offer.giveCash}:${s.offer.getCash}` : "",
     s.log.length,
     s.players.map((p) => `${p.id}:${p.cash}:${p.moves}:${p.stand}:${p.out ? 1 : 0}`).join("|"),
   ].join("/");
+}
+
+function realName(...names: (string | null | undefined)[]) {
+  return names.find((n) => {
+    const v = (n || "").trim();
+    return v && v !== "You" && v !== "Guest" && v !== "Player";
+  }) || "";
 }
 
 function selfLook(user: { id?: string; name: string; avatar: string | null } | null | undefined, profile: Profile | null) {
@@ -120,6 +132,7 @@ export function App() {
     }
     return id;
   });
+  const hostSeatRef = useRef<string | null>(null);
   const youId = discord.user?.id || seatId;
   const [hostId, setHostId] = useState<string | null>(null);
   const [tableId, setTableId] = useState<string | null>(null);
@@ -136,7 +149,7 @@ export function App() {
   const roomIdRef = useRef<string | null>(null);
   const appliedSeq = useRef(0);
   const roomId = tableId;
-  const isHost = !!hostId && hostId === youId;
+  const isHost = hostSeatRef.current === seatId || (!!hostId && (hostId === youId || hostId === seatId));
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) === "on");
   const [discordId, setDiscordId] = useState(() => localStorage.getItem(ID_KEY) || "");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -258,7 +271,9 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [state, walking, isHost, roomId]);
 
-  const me = state?.players.find((p) => p.id === youId) ?? (!roomId ? state?.players[0] : undefined);
+  const me =
+    state?.players.find((p) => p.id === youId || p.id === seatId || p.id === discord.user?.id) ??
+    (!roomId ? state?.players[0] : undefined);
   useEffect(() => {
     if (!state || !me || state.mode !== "moves" || me.out) return;
     if (me.moves > 4) {
@@ -291,6 +306,18 @@ export function App() {
     if (trading) sfx("market");
   }, [trading]);
 
+  function overlayNames(play: State, seats: SeatPerson[] = joined) {
+    return {
+      ...play,
+      players: play.players.map((p) => {
+        const seat = seats.find((x) => x.id === p.id);
+        const live = discord.people.find((x) => x.id === p.id);
+        const name = realName(live?.name, seat?.name, p.name) || p.name;
+        return { ...p, name, avatar: live?.avatar || seat?.avatar || p.avatar };
+      }),
+    };
+  }
+
   function publishHost(patch: Record<string, unknown> = {}) {
     const id = roomIdRef.current;
     if (!id || !isHostRef.current) return;
@@ -299,6 +326,7 @@ export function App() {
       asHost: true,
       seq: roomSeq.current,
       hostId: hostIdRef.current || youId,
+      wasHost: hostSeatRef.current || seatId,
       state: stateRef.current,
       ...patch,
     });
@@ -349,7 +377,7 @@ export function App() {
   function act(action: Action) {
     if (roomId && !isHostRef.current) {
       void writeRoom(roomId, {
-        pending: { from: youId, action },
+        pending: { from: youId, action, playerId: youId },
       });
       return;
     }
@@ -420,6 +448,7 @@ export function App() {
     const { name, avatar } = selfLook(discord.user, profile);
     const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
     const id = discord.instanceId || `poly-${Date.now().toString(36)}`;
+    hostSeatRef.current = seatId;
     setPickedMode(mode);
     setJoined([you]);
     setSpectators([]);
@@ -430,6 +459,7 @@ export function App() {
       asHost: true,
       claimHost: youId,
       hostId: youId,
+      wasHost: seatId,
       hostName: name,
       screen: "lobby",
       mode,
@@ -439,7 +469,8 @@ export function App() {
     });
     if (saved?.id) setTableId(String(saved.id));
     if (saved?.code) setLobbyCode(String(saved.code));
-    if (saved && String(saved.hostId) !== youId) {
+    if (saved && String(saved.hostId) !== youId && String(saved.hostId) !== seatId) {
+      hostSeatRef.current = null;
       applyRoom(saved);
       return;
     }
@@ -453,7 +484,10 @@ export function App() {
     if (room.hostName) setTableHostName(String(room.hostName));
     if (room.code) setLobbyCode(String(room.code));
     if (room.mode === "moves" || room.mode === "classic") setPickedMode(room.mode);
-    if (Array.isArray(room.joined)) setJoined(room.joined as SeatPerson[]);
+    if (Array.isArray(room.joined)) {
+      const incoming = room.joined as SeatPerson[];
+      setJoined((cur) => keepMineLooks(incoming, cur.find((p) => p.id === youId), youId));
+    }
     if (Array.isArray(room.spectators)) setSpectators(room.spectators as SeatPerson[]);
     if (room.screen === "lobby" || room.screen === "play" || room.screen === "menu") setScreen(room.screen);
     if (room.state) setState(room.state as State);
@@ -510,6 +544,7 @@ export function App() {
     setWalk({});
     setTrading(false);
     appliedSeq.current = 0;
+    hostSeatRef.current = null;
   }
 
   function leaveTable() {
@@ -520,16 +555,18 @@ export function App() {
         void writeRoom(id, {
           asHost: true,
           hostId: hostIdRef.current || youId,
+          wasHost: hostSeatRef.current || seatId,
           screen: "menu",
           state: null,
           closed: true,
           joined: [],
           spectators: [],
-          pending: null,
+          ack: [],
         });
       } else {
         void writeRoom(id, {
           leave: youId,
+          drop: [youId, seatId].filter((v, i, all) => all.indexOf(v) === i),
           pending: { from: youId, action: { type: "quit", playerId: youId } },
         });
       }
@@ -821,8 +858,9 @@ export function App() {
         if (seq && seq < appliedSeq.current) return;
         if (nextState && (!stateRef.current || playStamp(stateRef.current) !== playStamp(nextState))) {
           appliedSeq.current = Math.max(appliedSeq.current, seq);
-          stateRef.current = nextState;
-          setState(nextState);
+          const labeled = overlayNames(nextState, Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : joined);
+          stateRef.current = labeled;
+          setState(labeled);
         } else if (seq > appliedSeq.current) {
           appliedSeq.current = seq;
         }
@@ -833,7 +871,7 @@ export function App() {
         : room.pending
           ? [room.pending]
           : [];
-      const jobs = queue.filter((item: { action?: Action }) => item?.action) as { from?: string; action: Action }[];
+      const jobs = queue.filter((item: { action?: Action }) => item?.action) as { nid?: string; from?: string; action: Action }[];
       if (stateRef.current && Array.isArray(room.joined)) {
         const seated = new Set((room.joined as SeatPerson[]).map((p) => p.id));
         for (const p of stateRef.current.players) {
@@ -847,25 +885,32 @@ export function App() {
       }
       if (!jobs.length || !stateRef.current) return;
       let current = stateRef.current;
+      const ack: string[] = [];
+      let applied = 0;
       for (const item of jobs) {
         const turn = actor(current)?.id;
         if (item.action.type !== "quit" && item.from && turn && item.from !== turn) continue;
         const next = apply(current, item.action);
         cuePlay(current, next, item.action);
         current = next;
+        applied += 1;
+        if (item.nid) ack.push(item.nid);
       }
-      stateRef.current = current;
-      setState(current);
+      if (!applied) return;
+      const labeled = overlayNames(current, Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : joined);
+      stateRef.current = labeled;
+      setState(labeled);
       roomSeq.current += 1;
       void writeRoom(roomId, {
         asHost: true,
         seq: roomSeq.current,
         hostId: String(room.hostId || hostId || youId),
-        pending: null,
+        wasHost: hostSeatRef.current || seatId,
+        ack,
         state: current,
       });
     };
-    const t = window.setInterval(() => void tick(), 400);
+    const t = window.setInterval(() => void tick(), 280);
     void tick();
     return () => {
       stop = true;
@@ -879,7 +924,7 @@ export function App() {
     const stamp = [
       screen,
       pickedMode,
-      joined.map((p) => p.id).join(","),
+      joined.map((p) => `${p.id}:${p.name}`).join(","),
       spectators.map((p) => p.id).join(","),
       stateRef.current ? playStamp(stateRef.current) : "",
       hostId || youId,
@@ -893,6 +938,7 @@ export function App() {
         asHost: true,
         seq: roomSeq.current,
         hostId: hostId || youId,
+        wasHost: hostSeatRef.current || seatId,
         hostName: selfLook(discord.user, profile).name,
         screen,
         mode: pickedMode,

@@ -1,5 +1,5 @@
 import { getCache } from "@vercel/functions";
-import { patchRoom } from "./roomPeople.js";
+import { foldRoom, patchRoom } from "./roomPeople.js";
 
 const g = globalThis;
 const TTL = 60 * 60 * 8;
@@ -51,13 +51,23 @@ async function findIdByCode(code) {
 }
 
 async function saveRoom(id, room) {
-  mem().set(id, room);
   const boxed = cache();
+  let toStore = room;
+  if (boxed) {
+    try {
+      const latest = await boxed.get(`room:${id}`);
+      if (latest && typeof latest === "object") toStore = foldRoom(latest, room);
+    } catch {
+      /* write what we have */
+    }
+  }
+  delete toStore.ack;
+  mem().set(id, toStore);
   if (!boxed) return;
   try {
-    await boxed.set(`room:${id}`, room, { ttl: TTL, tags: ["poly-rooms", `room:${id}`] });
-    if (room.code) {
-      await boxed.set(`code:${String(room.code).toUpperCase()}`, id, {
+    await boxed.set(`room:${id}`, toStore, { ttl: TTL, tags: ["poly-rooms", `room:${id}`] });
+    if (toStore.code) {
+      await boxed.set(`code:${String(toStore.code).toUpperCase()}`, id, {
         ttl: TTL,
         tags: ["poly-rooms", `room:${id}`],
       });
@@ -102,6 +112,8 @@ export default async function handler(req, res) {
   const used = new Set();
   if (cur.code) used.add(String(cur.code).toUpperCase());
   const saved = patchRoom(cur, incoming, id, cur.code || incoming.code || mintCode(used));
-  await saveRoom(id, saved);
-  res.status(200).json(saved);
+  await saveRoom(id, { ...saved, ack: incoming.ack });
+  const out = { ...saved };
+  delete out.ack;
+  res.status(200).json(out);
 }

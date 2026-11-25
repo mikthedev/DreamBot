@@ -3,10 +3,23 @@ function asPeople(list) {
   return list.filter((p) => p && typeof p === "object" && typeof p.id === "string" && p.id);
 }
 
+function placeholderName(name) {
+  const n = String(name || "").trim();
+  return !n || n === "You" || n === "Guest" || n === "Player";
+}
+
+export function mergePerson(prev, next) {
+  const a = prev && typeof prev === "object" ? prev : {};
+  const b = next && typeof next === "object" ? next : {};
+  const name = placeholderName(b.name) && !placeholderName(a.name) ? a.name : b.name || a.name;
+  const avatar = b.avatar || a.avatar || null;
+  return { ...a, ...b, name, avatar };
+}
+
 function upsert(list, person) {
   if (!person?.id) return list;
   const prev = list.find((p) => p.id === person.id) || {};
-  return [...list.filter((p) => p.id !== person.id), { ...prev, ...person }];
+  return [...list.filter((p) => p.id !== person.id), mergePerson(prev, person)];
 }
 
 function without(list, id) {
@@ -16,7 +29,7 @@ function without(list, id) {
 function mergeUnion(a, b) {
   const map = new Map();
   for (const p of asPeople(a)) map.set(p.id, p);
-  for (const p of asPeople(b)) map.set(p.id, { ...map.get(p.id), ...p });
+  for (const p of asPeople(b)) map.set(p.id, mergePerson(map.get(p.id) || {}, p));
   return [...map.values()];
 }
 
@@ -47,30 +60,104 @@ export function applyLobby(cur, incoming) {
   return { joined, spectators };
 }
 
-function pendingList(value) {
+export function pendingList(value) {
   if (Array.isArray(value)) return value.filter(Boolean);
   return value ? [value] : [];
 }
 
-function sameHost(curId, writer) {
+function tagPending(item) {
+  if (!item || typeof item !== "object") return null;
+  if (item.nid) return item;
+  return { ...item, nid: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` };
+}
+
+export function mergePending(curList, incoming) {
+  const map = new Map();
+  for (const item of pendingList(curList)) {
+    const tagged = tagPending(item);
+    if (tagged?.nid) map.set(String(tagged.nid), tagged);
+  }
+  if (incoming.pending && incoming.pending !== null) {
+    for (const item of pendingList(incoming.pending)) {
+      const tagged = tagPending(item);
+      if (tagged?.nid) map.set(String(tagged.nid), tagged);
+    }
+  }
+  const acks = Array.isArray(incoming.ack) ? incoming.ack.map((id) => String(id)) : [];
+  for (const id of acks) map.delete(id);
+  return [...map.values()];
+}
+
+export function sameHost(curId, writer, wasHost) {
   const a = String(curId || "");
   const b = String(writer || "");
+  const was = String(wasHost || "");
   if (!b) return false;
   if (!a) return true;
   if (a === b) return true;
-  if (a === "you" || a.startsWith("seat-")) return true;
+  if (was && was === a) return true;
   return false;
+}
+
+export function remapStateIds(state, from, to, sit) {
+  if (!state || typeof state !== "object" || !from || !to || from === to) return state;
+  const next = { ...state };
+  if (Array.isArray(next.players)) {
+    next.players = next.players.map((p) => {
+      if (p.id !== from) return p;
+      const name = sit && !placeholderName(sit.name) ? sit.name : p.name;
+      const avatar = sit?.avatar || p.avatar;
+      return { ...p, id: to, name, avatar };
+    });
+  }
+  if (next.companies && typeof next.companies === "object") {
+    next.companies = { ...next.companies };
+    for (const key of Object.keys(next.companies)) {
+      const own = next.companies[key];
+      if (own?.owner === from) next.companies[key] = { ...own, owner: to };
+    }
+  }
+  if (next.stores && typeof next.stores === "object") {
+    next.stores = { ...next.stores };
+    for (const key of Object.keys(next.stores)) {
+      if (next.stores[key] === from) next.stores[key] = to;
+    }
+  }
+  if (Array.isArray(next.licenses)) {
+    next.licenses = next.licenses.map((row) => ({
+      ...row,
+      seller: row.seller === from ? to : row.seller,
+      buyer: row.buyer === from ? to : row.buyer,
+    }));
+  }
+  if (next.rentDue?.to === from) next.rentDue = { ...next.rentDue, to };
+  if (next.lastPay) {
+    next.lastPay = {
+      ...next.lastPay,
+      from: next.lastPay.from === from ? to : next.lastPay.from,
+      to: next.lastPay.to === from ? to : next.lastPay.to,
+    };
+  }
+  if (next.offer) {
+    next.offer = {
+      ...next.offer,
+      from: next.offer.from === from ? to : next.offer.from,
+      to: next.offer.to === from ? to : next.offer.to,
+    };
+  }
+  if (Array.isArray(next.winnerIds)) {
+    next.winnerIds = next.winnerIds.map((id) => (id === from ? to : id));
+  }
+  return next;
 }
 
 export function patchRoom(cur, incoming, id, code) {
   const people = applyLobby(cur, incoming);
   const writer = String(incoming.claimHost || incoming.hostId || "").trim();
-  const hostWrite = incoming.asHost === true && sameHost(cur.hostId, writer);
+  const hostWrite = incoming.asHost === true && sameHost(cur.hostId, writer, incoming.wasHost);
   const takingHost = !cur.hostId && !!incoming.claimHost;
 
-  let pending = pendingList(cur.pending);
-  if (incoming.pending === null) pending = [];
-  else if (incoming.pending) pending = [...pending, incoming.pending];
+  const pending = mergePending(cur.pending, incoming);
 
   const saved = {
     ...cur,
@@ -82,6 +169,9 @@ export function patchRoom(cur, incoming, id, code) {
     pending,
     seq: Math.max(Number(cur.seq || 0), Number(incoming.seq || 0)),
   };
+  if (incoming.leave && incoming.sit?.id) {
+    saved.state = remapStateIds(saved.state, String(incoming.leave), incoming.sit.id, incoming.sit);
+  }
   if (hostWrite || takingHost) {
     if (incoming.screen) saved.screen = incoming.screen;
     if (incoming.mode) saved.mode = incoming.mode;
@@ -108,5 +198,19 @@ export function patchRoom(cur, incoming, id, code) {
   delete saved.drop;
   delete saved.asHost;
   delete saved.claimHost;
+  delete saved.wasHost;
+  delete saved.ack;
   return saved;
+}
+
+export function foldRoom(latest, incoming) {
+  if (!latest || typeof latest !== "object") return incoming;
+  if (incoming.closed) return { ...incoming, pending: [] };
+  const keepLatestState = Number(latest.seq || 0) > Number(incoming.seq || 0);
+  return {
+    ...incoming,
+    seq: Math.max(Number(latest.seq || 0), Number(incoming.seq || 0)),
+    pending: mergePending(latest.pending, { pending: incoming.pending, ack: incoming.ack }),
+    state: keepLatestState && "state" in latest ? latest.state : incoming.state,
+  };
 }

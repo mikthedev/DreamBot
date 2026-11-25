@@ -1,14 +1,18 @@
 ---
-description: Always commit and push when work is ready
+description: Work locally until the user asks to ship
 alwaysApply: true
 ---
 
-# Commit and push when ready
+# Ship only when asked
 
-When a feature, fix, or docs update is finished and working:
+Keep game and bot work **local** until the user explicitly says to ship.
 
-1. Commit with a clear message (follow the repo’s git commit protocol).
-2. Push to `origin` on the current branch unless the user said not to push.
-3. Do not wait for an extra “commit/push” ask — treat that as the default for this project.
+Do **not** unless they asked in this conversation:
+
+- Vercel / production deploys
+- `git push` (GitHub, Origin, or any remote)
+- Bot-hosting restarts, panel deploys, or telling them to pull on the host so production updates
+
+Edit, run, and test on the machine. When they say deploy, push, or update the host, then do that step.
 
 Still never force-push, amend others’ commits, or commit secrets.

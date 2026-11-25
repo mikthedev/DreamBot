@@ -322,10 +322,80 @@ export function PixelCaution({ className }: { className?: string }) {
   );
 }
 
+export function PixelHouse() {
+  return (
+    <svg className="pixel-house" viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
+      <rect x="7" y="1" width="2" height="2" fill="#14532d" />
+      <rect x="5" y="3" width="6" height="2" fill="#16a34a" />
+      <rect x="3" y="5" width="10" height="2" fill="#22c55e" />
+      <rect x="1" y="7" width="14" height="2" fill="#15803d" />
+      <rect x="3" y="8" width="10" height="7" fill="#fef3c7" />
+      <rect x="3" y="8" width="10" height="1" fill="#14532d" />
+      <rect x="4" y="10" width="3" height="2" fill="#7dd3fc" />
+      <rect x="9" y="10" width="3" height="2" fill="#7dd3fc" />
+      <rect x="7" y="11" width="2" height="4" fill="#92400e" />
+      <rect x="3" y="14" width="10" height="1" fill="#0a080c" />
+    </svg>
+  );
+}
+
+export function PixelHotel() {
+  return (
+    <svg className="pixel-hotel" viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
+      <rect x="1" y="2" width="14" height="2" fill="#e6c35a" />
+      <rect x="6" y="0" width="4" height="3" fill="#e6c35a" />
+      <rect x="7" y="0" width="2" height="2" fill="#fff4cc" />
+      <rect x="2" y="4" width="12" height="11" fill="#b91c1c" />
+      <rect x="2" y="4" width="12" height="1" fill="#7f1d1d" />
+      <rect x="4" y="6" width="2" height="2" fill="#fde68a" />
+      <rect x="7" y="6" width="2" height="2" fill="#fde68a" />
+      <rect x="10" y="6" width="2" height="2" fill="#fde68a" />
+      <rect x="4" y="9" width="2" height="2" fill="#fde68a" />
+      <rect x="10" y="9" width="2" height="2" fill="#fde68a" />
+      <rect x="7" y="11" width="2" height="4" fill="#1a1208" />
+      <rect x="2" y="14" width="12" height="1" fill="#0a080c" />
+    </svg>
+  );
+}
+
+export const SKINS = ["classic", "girl", "robot", "suit", "dog", "cat"] as const;
+export type SkinId = (typeof SKINS)[number];
+
+export const SKIN_META: { id: SkinId; label: string }[] = [
+  { id: "classic", label: "Classic" },
+  { id: "girl", label: "Girl" },
+  { id: "robot", label: "Robot" },
+  { id: "suit", label: "Suit" },
+  { id: "dog", label: "Dog" },
+  { id: "cat", label: "Cat" },
+];
+
+export function parseSkin(value?: string | null): SkinId {
+  return SKINS.includes(value as SkinId) ? (value as SkinId) : "classic";
+}
+
 export function PixelPawn({ color }: { color: string }) {
+  return <PixelFigure color={color} skin="classic" />;
+}
+
+export function PixelFigure({ color, skin }: { color: string; skin?: string }) {
+  const id = parseSkin(skin);
   return (
     <svg className="pixel-pawn" viewBox="0 0 16 20" shapeRendering="crispEdges" aria-hidden>
-      <rect x="4" y="18" width="8" height="2" fill="rgba(0,0,0,.35)" />
+      <rect x="3" y="18" width="10" height="2" fill="rgba(0,0,0,.32)" />
+      {id === "girl" ? <GirlPx color={color} /> : null}
+      {id === "robot" ? <RobotPx color={color} /> : null}
+      {id === "suit" ? <SuitPx color={color} /> : null}
+      {id === "dog" ? <DogPx color={color} /> : null}
+      {id === "cat" ? <CatPx color={color} /> : null}
+      {id === "classic" ? <ClassicPx color={color} /> : null}
+    </svg>
+  );
+}
+
+function ClassicPx({ color }: { color: string }) {
+  return (
+    <>
       <rect x="3" y="14" width="10" height="4" fill={color} />
       <rect x="4" y="8" width="8" height="6" fill={color} />
       <rect x="5" y="7" width="6" height="2" fill={color} />
@@ -334,6 +404,107 @@ export function PixelPawn({ color }: { color: string }) {
       <rect x="6" y="4" width="1" height="1" fill="#1a1024" />
       <rect x="9" y="4" width="1" height="1" fill="#1a1024" />
       <rect x="4" y="15" width="2" height="2" fill="rgba(255,255,255,.35)" />
-    </svg>
+    </>
+  );
+}
+
+function GirlPx({ color }: { color: string }) {
+  return (
+    <>
+      <rect x="4" y="1" width="8" height="3" fill="#3a2030" />
+      <rect x="3" y="3" width="2" height="7" fill="#3a2030" />
+      <rect x="11" y="3" width="2" height="7" fill="#3a2030" />
+      <rect x="5" y="2" width="6" height="6" fill="#f3d2b3" />
+      <rect x="6" y="4" width="1" height="1" fill="#1a1024" />
+      <rect x="9" y="4" width="1" height="1" fill="#1a1024" />
+      <rect x="7" y="6" width="2" height="1" fill="#c4849a" />
+      <rect x="3" y="2" width="2" height="2" fill={color} />
+      <rect x="5" y="8" width="6" height="2" fill={color} />
+      <rect x="3" y="10" width="10" height="6" fill={color} />
+      <rect x="4" y="11" width="2" height="2" fill="rgba(255,255,255,.35)" />
+      <rect x="6" y="16" width="2" height="2" fill="#f3d2b3" />
+      <rect x="8" y="16" width="2" height="2" fill="#f3d2b3" />
+      <rect x="5" y="18" width="3" height="1" fill="#1a1208" />
+      <rect x="8" y="18" width="3" height="1" fill="#1a1208" />
+    </>
+  );
+}
+
+function RobotPx({ color }: { color: string }) {
+  return (
+    <>
+      <rect x="7" y="0" width="2" height="2" fill="#c9b48a" />
+      <rect x="8" y="2" width="1" height="1" fill="#c9b48a" />
+      <rect x="5" y="3" width="6" height="5" fill={color} />
+      <rect x="5" y="5" width="6" height="2" fill="#12202a" />
+      <rect x="6" y="5" width="4" height="2" fill="#7ee0ff" />
+      <rect x="4" y="8" width="8" height="6" fill={color} />
+      <rect x="6" y="10" width="4" height="2" fill="#1a1208" />
+      <rect x="3" y="9" width="1" height="4" fill="#c9b48a" />
+      <rect x="12" y="9" width="1" height="4" fill="#c9b48a" />
+      <rect x="5" y="14" width="2" height="4" fill={color} />
+      <rect x="9" y="14" width="2" height="4" fill={color} />
+      <rect x="4" y="18" width="3" height="1" fill="#c9b48a" />
+      <rect x="9" y="18" width="3" height="1" fill="#c9b48a" />
+    </>
+  );
+}
+
+function SuitPx({ color }: { color: string }) {
+  return (
+    <>
+      <rect x="5" y="1" width="6" height="2" fill="#1a1208" />
+      <rect x="5" y="2" width="6" height="6" fill="#f3d2b3" />
+      <rect x="6" y="4" width="1" height="1" fill="#1a1024" />
+      <rect x="9" y="4" width="1" height="1" fill="#1a1024" />
+      <rect x="4" y="8" width="8" height="2" fill="#f3eadf" />
+      <rect x="3" y="9" width="10" height="7" fill="#1c1828" />
+      <rect x="7" y="9" width="2" height="5" fill={color} />
+      <rect x="4" y="16" width="8" height="2" fill="#141018" />
+      <rect x="3" y="18" width="4" height="1" fill="#0a080c" />
+      <rect x="9" y="18" width="4" height="1" fill="#0a080c" />
+      <rect x="4" y="10" width="2" height="2" fill="rgba(255,255,255,.18)" />
+    </>
+  );
+}
+
+function DogPx({ color }: { color: string }) {
+  return (
+    <>
+      <rect x="3" y="2" width="3" height="3" fill={color} />
+      <rect x="10" y="2" width="3" height="3" fill={color} />
+      <rect x="4" y="4" width="8" height="6" fill={color} />
+      <rect x="6" y="7" width="4" height="3" fill="#f3eadf" />
+      <rect x="7" y="7" width="2" height="2" fill="#1a1208" />
+      <rect x="6" y="5" width="1" height="1" fill="#1a1024" />
+      <rect x="9" y="5" width="1" height="1" fill="#1a1024" />
+      <rect x="4" y="10" width="8" height="6" fill={color} />
+      <rect x="12" y="11" width="3" height="3" fill={color} />
+      <rect x="4" y="16" width="3" height="2" fill={color} />
+      <rect x="9" y="16" width="3" height="2" fill={color} />
+      <rect x="4" y="18" width="3" height="1" fill="#1a1208" />
+      <rect x="9" y="18" width="3" height="1" fill="#1a1208" />
+    </>
+  );
+}
+
+function CatPx({ color }: { color: string }) {
+  return (
+    <>
+      <rect x="4" y="1" width="3" height="3" fill={color} />
+      <rect x="9" y="1" width="3" height="3" fill={color} />
+      <rect x="5" y="2" width="1" height="2" fill="#f3d2b3" />
+      <rect x="10" y="2" width="1" height="2" fill="#f3d2b3" />
+      <rect x="4" y="4" width="8" height="6" fill={color} />
+      <rect x="6" y="6" width="1" height="2" fill="#1a1024" />
+      <rect x="9" y="6" width="1" height="2" fill="#1a1024" />
+      <rect x="7" y="8" width="2" height="1" fill="#1a1208" />
+      <rect x="4" y="10" width="8" height="7" fill={color} />
+      <rect x="12" y="7" width="2" height="2" fill={color} />
+      <rect x="13" y="9" width="2" height="4" fill={color} />
+      <rect x="12" y="13" width="2" height="2" fill={color} />
+      <rect x="5" y="17" width="2" height="1" fill="#1a1208" />
+      <rect x="9" y="17" width="2" height="1" fill="#1a1208" />
+    </>
   );
 }

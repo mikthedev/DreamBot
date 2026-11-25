@@ -26,6 +26,9 @@ export type Player = {
   name: string;
   avatar: string | null;
   color: string;
+  look: "pawn" | "icon";
+  frame: string;
+  skin: string;
   bot: boolean;
   test: boolean;
   cash: number;
@@ -87,6 +90,7 @@ export type Action =
   | { type: "note" }
   | { type: "license"; kind: "chips" | "cloud" }
   | { type: "end" }
+  | { type: "quit"; playerId: string }
   | { type: "offer"; pick: "accept" | "decline" }
   | {
       type: "trade";
@@ -114,7 +118,7 @@ export type Offer = {
 export const COLORS = ["#3b5bdb", "#2b8a6e", "#c4922a", "#b44d7a", "#b54a4a", "#c56e2d", "#2f8f9a", "#6b5b95"];
 
 export function createGame(
-  people: { id: string; name: string; avatar?: string | null; bot?: boolean; test?: boolean; color?: string }[],
+  people: { id: string; name: string; avatar?: string | null; bot?: boolean; test?: boolean; color?: string; look?: "pawn" | "icon"; frame?: string; skin?: string }[],
   opts?: { mode?: Mode; seed?: number },
 ): State {
   const seed = opts?.seed ?? 1;
@@ -127,6 +131,9 @@ export function createGame(
       name: p.name,
       avatar: p.avatar ?? null,
       color: p.color || COLORS[i % COLORS.length],
+      look: p.look === "icon" ? "icon" : "pawn",
+      frame: p.frame || "gold",
+      skin: p.skin || "classic",
       bot: !!p.bot,
       test: !!p.test,
       cash: START_CASH,
@@ -421,6 +428,22 @@ function eliminate(state: State, p: Player, why: string) {
 export function apply(prev: State, action: Action): State {
   const state = structuredClone(prev) as State;
   if (state.phase === "over") return state;
+  if (action.type === "quit") {
+    const p = state.players.find((x) => x.id === action.playerId);
+    if (!p || p.out) return state;
+    const wasTurn = actor(state)?.id === p.id;
+    eliminate(state, p, "left the table");
+    if (state.offer && (state.offer.from === p.id || state.offer.to === p.id)) state.offer = null;
+    const live = living(state);
+    if (live.length <= 1) {
+      state.phase = "over";
+      state.winnerIds = live.map((x) => x.id);
+      if (live[0]) say(state, `${live[0].name} wins.`);
+      return state;
+    }
+    if (wasTurn) beginTurn(state);
+    return state;
+  }
   if (action.type === "offer") {
     resolveOffer(state, action.pick);
     return state;

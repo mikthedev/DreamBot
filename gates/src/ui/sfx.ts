@@ -14,7 +14,8 @@ export type SfxName =
   | "market"
   | "dice"
   | "owner"
-  | "cash";
+  | "cash"
+  | "paint";
 
 const FILES: Record<SfxName, string> = {
   hover: "/sfx/hover.wav",
@@ -33,6 +34,7 @@ const FILES: Record<SfxName, string> = {
   dice: "/sfx/dice.mp3",
   owner: "/sfx/owner.wav",
   cash: "/sfx/cash.mp3",
+  paint: "/sfx/colour.wav",
 };
 
 const VOL: Record<SfxName, number> = {
@@ -52,6 +54,7 @@ const VOL: Record<SfxName, number> = {
   dice: 0.55,
   owner: 0.5,
   cash: 0.45,
+  paint: 0.55,
 };
 
 const MUSIC_MUTE_KEY = "gates-music";

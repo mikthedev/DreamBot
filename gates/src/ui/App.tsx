@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CARD_LABEL, COMPANIES, HARD_STOP_ROUNDS, MAX_PLAYERS, MOVE_CAP, SETS, STACK, STACK_CUT, STANDS, START_CASH, START_MOVES, STORES, companiesIn, setOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { botAction, stepBot } from "../engine/bot";
@@ -20,42 +20,96 @@ import {
   type Player,
   type State,
 } from "../engine/game";
-import { Lobby, StartMenu, guestPool, savedPieceColor, type SeatPerson } from "./start";
-import { inviteFriends, readRoom, useDiscord, writeRoom } from "./discord";
+import { BootCurtain, PocketDesk, usePocketDesk } from "./boot";
+import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
+import { apiPath, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
 import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
-import { CornerArt, PixelBill, PixelCaution, PixelDie, PixelPawn } from "./marks";
+import { CornerArt, PixelBill, PixelCaution, PixelDie, PixelFigure, PixelHotel, PixelHouse, type SkinId } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
+const DEV_NAMES = ["mikegtc"];
 const ID_KEY = "gates-discord-id";
-const LOOK_KEY = "gates-player-look";
-type Look = "pawn" | "icon";
-const LookCtx = createContext<Look>("pawn");
+type Fate = { kind: "out" | "win"; kicker: string; title: string; line: string };
 const CORNER = 1.12;
 const TRACK_SUM = CORNER * 2 + 7;
 const STEP_MS = 220;
 
 type Profile = { id: string; username: string; avatar: string | null; linked: boolean };
 
+function isDevHost(user: { name: string } | null | undefined, profile: Profile | null) {
+  const bits = [user?.name, profile?.username].filter(Boolean).map((s) => s!.toLowerCase().replace(/[^a-z0-9]/g, ""));
+  return bits.some((s) => DEV_NAMES.some((n) => s === n || s.startsWith(n)));
+}
+
+function seatKey(list: SeatPerson[]) {
+  return list.map((p) => `${p.id}:${p.name}:${p.avatar || ""}:${p.color || ""}:${p.look || ""}:${p.frame || ""}:${p.skin || ""}`).sort().join("|");
+}
+
+function playStamp(s: State) {
+  return [
+    s.phase,
+    s.round,
+    s.rollTick,
+    s.log.length,
+    s.players.map((p) => `${p.id}:${p.cash}:${p.moves}:${p.stand}:${p.out ? 1 : 0}`).join("|"),
+  ].join("/");
+}
+
+function selfLook(user: { id?: string; name: string; avatar: string | null } | null | undefined, profile: Profile | null) {
+  const id = user?.id || profile?.id;
+  return {
+    name: user?.name || profile?.username || "You",
+    avatar: user?.avatar || profile?.avatar || (id ? `${apiPath("/api/face")}?id=${encodeURIComponent(id)}` : null),
+  };
+}
+
 export function App() {
   const discord = useDiscord();
-  const youId = discord.user?.id || "you";
+  const pocket = usePocketDesk();
+  const [booting, setBooting] = useState(true);
+  const [seatId] = useState(() => {
+    try {
+      const cur = sessionStorage.getItem("gates-seat");
+      if (cur) return cur;
+      const id = `seat-${Math.random().toString(36).slice(2, 8)}`;
+      sessionStorage.setItem("gates-seat", id);
+      return id;
+    } catch {
+      return "you";
+    }
+  });
+  const youId = discord.user?.id || seatId;
   const [hostId, setHostId] = useState<string | null>(null);
+  const [tableId, setTableId] = useState<string | null>(null);
+  const [lobbyCode, setLobbyCode] = useState("");
+  const [tableHostName, setTableHostName] = useState("");
+  const [liveTable, setLiveTable] = useState<{ hostId: string; hostName: string; code: string } | null>(null);
   const roomSeq = useRef(0);
-  const isHost = !discord.instanceId || (hostId ? hostId === youId : true);
-  const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) !== "off");
+  const seenPlay = useRef<State | null>(null);
+  const stateRef = useRef<State | null>(null);
+  const isHostRef = useRef(false);
+  const pushTimer = useRef(0);
+  const hostIdRef = useRef<string | null>(null);
+  const roomIdRef = useRef<string | null>(null);
+  const appliedSeq = useRef(0);
+  const roomId = tableId;
+  const isHost = !!hostId && hostId === youId;
+  const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) === "on");
   const [discordId, setDiscordId] = useState(() => localStorage.getItem(ID_KEY) || "");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [sheet, setSheet] = useState<null | "more" | "test" | "log">(null);
   const [trading, setTrading] = useState(false);
   const skipMarketOpen = useRef(false);
   const lowWarn = useRef(false);
-  const [look, setLook] = useState<Look>(() => (localStorage.getItem(LOOK_KEY) === "icon" ? "icon" : "pawn"));
+  const [look, setLook] = useState<PlayerLook>(() => savedLooks().look);
+  const [frame, setFrame] = useState<FrameId>(() => savedLooks().frame);
   const [screen, setScreen] = useState<"menu" | "lobby" | "play">("menu");
   const [dive, setDive] = useState<"idle" | "cover" | "open">("idle");
   const [helpOpen, setHelpOpen] = useState(false);
   const [leaveWarn, setLeaveWarn] = useState(false);
+  const [fate, setFate] = useState<Fate | null>(null);
   const [brokeShake, setBrokeShake] = useState(0);
   const [menuMuffle, setMenuMuffle] = useState(false);
   const [mix, setMix] = useState(() => getMix());
@@ -64,6 +118,10 @@ export function App() {
   const [joined, setJoined] = useState<SeatPerson[]>([]);
   const [spectators, setSpectators] = useState<SeatPerson[]>([]);
   const [state, setState] = useState<State | null>(null);
+  stateRef.current = state;
+  isHostRef.current = isHost;
+  hostIdRef.current = hostId;
+  roomIdRef.current = roomId;
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
   const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
   const [walk, setWalk] = useState<Record<string, number>>({});
@@ -75,24 +133,56 @@ export function App() {
   const focusOwner = seatHover ?? ownerPeek;
   const walking = Object.keys(walk).length > 0;
   useEffect(() => {
-    localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
-  }, [testOn]);
-  useEffect(() => {
     localStorage.setItem(LOOK_KEY, look);
   }, [look]);
+  useEffect(() => {
+    localStorage.setItem(FRAME_KEY, frame);
+  }, [frame]);
+
+  const discordReady = useRef(discord.ready);
+  discordReady.current = discord.ready;
+  useEffect(() => {
+    const hideHtmlBoot = requestAnimationFrame(() => document.getElementById("boot")?.remove());
+    const started = Date.now();
+    const framed = isDiscordFrame();
+    const id = window.setInterval(() => {
+      const waited = Date.now() - started;
+      if (waited < 1400) return;
+      if (framed && !discordReady.current && waited < 10000) return;
+      setBooting(false);
+      window.clearInterval(id);
+    }, 80);
+    return () => {
+      window.clearInterval(id);
+      cancelAnimationFrame(hideHtmlBoot);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!discord.user?.id) return;
+    setDiscordId(discord.user.id);
+    try {
+      localStorage.setItem(ID_KEY, discord.user.id);
+    } catch {
+      /* ignore */
+    }
+  }, [discord.user]);
 
   useEffect(() => {
     if (!discordId) return;
-    fetch(`/api/discord-user?id=${discordId}`)
+    fetch(`${apiPath("/api/discord-user")}?id=${encodeURIComponent(discordId)}`)
       .then((r) => r.json())
-      .then((p: Profile) => setProfile(p))
+      .then((p: Profile) => {
+        if (!p?.linked) return;
+        setProfile({ ...p, avatar: `${apiPath("/api/face")}?id=${encodeURIComponent(p.id)}` });
+      })
       .catch(() => setProfile(null));
   }, [discordId]);
 
   useEffect(() => {
     if (!state || state.phase === "over") return;
     if (walking) return;
-    if (discord.instanceId && !isHost) return;
+    if (roomId && !isHost) return;
     const turnBot = actor(state)?.bot;
     const offerBot = state.offer && state.players.find((p) => p.id === state.offer?.to)?.bot;
     if (!turnBot && !offerBot) return;
@@ -103,14 +193,16 @@ export function App() {
           const action = botAction(s);
           const next = apply(s, action);
           cuePlay(s, next, action);
+          stateRef.current = next;
+          publishHost({ screen: "play", state: next });
           return next;
         }),
       offerBot ? 900 : 720,
     );
     return () => window.clearTimeout(t);
-  }, [state, walking, isHost, discord.instanceId]);
+  }, [state, walking, isHost, roomId]);
 
-  const me = state?.players.find((p) => p.id === youId) ?? (!discord.instanceId ? state?.players[0] : undefined);
+  const me = state?.players.find((p) => p.id === youId) ?? (!roomId ? state?.players[0] : undefined);
   useEffect(() => {
     if (!state || !me || state.mode !== "moves" || me.out) return;
     if (me.moves > 4) {
@@ -143,11 +235,64 @@ export function App() {
     if (trading) sfx("market");
   }, [trading]);
 
+  function publishHost(patch: Record<string, unknown> = {}) {
+    const id = roomIdRef.current;
+    if (!id || !isHostRef.current) return;
+    roomSeq.current += 1;
+    void writeRoom(id, {
+      asHost: true,
+      seq: roomSeq.current,
+      hostId: hostIdRef.current || youId,
+      state: stateRef.current,
+      ...patch,
+    });
+  }
+
+  function cheatTile(id: string) {
+    if (!testOn || !showTest) return;
+    setState((s) => {
+      if (!s) return s;
+      const next: State = structuredClone(s);
+      const co = COMPANIES.find((c) => c.id === id);
+      if (co) {
+        const own = next.companies[co.id];
+        if (own.owner !== youId) {
+          own.owner = youId;
+          own.level = 0;
+          next.log = [`TEST claimed ${co.name}`, ...next.log].slice(0, 24);
+          sfx("enter");
+        } else if (own.level < 2) {
+          own.level = (own.level + 1) as 1 | 2;
+          next.log = [`TEST ${own.level === 1 ? "house" : "hotel"} on ${co.name}`, ...next.log].slice(0, 24);
+          sfx("upgrade");
+        } else {
+          own.owner = null;
+          own.level = 0;
+          next.log = [`TEST released ${co.name}`, ...next.log].slice(0, 24);
+          sfx("back");
+        }
+      } else {
+        const store = STORES.find((st) => st.id === id);
+        if (!store) return s;
+        if (next.stores[store.id] === youId) {
+          next.stores[store.id] = null;
+          next.log = [`TEST released ${store.name}`, ...next.log].slice(0, 24);
+          sfx("back");
+        } else {
+          next.stores[store.id] = youId;
+          next.log = [`TEST claimed ${store.name}`, ...next.log].slice(0, 24);
+          sfx("enter");
+        }
+      }
+      stateRef.current = next;
+      publishHost({ screen: "play", state: next });
+      return next;
+    });
+  }
+
   function act(action: Action) {
-    if (discord.instanceId && !isHost) {
-      roomSeq.current += 1;
-      void writeRoom(discord.instanceId, {
-        seq: roomSeq.current,
+    if (roomId && !isHostRef.current) {
+      void writeRoom(roomId, {
         pending: { from: youId, action },
       });
       return;
@@ -156,6 +301,8 @@ export function App() {
       if (!s) return s;
       const next = apply(s, action);
       cuePlay(s, next, action);
+      stateRef.current = next;
+      publishHost({ screen: "play", state: next });
       return next;
     });
   }
@@ -183,8 +330,8 @@ export function App() {
   }, [walking, diceSpin]);
 
   function restart(withBots: boolean) {
-    const name = discord.user?.name || profile?.username || "You";
-    const people = guestPool(name, discord.user?.avatar ?? profile?.avatar ?? null, withBots).map((p, i) =>
+    const { name, avatar } = selfLook(discord.user, profile);
+    const people = guestPool(name, avatar, withBots).map((p, i) =>
       i === 0 ? { ...p, id: youId } : p,
     );
     setJoined([people[0]]);
@@ -195,15 +342,125 @@ export function App() {
     setTrading(false);
   }
 
-  function openLobby(mode: Mode) {
-    const name = discord.user?.name || profile?.username || "You";
-    const you: SeatPerson = { id: youId, name, avatar: discord.user?.avatar ?? profile?.avatar ?? null, color: savedPieceColor() };
+  async function openHost(mode: Mode) {
+    const { name, avatar } = selfLook(discord.user, profile);
+    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
+    const id = discord.instanceId || `poly-${Date.now().toString(36)}`;
     setPickedMode(mode);
     setJoined([you]);
     setSpectators([]);
+    setHostId(youId);
+    setTableHostName(name);
+    setTableId(id);
+    const saved = await writeRoom(id, {
+      asHost: true,
+      claimHost: youId,
+      hostId: youId,
+      hostName: name,
+      screen: "lobby",
+      mode,
+      joined: [you],
+      spectators: [],
+      seq: 1,
+    });
+    if (saved?.id) setTableId(String(saved.id));
+    if (saved?.code) setLobbyCode(String(saved.code));
+    if (saved && String(saved.hostId) !== youId) {
+      applyRoom(saved);
+      return;
+    }
     setScreen("lobby");
     setState(null);
-    if (discord.instanceId && !hostId) setHostId(youId);
+  }
+
+  function applyRoom(room: Record<string, unknown>) {
+    if (room.id) setTableId(String(room.id));
+    if (room.hostId) setHostId(String(room.hostId));
+    if (room.hostName) setTableHostName(String(room.hostName));
+    if (room.code) setLobbyCode(String(room.code));
+    if (room.mode === "moves" || room.mode === "classic") setPickedMode(room.mode);
+    if (Array.isArray(room.joined)) setJoined(room.joined as SeatPerson[]);
+    if (Array.isArray(room.spectators)) setSpectators(room.spectators as SeatPerson[]);
+    if (room.screen === "lobby" || room.screen === "play" || room.screen === "menu") setScreen(room.screen);
+    if (room.state) setState(room.state as State);
+  }
+
+  async function joinByCode(raw: string) {
+    const room = await readRoomByCode(raw);
+    if (!room?.id) return false;
+    applyRoom(room);
+    const { name, avatar } = selfLook(discord.user, profile);
+    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
+    const seated = Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : [];
+    if (String(room.hostId) !== youId && !seated.some((p) => p.id === youId)) {
+      const saved = await writeRoom(String(room.id), { sit: you });
+      if (saved) applyRoom(saved);
+      else {
+        setJoined([...seated, you]);
+        setSpectators((s) => s.filter((p) => p.id !== youId));
+      }
+    }
+    if (room.screen !== "play") setScreen("lobby");
+    return true;
+  }
+
+  async function joinLive() {
+    if (!discord.instanceId) return false;
+    const room = await readRoom(discord.instanceId);
+    if (!room?.hostId) return false;
+    applyRoom(room);
+    const { name, avatar } = selfLook(discord.user, profile);
+    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
+    const seated = Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : [];
+    if (String(room.hostId) !== youId && !seated.some((p) => p.id === youId)) {
+      const saved = await writeRoom(String(room.id), { sit: you });
+      if (saved) applyRoom(saved);
+    }
+    if (room.screen !== "play") setScreen("lobby");
+    return true;
+  }
+
+  function resetLocalTable() {
+    setJoined([]);
+    setSpectators([]);
+    setHostId(null);
+    setTableHostName("");
+    setTableId(null);
+    setLobbyCode("");
+    setMenuMuffle(false);
+    setScreen("menu");
+    setState(null);
+    setLeaveWarn(false);
+    setSheet(null);
+    setFate(null);
+    setWalk({});
+    setTrading(false);
+    appliedSeq.current = 0;
+  }
+
+  function leaveTable() {
+    const id = roomId;
+    const host = isHostRef.current;
+    if (id) {
+      if (host) {
+        void writeRoom(id, {
+          asHost: true,
+          hostId: hostIdRef.current || youId,
+          screen: "menu",
+          state: null,
+          closed: true,
+          joined: [],
+          spectators: [],
+          pending: null,
+        });
+      } else {
+        void writeRoom(id, {
+          leave: youId,
+          pending: { from: youId, action: { type: "quit", playerId: youId } },
+        });
+      }
+    }
+    resetLocalTable();
   }
 
   function joinSeat(id?: string) {
@@ -211,16 +468,28 @@ export function App() {
     if (!pick || joined.length >= MAX_PLAYERS) return;
     if (joined.some((p) => p.id === pick)) return;
     const fromWatch = spectators.find((p) => p.id === pick);
+    const look = selfLook(discord.user, profile);
     const you: SeatPerson = {
       id: youId,
-      name: discord.user?.name || profile?.username || "You",
-      avatar: discord.user?.avatar ?? profile?.avatar ?? null,
-      color: savedPieceColor(),
+      name: look.name,
+      avatar: look.avatar,
+      ...savedLooks(),
     };
     const person = fromWatch ?? (pick === youId ? you : undefined);
     if (!person) return;
     setSpectators((s) => s.filter((p) => p.id !== pick));
     setJoined((j) => [...j, person]);
+    if (roomId) {
+      void writeRoom(roomId, { sit: person }).then((saved) => {
+        if (!saved) return;
+        if (isHostRef.current) {
+          if (Array.isArray(saved.joined)) setJoined(saved.joined as SeatPerson[]);
+          if (Array.isArray(saved.spectators)) setSpectators(saved.spectators as SeatPerson[]);
+          return;
+        }
+        applyRoom(saved);
+      });
+    }
   }
 
   function spectateSeat(id: string) {
@@ -228,10 +497,54 @@ export function App() {
     if (!person) return;
     setJoined((j) => j.filter((p) => p.id !== id));
     setSpectators((s) => (s.some((p) => p.id === id) ? s : [...s, person]));
+    if (roomId) {
+      void writeRoom(roomId, { watch: person }).then((saved) => {
+        if (!saved) return;
+        if (isHostRef.current) {
+          if (Array.isArray(saved.joined)) setJoined(saved.joined as SeatPerson[]);
+          if (Array.isArray(saved.spectators)) setSpectators(saved.spectators as SeatPerson[]);
+          return;
+        }
+        applyRoom(saved);
+      });
+    }
   }
 
   function painted(people: SeatPerson[]) {
-    return people.map((p) => (p.id === youId || p.id === "you" ? { ...p, id: youId, color: savedPieceColor() } : p));
+    return people.map((p) => (p.id === youId || p.id === "you" ? { ...p, id: youId, ...savedLooks() } : p));
+  }
+
+  function applyLooks(patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) {
+    if (patch.color) localStorage.setItem(PIECE_KEY, patch.color);
+    if (patch.look) {
+      localStorage.setItem(LOOK_KEY, patch.look);
+      setLook(patch.look);
+    }
+    if (patch.frame) {
+      localStorage.setItem(FRAME_KEY, patch.frame);
+      setFrame(patch.frame);
+    }
+    if (patch.skin) localStorage.setItem(SKIN_KEY, patch.skin);
+    setJoined((j) => j.map((p) => (p.id === youId ? { ...p, ...patch } : p)));
+    if (state) {
+      setState((cur) => {
+        if (!cur) return cur;
+        return {
+          ...cur,
+          players: cur.players.map((p) => (p.id === youId ? {
+            ...p,
+            color: patch.color ?? p.color,
+            look: patch.look ?? p.look,
+            frame: patch.frame ?? p.frame,
+            skin: patch.skin ?? p.skin,
+          } : p)),
+        };
+      });
+    }
+    if (!roomId) return;
+    const cur = joined.find((p) => p.id === youId);
+    if (!cur) return;
+    void writeRoom(roomId, { sit: { ...cur, ...patch } });
   }
 
   function clearDiveWaits() {
@@ -242,12 +555,16 @@ export function App() {
   function commitPlay(people: SeatPerson[]) {
     setWalk({});
     setTrading(false);
-    setState(createGame(painted(people), { mode: pickedMode, seed: Date.now() % 100000 }));
+    const next = createGame(painted(people), { mode: pickedMode, seed: Date.now() % 100000 });
+    stateRef.current = next;
+    setState(next);
     setScreen("play");
     setMenuMuffle(false);
+    publishHost({ screen: "play", mode: pickedMode, joined: people, state: next });
   }
 
   function startTable(people = joined) {
+    if (roomId && !isHostRef.current) return;
     if (people.length < 3 || people.length > MAX_PLAYERS) return;
     if (dive !== "idle") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -267,13 +584,14 @@ export function App() {
   }
 
   function seatBots() {
-    const name = discord.user?.name || profile?.username || "You";
-    const pool = guestPool(name, discord.user?.avatar ?? profile?.avatar ?? null, true).map((p, i) =>
+    const { name, avatar } = selfLook(discord.user, profile);
+    const pool = guestPool(name, avatar, true).map((p, i) =>
       i === 0 ? { ...p, id: youId } : p,
     );
     const humans = joined.filter((p) => !p.bot);
+    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
     const bots = pool.filter((p) => p.bot);
-    const next = [...humans];
+    const next = humans.some((p) => p.id === youId) ? [...humans] : [you, ...humans];
     for (const b of bots) {
       if (next.length >= 4) break;
       if (!next.some((p) => p.id === b.id)) next.push(b);
@@ -283,78 +601,209 @@ export function App() {
     setSpectators((s) => s.filter((p) => !ids.has(p.id)));
   }
 
+  function kickSeat(id: string) {
+    const person = joined.find((p) => p.id === id);
+    if (!person || !isHostRef.current) return;
+    if (!person.bot && person.id === youId) return;
+    if (!person.bot) return;
+    setJoined((j) => j.filter((p) => p.id !== id));
+    if (roomId) void writeRoom(roomId, { drop: [id] });
+  }
+
+  function clearBots() {
+    const ids = joined.filter((p) => p.bot).map((p) => p.id);
+    if (!ids.length) return;
+    setJoined((j) => j.filter((p) => !p.bot));
+    if (roomId) void writeRoom(roomId, { drop: ids });
+  }
+
   function playWithBots() {
-    const name = discord.user?.name || profile?.username || "You";
-    const pool = guestPool(name, discord.user?.avatar ?? profile?.avatar ?? null, true).map((p, i) =>
-      i === 0 ? { ...p, id: youId } : p,
-    );
-    const table = painted(pool.slice(0, 4));
+    const { name, avatar } = selfLook(discord.user, profile);
+    const pool = guestPool(name, avatar, true).filter((p) => p.bot);
+    const humans = joined.filter((p) => !p.bot);
+    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
+    const table = humans.some((p) => p.id === youId) ? [...humans] : [you, ...humans];
+    for (const bot of pool) {
+      if (table.length >= MAX_PLAYERS) break;
+      if (table.length >= 4 && table.filter((p) => !p.bot).length >= 3) break;
+      if (!table.some((p) => p.id === bot.id)) table.push(bot);
+    }
+    while (table.length < 3) {
+      const bot = pool.find((p) => !table.some((x) => x.id === p.id));
+      if (!bot) break;
+      table.push(bot);
+    }
     setJoined(table);
-    setSpectators([]);
+    setSpectators((s) => s.filter((p) => !table.some((x) => x.id === p.id)));
     startTable(table);
   }
 
   useEffect(() => () => clearDiveWaits(), []);
 
   useEffect(() => {
-    if (!discord.people.length) return;
+    const look = selfLook(discord.user, profile);
+    const mineId = discord.user?.id;
+    const paint = (p: SeatPerson) =>
+      p.id === "you" || p.id === seatId || (mineId && p.id === mineId)
+        ? { ...p, id: mineId || p.id, name: look.name, avatar: look.avatar }
+        : p;
+    setJoined((j) => j.map(paint));
+    setSpectators((s) => s.map(paint));
+    if (mineId) setHostId((h) => (h === "you" || h === seatId ? mineId : h));
+  }, [discord.user, profile, seatId]);
+
+  useEffect(() => {
+    if (!roomId || !discord.user?.id || discord.user.id === seatId) return;
+    if (!joined.some((p) => p.id === seatId)) return;
+    const look = selfLook(discord.user, profile);
+    void writeRoom(roomId, {
+      leave: seatId,
+      sit: { id: discord.user.id, name: look.name, avatar: look.avatar, ...savedLooks() },
+    }).then((saved) => {
+      if (!saved) return;
+      if (isHostRef.current) {
+        if (Array.isArray(saved.joined)) setJoined(saved.joined as SeatPerson[]);
+        return;
+      }
+      applyRoom(saved);
+    });
+  }, [discord.user, profile, roomId, seatId, joined]);
+
+  useEffect(() => {
+    if (!discord.instanceId || screen !== "menu") {
+      setLiveTable(null);
+      return;
+    }
+    let stop = false;
+    const tick = async () => {
+      const room = await readRoom(discord.instanceId!);
+      if (stop || !room?.hostId || String(room.hostId) === youId) {
+        if (!stop) setLiveTable(null);
+        return;
+      }
+      setLiveTable({
+        hostId: String(room.hostId),
+        hostName: String(room.hostName || "Host"),
+        code: String(room.code || ""),
+      });
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 1200);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [discord.instanceId, youId, screen]);
+
+  useEffect(() => {
+    if (!isHost || !discord.people.length) return;
+    const me = discord.user?.id || youId;
     setSpectators((s) => {
-      const known = new Set([...joined, ...s].map((p) => p.id));
+      const seated = new Set(joined.map((p) => p.id));
+      const known = new Set([...seated, ...s.map((p) => p.id), "you"]);
       const extra = discord.people
-        .filter((p) => p.id !== youId && !known.has(p.id))
+        .filter((p) => p.id !== me && !seated.has(p.id) && !known.has(p.id))
         .map((p) => ({ id: p.id, name: p.name, avatar: p.avatar }));
       return extra.length ? [...s, ...extra] : s;
     });
-  }, [discord.people, youId]);
+  }, [discord.people, discord.user, youId, joined, isHost]);
 
   useEffect(() => {
-    const roomId = discord.instanceId;
     if (!roomId) return;
     let stop = false;
     const tick = async () => {
       const room = await readRoom(roomId);
       if (stop || !room) return;
-      if (typeof room.seq === "number" && room.seq > roomSeq.current) roomSeq.current = room.seq;
-      if (room.hostId && room.hostId !== hostId) setHostId(room.hostId);
-      if (!isHost) {
-        if (room.mode) setPickedMode(room.mode);
-        if (Array.isArray(room.joined)) setJoined(room.joined);
-        if (Array.isArray(room.spectators)) setSpectators(room.spectators);
-        if (room.screen === "lobby" || room.screen === "play" || room.screen === "menu") setScreen(room.screen);
-        if (room.state) setState(room.state);
-      } else if (room.pending?.action && state) {
-        const action = room.pending.action as Action;
-        setState((s) => {
-          if (!s) return s;
-          const next = apply(s, action);
-          cuePlay(s, next, action);
-          return next;
-        });
-        roomSeq.current += 1;
-        void writeRoom(roomId, { seq: roomSeq.current, pending: null, hostId: hostId || youId });
+      if (room.closed && !isHostRef.current) {
+        resetLocalTable();
+        return;
       }
+      if (typeof room.seq === "number" && room.seq > roomSeq.current) roomSeq.current = room.seq;
+      if (room.hostId) setHostId(String(room.hostId));
+      if (room.hostName) setTableHostName(String(room.hostName));
+      if (room.code) setLobbyCode(String(room.code));
+      if (Array.isArray(room.joined)) {
+        setJoined((cur) => (seatKey(cur) === seatKey(room.joined as SeatPerson[]) ? cur : (room.joined as SeatPerson[])));
+      }
+      if (Array.isArray(room.spectators)) {
+        setSpectators((cur) => (seatKey(cur) === seatKey(room.spectators as SeatPerson[]) ? cur : (room.spectators as SeatPerson[])));
+      }
+      if (!isHostRef.current) {
+        if (room.mode === "moves" || room.mode === "classic") setPickedMode(room.mode);
+        if (room.screen === "lobby" || room.screen === "play" || room.screen === "menu") setScreen(room.screen);
+        const nextState = room.state as State | undefined;
+        const seq = Number(room.seq || 0);
+        if (nextState && (seq > appliedSeq.current || !stateRef.current || playStamp(stateRef.current) !== playStamp(nextState))) {
+          appliedSeq.current = seq;
+          stateRef.current = nextState;
+          setState(nextState);
+        }
+        return;
+      }
+      const queue = Array.isArray(room.pending)
+        ? room.pending
+        : room.pending
+          ? [room.pending]
+          : [];
+      const jobs = queue.filter((item: { action?: Action }) => item?.action) as { from?: string; action: Action }[];
+      if (stateRef.current && Array.isArray(room.joined)) {
+        const seated = new Set((room.joined as SeatPerson[]).map((p) => p.id));
+        for (const p of stateRef.current.players) {
+          if (p.bot || p.out) continue;
+          if (p.id === hostIdRef.current || p.id === youId) continue;
+          if (seated.has(p.id)) continue;
+          if (!jobs.some((item) => item.action.type === "quit" && "playerId" in item.action && item.action.playerId === p.id)) {
+            jobs.push({ from: p.id, action: { type: "quit", playerId: p.id } });
+          }
+        }
+      }
+      if (!jobs.length || !stateRef.current) return;
+      let current = stateRef.current;
+      for (const item of jobs) {
+        const turn = actor(current)?.id;
+        if (item.action.type !== "quit" && item.from && turn && item.from !== turn) continue;
+        const next = apply(current, item.action);
+        cuePlay(current, next, item.action);
+        current = next;
+      }
+      stateRef.current = current;
+      setState(current);
+      roomSeq.current += 1;
+      void writeRoom(roomId, {
+        asHost: true,
+        seq: roomSeq.current,
+        hostId: String(room.hostId || hostId || youId),
+        pending: null,
+        state: current,
+      });
     };
-    const t = window.setInterval(() => void tick(), 900);
+    const t = window.setInterval(() => void tick(), 400);
     void tick();
     return () => {
       stop = true;
       window.clearInterval(t);
     };
-  }, [discord.instanceId, isHost, hostId, youId, state]);
+  }, [roomId, hostId, youId]);
 
   useEffect(() => {
-    if (!discord.instanceId || !isHost) return;
-    roomSeq.current += 1;
-    void writeRoom(discord.instanceId, {
-      seq: roomSeq.current,
-      hostId: hostId || youId,
-      screen,
-      mode: pickedMode,
-      joined,
-      spectators,
-      state,
-    });
-  }, [discord.instanceId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state]);
+    if (!roomId || !isHost) return;
+    window.clearTimeout(pushTimer.current);
+    pushTimer.current = window.setTimeout(() => {
+      roomSeq.current += 1;
+      void writeRoom(roomId, {
+        asHost: true,
+        seq: roomSeq.current,
+        hostId: hostId || youId,
+        hostName: selfLook(discord.user, profile).name,
+        screen,
+        mode: pickedMode,
+        joined,
+        spectators,
+        state: stateRef.current,
+      });
+    }, 80);
+    return () => window.clearTimeout(pushTimer.current);
+  }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state, discord.user, profile]);
 
   const primary = useMemo(
     () => (state ? buttonsFor(state, mine, !!diceSpin || walking) : []),
@@ -367,13 +816,45 @@ export function App() {
   const shownMoves = held?.moves ?? me?.moves ?? 0;
   const inDeal = !!(state && me && state.offer && (state.offer.from === me.id || state.offer.to === me.id));
   const stallOpen = trading || inDeal;
+  const choiceLock = !!(state && (state.phase === "land" || state.phase === "store" || state.phase === "home" || state.phase === "card" || state.phase === "path"));
   const pregame = screen !== "play" || !state || !me;
+  const showTest = isDevHost(discord.user, profile);
+  useEffect(() => {
+    if (!showTest && sheet === "test") setSheet(null);
+    if (!showTest && testOn) setTestOn(false);
+  }, [showTest, sheet, testOn]);
+  useEffect(() => {
+    if (!showTest) return;
+    localStorage.setItem(TEST_KEY, testOn ? "on" : "off");
+  }, [testOn, showTest]);
   const ownerHover = !!(state && hoverId && tileOwner(hoverId, state));
   const peeking = !!(focusOwner || ownerHover || openGroup || stallOpen || sheet || helpOpen || leaveWarn);
 
   useEffect(() => {
     setSoundtrack(pregame ? "menu" : "play");
   }, [pregame]);
+
+  useEffect(() => {
+    if (!discord.ready || !discord.authed) return;
+    const party = Math.max(joined.length, discord.people.length, 1);
+    if (screen === "play") {
+      publishActivity({
+        details: "Playing DreamPoly (Monopoly Game)",
+        state: pickedMode === "classic" ? "Classic Monopoly table" : "On the board",
+        party,
+      });
+      return;
+    }
+    if (screen === "lobby") {
+      publishActivity({
+        details: "Playing DreamPoly (Monopoly Game)",
+        state: lobbyCode ? `Waiting room · ${lobbyCode}` : "Waiting room",
+        party,
+      });
+      return;
+    }
+    publishActivity({ details: "Playing DreamPoly (Monopoly Game)", state: "Choosing a table", party: 1 });
+  }, [discord.ready, discord.authed, discord.people, screen, joined.length, lobbyCode, pickedMode]);
 
   useEffect(() => {
     muffleMusic(
@@ -389,19 +870,40 @@ export function App() {
     sfxPlayHover();
   }, [seatHover]);
 
+  useEffect(() => {
+    if (!state || screen !== "play") {
+      seenPlay.current = state;
+      if (screen !== "play") setFate(null);
+      return;
+    }
+    const hit = readFate(seenPlay.current, state);
+    seenPlay.current = state;
+    if (!hit) return;
+    setFate(hit);
+    if (hit.kind !== "out") return;
+    const t = window.setTimeout(() => setFate((cur) => (cur?.kind === "out" ? null : cur)), 3400);
+    return () => window.clearTimeout(t);
+  }, [state, screen]);
+
   return (
-    <LookCtx.Provider value={look}>
-    <div className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""}`}>
+    <div className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""} ${pocket && !booting ? "is-pocket" : ""}`}>
+      {booting ? <BootCurtain lines={["Setting the table"]} /> : null}
+      {!booting && pocket ? <PocketDesk /> : null}
+      {fate && !booting && !pocket ? (
+        <FateBanner fate={fate} onDismiss={() => setFate(null)} onLeave={leaveTable} />
+      ) : null}
       <header className="top">
         <div className="brand">DreamPoly</div>
         <div className="top-tools">
           <AudioMix mix={mix} onMix={setMix} />
-          <button className="ghost tiny" onClick={() => { sfx("click"); setLook((cur) => (cur === "pawn" ? "icon" : "pawn")); }}>
+          <button className="ghost tiny" onClick={() => { sfx("click"); applyLooks({ look: look === "pawn" ? "icon" : "pawn" }); }}>
             {look === "pawn" ? "Characters" : "Discord icons"}
           </button>
-          <button className="ghost tiny" onClick={() => { sfx("click"); setSheet("test"); }}>
-            {testOn ? "Test tools" : "Test off"}
-          </button>
+          {showTest ? (
+            <button className="ghost tiny" onClick={() => { sfx("click"); setSheet("test"); }}>
+              {testOn ? "Test tools" : "Test off"}
+            </button>
+          ) : null}
         </div>
       </header>
       {dive !== "idle" ? (
@@ -419,19 +921,33 @@ export function App() {
           <Lobby
             mode={pickedMode}
             youId={youId}
+            hostId={hostId}
+            hostName={
+              joined.find((p) => p.id === hostId)?.name ||
+              tableHostName ||
+              (isHost ? selfLook(discord.user, profile).name : "Host")
+            }
+            lobbyCode={lobbyCode}
+            isHost={isHost}
             joined={joined}
-            spectators={spectators}
-            onJoin={joinSeat}
-            onSpectate={spectateSeat}
             onStart={() => startTable()}
-            onBack={() => { setMenuMuffle(false); setScreen("menu"); }}
+            onMode={(next) => setPickedMode(next)}
+            onLeave={leaveTable}
+            onSit={() => joinSeat(youId)}
             onSeatBots={seatBots}
+            onClearBots={clearBots}
+            onKick={kickSeat}
             onPlayBots={playWithBots}
-            onInvite={() => void inviteFriends().catch(() => {})}
-            canInvite={discord.ready}
+            onLooks={applyLooks}
           />
         ) : (
-          <StartMenu onPick={openLobby} onMuffle={setMenuMuffle} />
+          <StartMenu
+            onHost={openHost}
+            onJoinCode={joinByCode}
+            onJoinLive={() => void joinLive()}
+            liveTable={liveTable}
+            onMuffle={setMenuMuffle}
+          />
         )
       ) : (
         <div className="play">
@@ -586,38 +1102,54 @@ export function App() {
                   <div className="logo-sub">{who ? `${who.name} is playing` : "Table open"}</div>
                 </div>
               )}
-              <div className="center-actions">
-                {primary.map((b) => (
-                  <button
-                    key={b.label}
-                    className={b.ghost ? "ghost" : b.broke ? "warn" : b.warn ? "warn" : "go"}
-                    disabled={(!mine && b.needsYou) || !!diceSpin || walking}
-                    onClick={() => {
-                      if (b.broke) {
-                        sfx("warning");
-                        setBrokeShake(0);
-                        window.requestAnimationFrame(() => setBrokeShake(1));
-                        return;
-                      }
-                      if (b.roll) rollThen(b.action);
-                      else act(b.action);
-                    }}
-                  >
-                    {b.label}
-                  </button>
-                ))}
+              <div className={`center-actions${choiceLock ? " is-choice" : ""}`}>
+                {(() => {
+                  const showTrade = !!(mine && state.phase === "extra" && !walking && !diceSpin);
+                  const n = Math.min(3, Math.max(1, primary.length + (showTrade ? 1 : 0)));
+                  if (!primary.length && !showTrade) return null;
+                  return (
+                  <div className={`act-main n-${n}`}>
+                    {primary.map((b) => (
+                      <button
+                        key={b.label}
+                        className={b.ghost ? "ghost" : b.broke ? "warn" : b.warn ? "warn" : "go"}
+                        disabled={(!mine && b.needsYou) || !!diceSpin || walking}
+                        onClick={() => {
+                          if (b.broke) {
+                            sfx("warning");
+                            setBrokeShake(0);
+                            window.requestAnimationFrame(() => setBrokeShake(1));
+                            return;
+                          }
+                          if (b.roll) rollThen(b.action);
+                          else act(b.action);
+                        }}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                    {showTrade ? (
+                      <button className={me.freeTrade ? "go" : "ghost"} onMouseEnter={sfxPlayHover} onClick={() => setTrading(true)}>
+                        {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
+                      </button>
+                    ) : null}
+                  </div>
+                  );
+                })()}
                 {primary.some((b) => b.broke) ? (
                   <p className="broke-sign">
                     <PixelCaution />
                     <span>Can&apos;t afford this</span>
                   </p>
                 ) : null}
-                {mine && state.phase === "extra" && !walking && !diceSpin ? (
-                  <button className={me.freeTrade ? "go" : "ghost"} onMouseEnter={sfxPlayHover} onClick={() => setTrading(true)}>
-                    {me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}
-                  </button>
-                ) : null}
-                <button className="more-go" onClick={() => { sfx("click"); setSheet("more"); }}>More</button>
+                <button
+                  type="button"
+                  className={`more-go${choiceLock ? " is-quiet" : ""}`}
+                  title="More"
+                  onClick={() => { sfx("click"); setSheet("more"); }}
+                >
+                  More
+                </button>
               </div>
                 </>
               )}
@@ -634,6 +1166,10 @@ export function App() {
               held={!!focusOwner && tileOwner(space.id, state) === focusOwner}
               onHover={setHoverId}
               onOpen={() => {
+                if (testOn && showTest) {
+                  cheatTile(space.id);
+                  return;
+                }
                 const g = groupOf(space.id);
                 setOwnerPeek(null);
                 if (g === "market" && mine && state.phase === "extra") {
@@ -688,18 +1224,20 @@ export function App() {
             <PixelCaution className="warn-mark" />
             <p className="start-kicker">Caution</p>
             <h2>Leave this table?</h2>
-            <p>The game is still going. You’ll drop the board and go back to the menu.</p>
+            <p>
+              {isHost
+                ? "You’re the host. Leaving closes the table for everyone."
+                : state?.phase === "over"
+                  ? "Head back to the menu. The table is finished."
+                  : "You’ll leave. Everyone else keeps playing."}
+            </p>
             <div className="leave-warn-act">
               <button
                 className="stall-act leave"
                 type="button"
                 onClick={() => {
                   sfx("death");
-                  setLeaveWarn(false);
-                  setSheet(null);
-                  setHelpOpen(false);
-                  setScreen("menu");
-                  setState(null);
+                  leaveTable();
                 }}
               >
                 <b>Leave</b>
@@ -748,7 +1286,7 @@ export function App() {
                 </button>
               </>
             )}
-            {sheet === "test" && (
+            {sheet === "test" && showTest && (
               <>
                 <h2>Test tools</h2>
                 <p>Tied to this browser. Turn them off before a real table with friends. The host bot is not involved.</p>
@@ -767,6 +1305,7 @@ export function App() {
                 </div>
                 {testOn && (
                   <>
+                    <p>Click a brand or store on the board to take it. Click again for a house, then a hotel. Click a third time to give it back to the bank.</p>
                     <p>Discord user id (Developer Mode → Copy User ID). We only use it to show your name and avatar.</p>
                     <input
                       value={discordId}
@@ -797,7 +1336,6 @@ export function App() {
         </div>
       )}
     </div>
-    </LookCtx.Provider>
   );
 }
 
@@ -1027,7 +1565,7 @@ function MoreStall({
                 <ul>
                   {companies.map((c) => {
                     const own = state.companies[c.id];
-                    const grade = own.level === 0 ? "Unbuilt" : own.level === 1 ? "Office" : "Built";
+                    const grade = own.level === 0 ? "Empty lot" : own.level === 1 ? "House" : "Hotel";
                     return (
                       <li key={c.id}>
                         <span className="stall-deed-mark">
@@ -1038,7 +1576,7 @@ function MoreStall({
                           <small>{grade} · ${c.rent[own.level]}</small>
                         </div>
                         <button className="deed-act" disabled={!extra || own.level >= 2} onClick={() => onAct({ type: "build", companyId: c.id })}>
-                          {own.level >= 2 ? "Built" : "Build"}
+                          {own.level >= 2 ? "Hotel" : own.level === 1 ? "Hotel" : "House"}
                         </button>
                         <button className="deed-act sell" disabled={!extra} onClick={() => onAct({ type: "sell", companyId: c.id })}>
                           Sell
@@ -1277,6 +1815,60 @@ function samePay(a: State["lastPay"], b: State["lastPay"]) {
   return a.to === b.to && a.amount === b.amount && a.via === b.via && a.viaAmount === b.viaAmount;
 }
 
+function readFate(prev: State | null, next: State): Fate | null {
+  if (!prev) return null;
+  if (prev.phase !== "over" && next.phase === "over") {
+    const winners = next.players.filter((p) => next.winnerIds.includes(p.id));
+    const names = winners.map((p) => p.name).join(" & ") || "The table";
+    const hard = next.round > HARD_STOP_ROUNDS;
+    return {
+      kind: "win",
+      kicker: hard ? "Hard stop" : "Last fortune standing",
+      title: winners.length > 1 ? `${names} tie` : `${names} wins`,
+      line: hard
+        ? next.mode === "moves"
+          ? "Most moves takes the table."
+          : "Most cash takes the table."
+        : "Everyone else is out. The brands are yours.",
+    };
+  }
+  const dropped = next.players.find((p) => p.out && !prev.players.find((x) => x.id === p.id)?.out);
+  if (dropped) {
+    const note = [...next.log].reverse().find((line) => line.startsWith(`${dropped.name} is out`)) || "";
+    const bankrupt = note.includes("bankrupt");
+    const fuel = note.includes("out of moves");
+    return {
+      kind: "out",
+      kicker: "Eliminated",
+      title: dropped.name,
+      line: bankrupt
+        ? "Couldn’t cover the bill. Fortune’s gone."
+        : fuel
+          ? "No moves left. Fortune’s gone."
+          : "Dropped from the table.",
+    };
+  }
+  return null;
+}
+
+function FateBanner({ fate, onDismiss, onLeave }: { fate: Fate; onDismiss: () => void; onLeave: () => void }) {
+  return (
+    <div className={`fate-banner is-${fate.kind}`} role="status">
+      <p className="fate-kicker">{fate.kicker}</p>
+      <h2>{fate.title}</h2>
+      <p className="fate-line">{fate.line}</p>
+      {fate.kind === "win" ? (
+        <button type="button" className="stall-btn primary fate-leave" onClick={onLeave}>
+          <b>Leave table</b>
+          <small>Back to menu</small>
+        </button>
+      ) : (
+        <small onClick={onDismiss}>Tap to close</small>
+      )}
+    </div>
+  );
+}
+
 function cuePlay(prev: State, next: State, action: Action) {
   const you = prev.players[0]?.id;
   const mine = actor(prev)?.id === you;
@@ -1330,17 +1922,17 @@ function buttonsFor(
     const co = COMPANIES.find((c) => c.id === state.land)!;
     const broke = (actor(state)?.cash ?? 0) < co.price;
     return [
-      { label: `Buy ${co.name} $${co.price}`, action: { type: "land", pick: "buy" }, needsYou: true, broke },
+      { label: `Buy $${co.price}`, action: { type: "land", pick: "buy" }, needsYou: true, broke },
       { label: "Leave it", action: { type: "land", pick: "skip" }, ghost: true, needsYou: true },
     ];
   }
   if (state.phase === "extra") {
     const who = actor(state);
     const out: { label: string; action: Action; ghost?: boolean; warn?: boolean; needsYou: boolean; roll?: boolean }[] = [];
+    out.push({ label: "End turn", action: { type: "end" }, needsYou: true });
     if (state.mode === "moves" && who && who.moves < MOVE_CAP) {
-      out.push({ label: `Buy move $${fuelPrice(who)}`, action: { type: "fuel" }, needsYou: true });
+      out.push({ label: `Buy move $${fuelPrice(who)}`, action: { type: "fuel" }, ghost: true, needsYou: true });
     }
-    out.push({ label: "End turn", action: { type: "end" }, ghost: true, needsYou: true });
     return out;
   }
   return [];
@@ -1353,7 +1945,7 @@ const SPECIAL: Record<string, { title: string; kicker: string }> = {
   rest: { title: "Jail", kicker: "Just visiting" },
 };
 
-type BoardPlayer = { id: string; name: string; avatar: string | null; color: string };
+type BoardPlayer = { id: string; name: string; avatar: string | null; color: string; look?: "pawn" | "icon"; frame?: string; skin?: string };
 
 function ownedClass(owner: BoardPlayer | undefined, you: string) {
   if (!owner) return "";
@@ -1535,6 +2127,15 @@ function popStyle(space: (typeof TRACK)[number]) {
   return { left: `${box.x * 100}%`, top: `${midY}%`, ["--pop" as string]: "left" };
 }
 
+function popMods(space: (typeof TRACK)[number]) {
+  const bits: string[] = [space.side];
+  if ((space.side === "left" || space.side === "right") && space.row >= 7) bits.push("nudge-up");
+  if ((space.side === "left" || space.side === "right") && space.row <= 3) bits.push("nudge-down");
+  if ((space.side === "bottom" || space.side === "top") && space.col <= 3) bits.push("nudge-east");
+  if ((space.side === "bottom" || space.side === "top") && space.col >= 7) bits.push("nudge-west");
+  return bits.join(" ");
+}
+
 function TileFloat({
   id,
   mode,
@@ -1551,23 +2152,26 @@ function TileFloat({
   if (!facts) return null;
   return (
     <div
-      className={`float-card ${mode} ${space.side}`}
+      className={`float-card ${mode} ${popMods(space)} ${facts.owner ? "has-owner" : "is-bank"}`}
       style={popStyle(space)}
       onClick={(e) => e.stopPropagation()}
     >
-      {facts.owner ? (
-        <>
-          <Portrait player={facts.owner} size={52} />
-          <div>
-            <small>Owned by</small>
-          </div>
-        </>
-      ) : (
-        <div>
-          <small>Owner</small>
-          <b>Bank</b>
-        </div>
-      )}
+      {facts.logoId ? <BrandLogo id={facts.logoId} label={facts.name} /> : null}
+      <div className="float-copy">
+        <small>{facts.setLabel}</small>
+        <b>{facts.name}</b>
+        {facts.price ? <em>{facts.price}</em> : null}
+        <span className="float-own">
+          {facts.owner ? (
+            <>
+              <Portrait player={facts.owner} size={18} />
+              {facts.owner.name}
+            </>
+          ) : (
+            "Bank"
+          )}
+        </span>
+      </div>
     </div>
   );
 }
@@ -1691,10 +2295,8 @@ function DeedTile({
       {...bind}
     >
       {level > 0 && (
-        <span className="houses">
-          {Array.from({ length: level }, (_, i) => (
-            <i key={i} />
-          ))}
+        <span className={`houses lv-${level}`} title={level > 1 ? "Hotel" : "House"}>
+          {level > 1 ? <PixelHotel /> : <PixelHouse />}
         </span>
       )}
       <div className="deed-body">
@@ -2268,21 +2870,22 @@ function Portrait({
   player,
   size,
 }: {
-  player: { name: string; avatar: string | null; color: string };
+  player: { name: string; avatar: string | null; color: string; look?: "pawn" | "icon"; frame?: string; skin?: string };
   size: number;
 }) {
-  const look = useContext(LookCtx);
-  if (look === "icon") return <Face name={player.name} avatar={player.avatar} color={player.color} size={size} />;
+  if (player.look === "icon") {
+    return <Face name={player.name} avatar={player.avatar} color={player.color} frame={player.frame} size={size} />;
+  }
   return (
     <span className="char" style={{ width: size, height: Math.round(size * 1.25) }} title={player.name}>
-      <PixelPawn color={player.color} />
+      <PixelFigure color={player.color} skin={player.skin} />
     </span>
   );
 }
 
-function Face({ name, avatar, color, size }: { name: string; avatar: string | null; color: string; size: number }) {
+function Face({ name, avatar, color, frame, size }: { name: string; avatar: string | null; color: string; frame?: string; size: number }) {
   return (
-    <span className="face" style={{ width: size, height: size, "--player": color } as CSSProperties} title={name}>
+    <span className={`face ring-${frame || "gold"}`} style={{ width: size, height: size, "--player": color } as CSSProperties} title={name}>
       {avatar ? <img src={avatar} alt="" /> : <em>{name.slice(0, 1)}</em>}
     </span>
   );

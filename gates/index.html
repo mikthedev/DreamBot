@@ -3,9 +3,48 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#141018" />
+    <meta name="description" content="DreamPoly — buy the brands, stack rent, last fortune standing." />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <title>DreamPoly</title>
+    <style>
+      html, body, #root { height: 100%; margin: 0; background: #0c0a10; color: #f3eadf; }
+      #boot {
+        position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+        background: radial-gradient(ellipse 80% 50% at 50% -10%, #2a2030 0%, transparent 50%), #0c0a10;
+        font-family: Outfit, "Segoe UI", system-ui, sans-serif; text-align: center; gap: 8px;
+      }
+      #boot b {
+        font-family: "Pixelify Sans", Outfit, sans-serif; font-size: clamp(28px, 8vw, 44px);
+        color: #fff4cc; letter-spacing: 0.06em;
+        text-shadow: 3px 3px 0 #1a1208;
+      }
+      #boot small { color: #a89890; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700; font-size: 11px; }
+      #boot .pips { display: flex; gap: 10px; justify-content: center; margin-bottom: 8px; }
+      #boot i {
+        width: 28px; height: 28px; background: #fff4e6; box-shadow: 3px 3px 0 #0a080c;
+        animation: boot-roll 0.7s steps(4) infinite;
+      }
+      #boot i:last-child { animation-delay: 0.12s; }
+      @keyframes boot-roll {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-6px); }
+      }
+    </style>
+    <script>
+      if (/\.discordsays\.com$/.test(location.hostname) || /(?:\?|&)frame_id=/.test(location.search) || window.parent !== window) {
+        document.documentElement.classList.add("in-discord");
+      }
+    </script>
   </head>
   <body>
+    <div id="boot">
+      <div>
+        <div class="pips" aria-hidden><i></i><i></i></div>
+        <b>DreamPoly</b><br />
+        <small>Setting the table</small>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

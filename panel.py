@@ -123,6 +123,7 @@ def help_embed(*, is_admin: bool) -> discord.Embed:
             "`/join` · `/disconnect` — voice AI (say **Dream**, …)\n"
             "`/hero` — one hero’s balance changes across patches\n"
             "`/setbirthday` · `/mybirthday` · `/clearbirthday`\n"
+            "`/dreampoly` — start DreamPoly in a voice channel\n"
             "`/play` · `/pause` · `/resume` · `/leave` — Stop / Queue / Skip on the card"
         ),
         inline=False,
@@ -1805,6 +1806,84 @@ class PanelCog(commands.Cog):
             embed=hub.embed_for(interaction.guild),
             view=hub,
             ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="dreampoly",
+        description="Start DreamPoly in a voice channel",
+    )
+    @app_commands.describe(channel="Voice channel (defaults to the one you are in)")
+    async def dreampoly_cmd(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.VoiceChannel | None = None,
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message(
+                "Join a voice channel on the server, then run `/dreampoly`.",
+                ephemeral=True,
+            )
+            return
+
+        voice = channel
+        if voice is None:
+            state = interaction.user.voice
+            if state is not None and isinstance(state.channel, discord.VoiceChannel):
+                voice = state.channel
+        if voice is None:
+            await interaction.response.send_message(
+                "Join a voice channel first, then run `/dreampoly` again.",
+                ephemeral=True,
+            )
+            return
+
+        app_id = interaction.client.application_id
+        if not app_id:
+            await interaction.response.send_message(
+                "The bot is still starting. Try `/dreampoly` in a few seconds.",
+                ephemeral=True,
+            )
+            return
+
+        me = interaction.guild.me
+        if me is None or not voice.permissions_for(me).create_instant_invite:
+            await interaction.response.send_message(
+                f"I need **Create Invite** in {voice.mention} to open DreamPoly.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=False)
+        try:
+            invite = await voice.create_invite(
+                max_age=0,
+                max_uses=0,
+                unique=True,
+                target_type=discord.InviteTarget.embedded_application,
+                target_application_id=int(app_id),
+                reason="DreamPoly",
+            )
+        except discord.HTTPException as exc:
+            await interaction.followup.send(
+                "Discord refused to open the activity. In the Developer Portal, "
+                "enable **Activities**, map `/` to `dreampolygame.vercel.app` "
+                "(no https), and tick Desktop under Supported Platforms.\n"
+                f"({exc.status}: {exc.text})",
+                ephemeral=True,
+            )
+            return
+
+        view = discord.ui.View()
+        view.add_item(
+            discord.ui.Button(
+                label="Play DreamPoly",
+                style=discord.ButtonStyle.link,
+                url=invite.url,
+            )
+        )
+        await interaction.followup.send(
+            f"**DreamPoly** is ready in {voice.mention}. Join the call, then tap Play.",
+            view=view,
         )
 
 

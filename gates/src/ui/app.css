@@ -409,6 +409,15 @@ html.in-discord .trade-bar { padding: 4px 6px 6px; }
   opacity: 1;
   border-color: color-mix(in srgb, var(--player) 70%, var(--line));
 }
+.seat-link {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+.seat-link.is-host { color: var(--accent); }
+.seat-link.is-bad { color: #f0a0a0; }
 .holdings {
   position: absolute;
   top: 50%;
@@ -3434,6 +3443,53 @@ input {
     linear-gradient(180deg, #2a2218, var(--panel-deep));
   border-bottom: 3px solid var(--trim);
 }
+.link-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 8px 12px;
+  background: #16120e;
+  border-bottom: 2px solid var(--trim);
+  color: var(--text);
+}
+.play > .link-meter {
+  grid-column: 1 / -1;
+  border: 2px solid var(--line);
+  margin: 0 0 8px;
+  box-shadow: 2px 2px 0 var(--hard);
+}
+.link-meter .link-dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  background: #6a7a4a;
+  box-shadow: 0 0 0 2px #1a1814, 0 0 8px #8fbc5a88;
+}
+.link-meter.is-wait .link-dot { background: #c9a24a; box-shadow: 0 0 0 2px #1a1814, 0 0 8px #e6c35a88; }
+.link-meter.is-bad .link-dot { background: #c45a5a; box-shadow: 0 0 0 2px #1a1814, 0 0 8px #f0808088; }
+.link-meter b {
+  display: block;
+  font-family: var(--display);
+  font-size: 15px;
+  line-height: 1.1;
+}
+.link-meter small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.link-meter .link-warn {
+  flex: 1 1 180px;
+  font-style: normal;
+  font-size: 11px;
+  color: #f0c4a8;
+}
+.chair-tag.ping { font-size: 9px; }
+.chair-tag.ping.is-bad { color: #f0a0a0; }
+.chair-tag.ping.is-wait { color: var(--muted); }
 .wait-exit {
   position: absolute;
   right: calc(100% + 12px);

@@ -62,6 +62,7 @@ async function saveRoom(id, room) {
     }
   }
   delete toStore.ack;
+  delete toStore.wireAck;
   mem().set(id, toStore);
   if (!boxed) return;
   try {
@@ -112,8 +113,9 @@ export default async function handler(req, res) {
   const used = new Set();
   if (cur.code) used.add(String(cur.code).toUpperCase());
   const saved = patchRoom(cur, incoming, id, cur.code || incoming.code || mintCode(used));
-  await saveRoom(id, { ...saved, ack: incoming.ack });
+  await saveRoom(id, { ...saved, ack: incoming.ack, wireAck: incoming.wireAck });
   const out = { ...saved };
   delete out.ack;
+  delete out.wireAck;
   res.status(200).json(out);
 }

@@ -20,8 +20,9 @@ import {
   type State,
 } from "../engine/game";
 import { BootCurtain, PocketDesk, usePocketDesk } from "./boot";
-import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
+import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, TableLinkStrip, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
 import { apiPath, connectDiscord, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
+import { linkCopy, pingLabel, startGuestNet, startHostNet, type LinkKind, type NetHandle, type PeerInfo, type SnapMsg, type WireMsg } from "./net";
 import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxHover, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { THEME_KEY, THEMES, applyTheme, savedTheme, type ThemeId } from "./theme";
 import { TRACK } from "../engine/track";
@@ -56,7 +57,7 @@ function keepMineLooks(incoming: SeatPerson[], mine: SeatPerson | undefined, you
     return {
       ...p,
       id: youId,
-      name: mine.name || p.name,
+      name: realName(p.name, mine.name) || mine.name || p.name,
       avatar: mine.avatar || p.avatar,
       color: mine.color,
       look: mine.look,
@@ -148,6 +149,19 @@ export function App() {
   const hostIdRef = useRef<string | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const appliedSeq = useRef(0);
+  const netRef = useRef<NetHandle | null>(null);
+  const hostMsgRef = useRef<(from: string, msg: WireMsg) => void>(() => {});
+  const applySnapRef = useRef<(msg: SnapMsg) => void>(() => {});
+  const joinedRef = useRef<SeatPerson[]>([]);
+  const spectatorsRef = useRef<SeatPerson[]>([]);
+  const screenRef = useRef<"menu" | "lobby" | "play">("menu");
+  const modeRef = useRef<Mode>("moves");
+  const codeRef = useRef("");
+  const [linkRole, setLinkRole] = useState<"solo" | "host" | "guest">("solo");
+  const [linkStatus, setLinkStatus] = useState<LinkKind>("off");
+  const [linkPing, setLinkPing] = useState<number | null>(null);
+  const [linkPeers, setLinkPeers] = useState<PeerInfo[]>([]);
+  const [linkWarn, setLinkWarn] = useState<string | null>(null);
   const roomId = tableId;
   const isHost = hostSeatRef.current === seatId || (!!hostId && (hostId === youId || hostId === seatId));
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) === "on");
@@ -178,6 +192,11 @@ export function App() {
   isHostRef.current = isHost;
   hostIdRef.current = hostId;
   roomIdRef.current = roomId;
+  joinedRef.current = joined;
+  spectatorsRef.current = spectators;
+  screenRef.current = screen;
+  modeRef.current = pickedMode;
+  codeRef.current = lobbyCode;
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
   const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
   const [walk, setWalk] = useState<Record<string, number>>({});
@@ -318,18 +337,27 @@ export function App() {
     };
   }
 
-  function publishHost(patch: Record<string, unknown> = {}) {
-    const id = roomIdRef.current;
-    if (!id || !isHostRef.current) return;
+  function takeSnap(patch: Partial<SnapMsg> = {}): SnapMsg {
     roomSeq.current += 1;
-    void writeRoom(id, {
-      asHost: true,
+    return {
+      t: "snap",
       seq: roomSeq.current,
-      hostId: hostIdRef.current || youId,
-      wasHost: hostSeatRef.current || seatId,
-      state: stateRef.current,
-      ...patch,
-    });
+      screen: patch.screen || screenRef.current,
+      mode: patch.mode || modeRef.current,
+      hostId: patch.hostId || hostIdRef.current || youId,
+      hostName: patch.hostName || selfLook(discord.user, profile).name,
+      code: patch.code || codeRef.current,
+      joined: patch.joined || joinedRef.current,
+      spectators: patch.spectators || spectatorsRef.current,
+      state: patch.state !== undefined ? patch.state : stateRef.current,
+    };
+  }
+
+  function publishHost(patch: Record<string, unknown> = {}) {
+    if (!isHostRef.current) return;
+    if (patch.state) stateRef.current = patch.state as State;
+    const snap = takeSnap(patch as Partial<SnapMsg>);
+    netRef.current?.broadcast(snap);
   }
 
   function cheatTile(id: string) {
@@ -376,9 +404,11 @@ export function App() {
 
   function act(action: Action) {
     if (roomId && !isHostRef.current) {
-      void writeRoom(roomId, {
-        pending: { from: youId, action, playerId: youId },
-      });
+      if (!netRef.current?.live()) {
+        setLinkWarn("Wait until you are linked to the host.");
+        return;
+      }
+      netRef.current.send({ t: "action", action });
       return;
     }
     setState((s) => {
@@ -393,6 +423,10 @@ export function App() {
 
   function rollThen(action: Action) {
     if (diceSpin != null || !me) return;
+    if (roomId && !isHostRef.current) {
+      act(action);
+      return;
+    }
     sfx("dice");
     setHeld({ cash: me.cash, moves: me.moves });
     let n = 0;
@@ -545,6 +579,13 @@ export function App() {
     setTrading(false);
     appliedSeq.current = 0;
     hostSeatRef.current = null;
+    netRef.current?.close();
+    netRef.current = null;
+    setLinkRole("solo");
+    setLinkStatus("off");
+    setLinkPing(null);
+    setLinkPeers([]);
+    setLinkWarn(null);
   }
 
   function leaveTable() {
@@ -552,6 +593,7 @@ export function App() {
     const host = isHostRef.current;
     if (id) {
       if (host) {
+        netRef.current?.broadcast({ t: "closed" });
         void writeRoom(id, {
           asHost: true,
           hostId: hostIdRef.current || youId,
@@ -564,12 +606,14 @@ export function App() {
           ack: [],
         });
       } else {
+        netRef.current?.send({ t: "leave", id: youId });
         void writeRoom(id, {
           leave: youId,
           drop: [youId, seatId].filter((v, i, all) => all.indexOf(v) === i),
-          pending: { from: youId, action: { type: "quit", playerId: youId } },
         });
       }
+      netRef.current?.close();
+      netRef.current = null;
     }
     resetLocalTable();
   }
@@ -590,6 +634,10 @@ export function App() {
     if (!person) return;
     setSpectators((s) => s.filter((p) => p.id !== pick));
     setJoined((j) => [...j, person]);
+    if (roomId && netRef.current?.live() && !isHostRef.current) {
+      netRef.current.send({ t: "hello", person });
+      return;
+    }
     if (roomId) {
       void writeRoom(roomId, { sit: person }).then((saved) => {
         if (!saved) return;
@@ -640,6 +688,11 @@ export function App() {
     const person = { ...cur, ...patch };
     window.clearTimeout(lookTimer.current);
     lookTimer.current = window.setTimeout(() => {
+      if (netRef.current?.live()) {
+        if (isHostRef.current) publishHost();
+        else netRef.current.send({ t: "looks", person });
+        return;
+      }
       void writeRoom(roomId, { sit: person });
     }, 160);
   }
@@ -825,98 +878,154 @@ export function App() {
     });
   }, [discord.people, discord.user, youId, joined, isHost]);
 
-  useEffect(() => {
-    if (!roomId) return;
-    let stop = false;
-    const tick = async () => {
-      const room = await readRoom(roomId);
-      if (stop || !room) return;
-      if (room.closed && !isHostRef.current) {
-        resetLocalTable();
-        return;
-      }
-      if (typeof room.seq === "number" && room.seq > roomSeq.current) roomSeq.current = room.seq;
-      if (room.hostId) setHostId(String(room.hostId));
-      if (room.hostName) setTableHostName(String(room.hostName));
-      if (room.code) setLobbyCode(String(room.code));
-      if (Array.isArray(room.joined)) {
-        const incoming = room.joined as SeatPerson[];
-        setJoined((cur) => {
-          const mine = cur.find((p) => p.id === youId);
-          const next = keepMineLooks(incoming, mine, youId);
-          return seatKey(cur) === seatKey(next) ? cur : next;
-        });
-      }
-      if (Array.isArray(room.spectators)) {
-        setSpectators((cur) => (seatKey(cur) === seatKey(room.spectators as SeatPerson[]) ? cur : (room.spectators as SeatPerson[])));
-      }
-      if (!isHostRef.current) {
-        if (room.mode === "moves" || room.mode === "classic") setPickedMode(room.mode);
-        if (room.screen === "lobby" || room.screen === "play" || room.screen === "menu") setScreen(room.screen);
-        const nextState = room.state as State | undefined;
-        const seq = Number(room.seq || 0);
-        if (seq && seq < appliedSeq.current) return;
-        if (nextState && (!stateRef.current || playStamp(stateRef.current) !== playStamp(nextState))) {
-          appliedSeq.current = Math.max(appliedSeq.current, seq);
-          const labeled = overlayNames(nextState, Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : joined);
-          stateRef.current = labeled;
-          setState(labeled);
-        } else if (seq > appliedSeq.current) {
-          appliedSeq.current = seq;
-        }
-        return;
-      }
-      const queue = Array.isArray(room.pending)
-        ? room.pending
-        : room.pending
-          ? [room.pending]
-          : [];
-      const jobs = queue.filter((item: { action?: Action }) => item?.action) as { nid?: string; from?: string; action: Action }[];
-      if (stateRef.current && Array.isArray(room.joined)) {
-        const seated = new Set((room.joined as SeatPerson[]).map((p) => p.id));
-        for (const p of stateRef.current.players) {
-          if (p.bot || p.out) continue;
-          if (p.id === hostIdRef.current || p.id === youId) continue;
-          if (seated.has(p.id)) continue;
-          if (!jobs.some((item) => item.action.type === "quit" && "playerId" in item.action && item.action.playerId === p.id)) {
-            jobs.push({ from: p.id, action: { type: "quit", playerId: p.id } });
-          }
-        }
-      }
-      if (!jobs.length || !stateRef.current) return;
-      let current = stateRef.current;
-      const ack: string[] = [];
-      let applied = 0;
-      for (const item of jobs) {
-        const turn = actor(current)?.id;
-        if (item.action.type !== "quit" && item.from && turn && item.from !== turn) continue;
-        const next = apply(current, item.action);
-        cuePlay(current, next, item.action);
-        current = next;
-        applied += 1;
-        if (item.nid) ack.push(item.nid);
-      }
-      if (!applied) return;
-      const labeled = overlayNames(current, Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : joined);
+  function applySnap(msg: SnapMsg) {
+    if (msg.seq && msg.seq < appliedSeq.current) return;
+    appliedSeq.current = Math.max(appliedSeq.current, msg.seq || 0);
+    if (msg.hostId) setHostId(msg.hostId);
+    if (msg.hostName) setTableHostName(msg.hostName);
+    if (msg.code) setLobbyCode(msg.code);
+    if (msg.mode === "moves" || msg.mode === "classic") setPickedMode(msg.mode);
+    if (msg.screen === "lobby" || msg.screen === "play" || msg.screen === "menu") setScreen(msg.screen);
+    if (Array.isArray(msg.joined)) {
+      setJoined((cur) => {
+        const mine = cur.find((p) => p.id === youId);
+        const next = keepMineLooks(msg.joined, mine, youId);
+        return seatKey(cur) === seatKey(next) ? cur : next;
+      });
+    }
+    if (Array.isArray(msg.spectators)) setSpectators(msg.spectators);
+    if (msg.state) {
+      const labeled = overlayNames(msg.state, msg.joined || joinedRef.current);
       stateRef.current = labeled;
       setState(labeled);
-      roomSeq.current += 1;
-      void writeRoom(roomId, {
-        asHost: true,
-        seq: roomSeq.current,
-        hostId: String(room.hostId || hostId || youId),
-        wasHost: hostSeatRef.current || seatId,
-        ack,
-        state: current,
+    } else {
+      stateRef.current = null;
+      setState(null);
+    }
+  }
+
+  function hostFromGuest(from: string, msg: WireMsg) {
+    if (msg.t === "hello") {
+      setJoined((j) => {
+        const next = [...j.filter((p) => p.id !== msg.person.id && p.id !== from), msg.person];
+        joinedRef.current = next;
+        window.setTimeout(() => publishHost({ joined: next }), 0);
+        return next;
       });
-    };
-    const t = window.setInterval(() => void tick(), 280);
-    void tick();
+      setSpectators((s) => s.filter((p) => p.id !== msg.person.id && p.id !== from));
+      return;
+    }
+    if (msg.t === "looks") {
+      setJoined((j) => j.map((p) => (p.id === msg.person.id || p.id === from ? { ...p, ...msg.person, id: msg.person.id || from } : p)));
+      if (stateRef.current) {
+        setState((cur) => {
+          if (!cur) return cur;
+          return {
+            ...cur,
+            players: cur.players.map((p) => (p.id === from || p.id === msg.person.id ? { ...p, ...msg.person, id: p.id } : p)),
+          };
+        });
+      }
+      window.setTimeout(() => publishHost(), 0);
+      return;
+    }
+    if (msg.t === "leave") {
+      const id = msg.id || from;
+      setJoined((j) => j.filter((p) => p.id !== id));
+      if (stateRef.current) {
+        act({ type: "quit", playerId: id });
+      } else {
+        window.setTimeout(() => publishHost(), 0);
+      }
+      return;
+    }
+    if (msg.t === "action") {
+      const cur = stateRef.current;
+      if (!cur) return;
+      const turn = actor(cur)?.id;
+      if (msg.action.type !== "quit" && turn && from !== turn) return;
+      const next = apply(cur, msg.action);
+      cuePlay(cur, next, msg.action);
+      stateRef.current = next;
+      setState(next);
+      publishHost({ state: next, screen: "play" });
+    }
+  }
+
+  hostMsgRef.current = hostFromGuest;
+  applySnapRef.current = applySnap;
+
+  useEffect(() => {
+    if (!roomId) {
+      netRef.current?.close();
+      netRef.current = null;
+      setLinkRole("solo");
+      setLinkStatus("off");
+      setLinkPing(null);
+      setLinkPeers([]);
+      setLinkWarn(null);
+      return;
+    }
+    if (isHost) {
+      setLinkRole("host");
+      setLinkStatus("calling");
+      const handle = startHostNet({
+        roomId,
+        youId,
+        onMsg: (from, msg) => hostMsgRef.current(from, msg),
+        onPeers: (peers) => {
+          setLinkPeers(peers);
+          const live = peers.filter((p) => p.status === "linked" || p.status === "weak");
+          const worst = live.reduce((n, p) => Math.max(n, p.ping || 0), 0);
+          const lost = peers.some((p) => p.status === "lost");
+          setLinkPing(live.length ? worst : null);
+          setLinkStatus(lost ? "lost" : live.some((p) => p.status === "weak") ? "weak" : live.length ? "linked" : "calling");
+          setLinkWarn(lost ? "A player lost the direct link. They need this Activity still open." : live.some((p) => p.status === "weak") ? "A player has high ping to you." : null);
+        },
+      });
+      netRef.current = handle;
+      return () => {
+        handle.close();
+        if (netRef.current === handle) netRef.current = null;
+      };
+    }
+    if (!hostId || hostId === youId) return;
+    setLinkRole("guest");
+    setLinkStatus("calling");
+    setLinkWarn("Linking to the host's computer…");
+    let greeted = false;
+    const handle = startGuestNet({
+      roomId,
+      youId,
+      hostId,
+      onMsg: (msg) => {
+        if (msg.t === "closed") {
+          resetLocalTable();
+          return;
+        }
+        if (msg.t === "snap") applySnapRef.current(msg);
+      },
+      onLink: (info) => {
+        setLinkPing(info.ping);
+        setLinkStatus(info.status);
+        setLinkPeers([info]);
+        setLinkWarn(info.warn);
+        if (info.status === "linked" && !greeted) {
+          greeted = true;
+          const look = selfLook(discord.user, profile);
+          handle.send({
+            t: "hello",
+            person: { id: youId, name: look.name, avatar: look.avatar, ...savedLooks() },
+          });
+        }
+      },
+    });
+    netRef.current = handle;
     return () => {
-      stop = true;
-      window.clearInterval(t);
+      handle.close();
+      if (netRef.current === handle) netRef.current = null;
     };
-  }, [roomId, hostId, youId]);
+  }, [roomId, isHost, youId, hostId]);
 
   const lastHostPush = useRef("");
   useEffect(() => {
@@ -933,22 +1042,10 @@ export function App() {
     window.clearTimeout(pushTimer.current);
     pushTimer.current = window.setTimeout(() => {
       lastHostPush.current = stamp;
-      roomSeq.current += 1;
-      void writeRoom(roomId, {
-        asHost: true,
-        seq: roomSeq.current,
-        hostId: hostId || youId,
-        wasHost: hostSeatRef.current || seatId,
-        hostName: selfLook(discord.user, profile).name,
-        screen,
-        mode: pickedMode,
-        joined,
-        spectators,
-        state: stateRef.current,
-      });
-    }, 120);
+      netRef.current?.broadcast(takeSnap());
+    }, 80);
     return () => window.clearTimeout(pushTimer.current);
-  }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state, discord.user, profile]);
+  }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state]);
 
   const primary = useMemo(
     () => (state ? buttonsFor(state, mine, !!diceSpin || walking) : []),
@@ -1094,6 +1191,18 @@ export function App() {
             needAuth={discord.framed && !discord.authed}
             onConnect={() => void connectDiscord()}
             people={discord.people}
+            link={{
+              role: linkRole,
+              status: linkStatus,
+              ping: linkPing,
+              linked: linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length,
+              warn: linkWarn,
+              ...linkCopy(linkRole, linkStatus, linkPing, linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length),
+              pings: {
+                ...Object.fromEntries(linkPeers.map((p) => [p.id, p.ping])),
+                ...(linkRole === "guest" && hostId ? { [hostId]: linkPing } : {}),
+              },
+            }}
           />
         ) : (
           <StartMenu
@@ -1106,6 +1215,16 @@ export function App() {
         )
       ) : (
         <div className="play">
+      {linkRole !== "solo" ? (
+        <TableLinkStrip
+          role={linkRole}
+          status={linkStatus}
+          ping={linkPing}
+          linked={linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length}
+          warn={linkWarn}
+          {...linkCopy(linkRole, linkStatus, linkPing, linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length)}
+        />
+      ) : null}
       <div className="roster">
         {state.players.map((p) => (
           <div
@@ -1118,6 +1237,15 @@ export function App() {
             <Portrait player={p} size={26} />
             <b>{p.name}</b>
             <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
+            {p.id === hostId ? (
+              <em className="seat-link is-host">host</em>
+            ) : p.bot ? null : (
+              <em className={`seat-link ${((linkPeers.find((x) => x.id === p.id)?.ping) ?? (p.id === youId ? linkPing : null)) != null && ((linkPeers.find((x) => x.id === p.id)?.ping) ?? linkPing ?? 0) >= 180 ? "is-bad" : ""}`}>
+                {p.id === youId && linkRole === "guest"
+                  ? pingLabel(linkPing)
+                  : pingLabel(linkPeers.find((x) => x.id === p.id)?.ping ?? null)}
+              </em>
+            )}
           </div>
         ))}
         <div className={`wallet ${(payShare(state.lastPay, me?.id) != null || tillGain != null) && !walking ? "is-paid" : ""}`}>

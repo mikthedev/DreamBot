@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldRoom, mergePending, mergePerson, patchRoom, remapStateIds, sameHost } from "../../api/roomPeople.js";
+import { foldRoom, mergePending, mergePerson, mergeWire, patchRoom, remapStateIds, sameHost } from "../../api/roomPeople.js";
 
 describe("room people and turns", () => {
   it("keeps a Discord name when the host later publishes Guest", () => {
@@ -47,6 +47,13 @@ describe("room people and turns", () => {
     expect(state.players[0].name).toBe("Alex");
     expect(state.companies.discord.owner).toBe("99");
     expect(state.stores.shop).toBe("99");
+  });
+
+  it("keeps handshake signals until they are acked", () => {
+    const once = mergeWire([], { signal: { from: "a", to: "b", kind: "offer", sdp: "x", nid: "n1" } });
+    expect(once).toHaveLength(1);
+    const cleared = mergeWire(once, { wireAck: ["n1"] });
+    expect(cleared).toHaveLength(0);
   });
 
   it("keeps a newer cached turn when folding a slow write", () => {

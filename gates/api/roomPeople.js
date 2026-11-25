@@ -71,6 +71,46 @@ function tagPending(item) {
   return { ...item, nid: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` };
 }
 
+export function mergeWire(curList, incoming) {
+  const map = new Map();
+  const cur = Array.isArray(curList) ? curList : [];
+  for (const item of cur) {
+    if (item?.nid) map.set(String(item.nid), item);
+  }
+  if (incoming.signal && typeof incoming.signal === "object") {
+    const s = incoming.signal;
+    const nid = String(s.nid || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+    map.set(nid, {
+      nid,
+      from: String(s.from || ""),
+      to: String(s.to || ""),
+      kind: String(s.kind || ""),
+      sdp: s.sdp || null,
+      candidate: s.candidate || null,
+      at: Date.now(),
+    });
+  }
+  if (Array.isArray(incoming.wireAck)) {
+    for (const id of incoming.wireAck) map.delete(String(id));
+  }
+  const cut = Date.now() - 120000;
+  return [...map.values()].filter((m) => Number(m.at || 0) > cut).slice(-80);
+}
+
+export function unionWire(a, b, ack) {
+  const map = new Map();
+  for (const item of Array.isArray(a) ? a : []) {
+    if (item?.nid) map.set(String(item.nid), item);
+  }
+  for (const item of Array.isArray(b) ? b : []) {
+    if (item?.nid) map.set(String(item.nid), item);
+  }
+  if (Array.isArray(ack)) {
+    for (const id of ack) map.delete(String(id));
+  }
+  return [...map.values()].slice(-80);
+}
+
 export function mergePending(curList, incoming) {
   const map = new Map();
   for (const item of pendingList(curList)) {
@@ -167,6 +207,7 @@ export function patchRoom(cur, incoming, id, code) {
     joined: people.joined,
     spectators: people.spectators,
     pending,
+    wire: mergeWire(cur.wire, incoming),
     seq: Math.max(Number(cur.seq || 0), Number(incoming.seq || 0)),
   };
   if (incoming.leave && incoming.sit?.id) {
@@ -190,8 +231,10 @@ export function patchRoom(cur, incoming, id, code) {
       saved.joined = [];
       saved.spectators = [];
       saved.pending = [];
+      saved.wire = [];
     }
   }
+  delete saved.signal;
   delete saved.sit;
   delete saved.watch;
   delete saved.leave;
@@ -205,12 +248,13 @@ export function patchRoom(cur, incoming, id, code) {
 
 export function foldRoom(latest, incoming) {
   if (!latest || typeof latest !== "object") return incoming;
-  if (incoming.closed) return { ...incoming, pending: [] };
+  if (incoming.closed) return { ...incoming, pending: [], wire: [] };
   const keepLatestState = Number(latest.seq || 0) > Number(incoming.seq || 0);
   return {
     ...incoming,
     seq: Math.max(Number(latest.seq || 0), Number(incoming.seq || 0)),
     pending: mergePending(latest.pending, { pending: incoming.pending, ack: incoming.ack }),
+    wire: unionWire(latest.wire, incoming.wire, incoming.wireAck),
     state: keepLatestState && "state" in latest ? latest.state : incoming.state,
   };
 }

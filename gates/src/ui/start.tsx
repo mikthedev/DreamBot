@@ -145,17 +145,17 @@ export function StartMenu({
         <h1>
           <span>DreamPoly</span>
         </h1>
-        <p className="start-lead">Buy the brands. Spend your moves. Stack rent until the last fortune standing.</p>
+        <p className="start-lead">Whoever opens the table hosts it on their computer. Friends link to them — not to a web server.</p>
         <div className="start-picks">
           <button className="mode-card main" style={{ "--i": 0 } as CSSProperties} onMouseEnter={sfxHover} onClick={() => pick("moves")}>
             <small>You host</small>
             <b>DreamPoly</b>
-            <span>Open a table. Friends join with the 4-letter code.</span>
+            <span>Your PC runs the match. Share the 4-letter code.</span>
           </button>
           <button className="mode-card" style={{ "--i": 1 } as CSSProperties} onMouseEnter={sfxHover} onClick={() => pick("classic")}>
             <small>You host</small>
             <b>Classic</b>
-            <span>Cash and bankruptcy. Same lobby code for friends.</span>
+            <span>Same deal: you are the table. Friends join your code.</span>
           </button>
         </div>
         <div className="table-gate">
@@ -212,6 +212,7 @@ export function Lobby({
   needAuth,
   onConnect,
   people = [],
+  link,
 }: {
   mode: Mode;
   youId: string;
@@ -232,6 +233,16 @@ export function Lobby({
   needAuth?: boolean;
   onConnect?: () => void;
   people?: { id: string; name: string }[];
+  link?: {
+    role: "solo" | "host" | "guest";
+    status: string;
+    ping: number | null;
+    linked: number;
+    warn: string | null;
+    title: string;
+    note: string;
+    pings?: Record<string, number | null>;
+  };
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
   const inTable = joined.some((p) => p.id === youId);
@@ -271,7 +282,7 @@ export function Lobby({
             <h1>Waiting room</h1>
             <p className="wait-sub">
               {ready ? "Table is ready." : `Need ${need} more.`}
-              {isHost ? " Share the code." : ` ${host?.name || hostName} starts.`}
+              {isHost ? " This match runs on your computer." : ` Linked to ${host?.name || hostName}'s computer.`}
               {inTable ? "" : " Sit an open chair."}
             </p>
           </div>
@@ -306,6 +317,7 @@ export function Lobby({
             </div>
           )}
         </header>
+        {link ? <TableLinkStrip {...link} /> : null}
 
         <div className="wait-body">
           <div className="wait-stage">
@@ -321,6 +333,7 @@ export function Lobby({
                 onSit={onSit}
                 onKick={onKick}
                 people={people || []}
+                pings={link?.pings}
               />
             </div>
             {desk && isHost ? (
@@ -411,6 +424,43 @@ export function Lobby({
   );
 }
 
+export function TableLinkStrip({
+  role,
+  status,
+  ping,
+  linked,
+  warn,
+  title,
+  note,
+}: {
+  role: "solo" | "host" | "guest";
+  status: string;
+  ping: number | null;
+  linked: number;
+  warn: string | null;
+  title: string;
+  note: string;
+}) {
+  const tone = warn || status === "lost" ? "bad" : status === "weak" || status === "calling" ? "wait" : "ok";
+  return (
+    <div className={`link-meter is-${tone} is-${role}`} role="status">
+      <i className="link-dot" aria-hidden />
+      <div>
+        <b>{title}</b>
+        <small>{note}{role === "host" && linked ? "" : ping != null && role === "guest" ? ` · ${Math.round(ping)}ms` : ""}</small>
+      </div>
+      {warn ? <em className="link-warn">{warn}</em> : null}
+    </div>
+  );
+}
+
+function pingTag(pings: Record<string, number | null> | undefined, id: string) {
+  if (!pings || !(id in pings)) return null;
+  const ms = pings[id];
+  const tone = ms == null ? "wait" : ms >= 180 ? "bad" : "ok";
+  return <em className={`chair-tag ping is-${tone}`}>{ms == null ? "…" : `${Math.round(ms)}ms`}</em>;
+}
+
 function chairName(p: SeatPerson, youId: string, people: { id: string; name: string }[]) {
   if (p.id === youId) return "You";
   const live = people.find((x) => x.id === p.id)?.name?.trim();
@@ -429,6 +479,7 @@ function ChairRow({
   onSit,
   onKick,
   people,
+  pings,
 }: {
   chairs: (SeatPerson | null)[];
   start: number;
@@ -439,6 +490,7 @@ function ChairRow({
   onSit: () => void;
   onKick: (id: string) => void;
   people: { id: string; name: string }[];
+  pings?: Record<string, number | null>;
 }) {
   return (
     <ul className="wait-chairs">
@@ -455,7 +507,7 @@ function ChairRow({
               <>
                 <SeatMark person={p} />
                 <span>{chairName(p, youId, people)}</span>
-                {p.id === hostId ? <em className="chair-tag host">host</em> : p.bot ? <em className="chair-tag">bot</em> : null}
+                {p.id === hostId ? <em className="chair-tag host">host</em> : p.bot ? <em className="chair-tag">bot</em> : pingTag(pings, p.id)}
                 {isHost && p.bot ? (
                   <button type="button" className="seat-kick" title={`Remove ${p.name}`} onClick={() => { sfx("back"); onKick(p.id); }}>
                     ×

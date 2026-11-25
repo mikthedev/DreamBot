@@ -130,31 +130,35 @@ let presenceStart = 0;
 let lastPresence: { details?: string; state?: string; party?: number } = {};
 const OAUTH_SCOPES = ["identify", "rpc.activities.write"];
 
+function presencePayload(withArt: boolean) {
+  const count = lastPresence.party ?? disc.people.length;
+  const seated = Math.min(8, Math.max(1, count || 1));
+  const activity: Record<string, unknown> = {
+    details: lastPresence.details || "Playing DreamPoly (Monopoly Game)",
+    state: lastPresence.state || "Choosing a table",
+    instance: true,
+    timestamps: { start: presenceStart },
+    party: {
+      id: sdk?.instanceId || "dreampoly",
+      size: [seated, 8],
+    },
+  };
+  if (withArt) {
+    activity.assets = {
+      large_image: "dreampoly",
+      large_text: "DreamPoly",
+    };
+  }
+  return { activity };
+}
+
 export function publishActivity(opts?: { details?: string; state?: string; party?: number }) {
   if (opts) lastPresence = opts;
   if (!sdk || !disc.authed) return;
   if (!presenceStart) presenceStart = Math.floor(Date.now() / 1000);
-  const count = lastPresence.party ?? disc.people.length;
-  const seated = Math.min(8, Math.max(1, count || 1));
   void sdk.commands
-    .setActivity({
-      activity: {
-        type: 0,
-        name: "DreamPoly",
-        details: lastPresence.details || "Playing DreamPoly (Monopoly Game)",
-        state: lastPresence.state || "Choosing a table",
-        instance: true,
-        timestamps: { start: presenceStart },
-        assets: {
-          large_image: "dreampoly",
-          large_text: "DreamPoly",
-        },
-        party: {
-          id: sdk.instanceId || "dreampoly",
-          size: [seated, 8],
-        },
-      },
-    })
+    .setActivity(presencePayload(true))
+    .catch(() => sdk?.commands.setActivity(presencePayload(false)))
     .catch((err) => console.warn("DreamPoly presence", err));
 }
 
@@ -176,10 +180,12 @@ async function pullPeople() {
 
 async function authorizeCode(clientId: string) {
   if (!sdk) return "";
+  const redirectUri = `https://${clientId}.discordsays.com`;
   try {
     const silent = await sdk.commands.authorize({
       client_id: clientId,
       response_type: "code",
+      redirect_uri: redirectUri,
       state: "",
       prompt: "none",
       scope: OAUTH_SCOPES,
@@ -191,6 +197,7 @@ async function authorizeCode(clientId: string) {
   const asked = await sdk.commands.authorize({
     client_id: clientId,
     response_type: "code",
+    redirect_uri: redirectUri,
     state: "",
     scope: OAUTH_SCOPES,
   });
@@ -215,7 +222,10 @@ async function tryOAuth(clientId: string) {
   const tok = await fetch(apiPath("/api/token"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({
+      code,
+      redirect_uri: `https://${clientId}.discordsays.com`,
+    }),
   });
   const body = (await tok.json()) as { access_token?: string; user?: VoiceUser; error?: string };
   if (body.user?.id) rememberUser(face(body.user));

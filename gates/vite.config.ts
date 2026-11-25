@@ -174,7 +174,7 @@ async function attachToken(req: IncomingMessage, res: ServerResponse) {
     return;
   }
   try {
-    const attempt = await exchangeCode(clientId, secret, code);
+    const attempt = await exchangeCode(clientId, secret, code, `https://${clientId}.discordsays.com`);
     if (!attempt.ok || !attempt.data.access_token) {
       console.warn("[dreampoly] token exchange failed", attempt.data.error || "token");
       json(res, 400, { error: attempt.data.error || "token" });

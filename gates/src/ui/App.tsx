@@ -106,6 +106,20 @@ function realName(...names: (string | null | undefined)[]) {
   }) || "";
 }
 
+function retagPlay(play: State, from: string, to: string, sit: { id: string; name: string; avatar: string | null }) {
+  if (!from || !to || from === to) return play;
+  return {
+    ...play,
+    players: play.players.map((p) => (p.id === from ? { ...p, id: to, name: realName(sit.name, p.name) || p.name, avatar: sit.avatar || p.avatar } : p)),
+    companies: Object.fromEntries(
+      Object.entries(play.companies).map(([id, own]) => [id, own.owner === from ? { ...own, owner: to } : own]),
+    ),
+    stores: Object.fromEntries(
+      Object.entries(play.stores).map(([id, owner]) => [id, owner === from ? to : owner]),
+    ),
+  } as State;
+}
+
 function selfLook(user: { id?: string; name: string; avatar: string | null } | null | undefined, profile: Profile | null, wire = false) {
   const id = user?.id || profile?.id;
   return {
@@ -135,6 +149,8 @@ export function App() {
   });
   const hostSeatRef = useRef<string | null>(null);
   const youId = discord.user?.id || seatId;
+  const youIdRef = useRef(youId);
+  youIdRef.current = youId;
   const [hostId, setHostId] = useState<string | null>(null);
   const [tableId, setTableId] = useState<string | null>(null);
   const [lobbyCode, setLobbyCode] = useState("");
@@ -445,8 +461,14 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [walking, diceSpin]);
 
+  const tillWho = useRef<string | null>(null);
   useEffect(() => {
     if (!me || walking || diceSpin) return;
+    if (tillWho.current !== me.id) {
+      tillWho.current = me.id;
+      tillPrev.current = { cash: me.cash, moves: me.moves };
+      return;
+    }
     const prev = tillPrev.current;
     tillPrev.current = { cash: me.cash, moves: me.moves };
     if (!prev) return;
@@ -800,7 +822,13 @@ export function App() {
         : p;
     setJoined((j) => j.map(paint));
     setSpectators((s) => s.map(paint));
-    if (mineId) setHostId((h) => (h === "you" || h === seatId ? mineId : h));
+    if (mineId) {
+      setHostId((h) => (h === "you" || h === seatId ? mineId : h));
+      setState((cur) => {
+        if (!cur?.players.some((p) => p.id === seatId)) return cur;
+        return retagPlay(cur, seatId, mineId, { id: mineId, name: look.name, avatar: look.avatar });
+      });
+    }
   }, [discord.user, profile, seatId]);
 
   useEffect(() => {
@@ -816,6 +844,8 @@ export function App() {
       if (!saved) return;
       if (isHostRef.current) {
         if (Array.isArray(saved.joined)) setJoined(keepMineLooks(saved.joined as SeatPerson[], person, person.id));
+        if (saved.hostId) setHostId(String(saved.hostId));
+        if (saved.state) setState(saved.state as State);
         return;
       }
       applyRoom(saved);
@@ -1055,7 +1085,26 @@ export function App() {
       handle.close();
       if (netRef.current === handle) netRef.current = null;
     };
-  }, [roomId, isHost, youId, hostId]);
+  }, [roomId, isHost, isHost ? true : !!hostId]);
+
+  const lastNetSelf = useRef(youId);
+  useEffect(() => {
+    netRef.current?.adopt(uniqueIds(youId, seatId, hostId || ""));
+    if (
+      lastNetSelf.current &&
+      lastNetSelf.current !== youId &&
+      /^\d{8,}$/.test(youId) &&
+      !isHostRef.current &&
+      netRef.current?.live()
+    ) {
+      const look = selfLook(discord.user, profile, true);
+      netRef.current.send({
+        t: "hello",
+        person: { id: youId, name: look.name, avatar: look.avatar, ...savedLooks() },
+      });
+    }
+    lastNetSelf.current = youId;
+  }, [youId, seatId, hostId, discord.user, profile]);
 
   const lastHostPush = useRef("");
   useEffect(() => {
@@ -1306,7 +1355,7 @@ export function App() {
           {state.mode === "moves" && me && me.moves <= 4 && !me.out ? (
             <div className="till-warn">
               <PixelCaution />
-              <span>Low moves. Pass GO, collect rent, rest in Jail, or buy one for ${fuelPrice(me)}.</span>
+              <span>Low moves. Pass GO for +1, or buy one for ${fuelPrice(me)}.</span>
             </div>
           ) : null}
           <ul>
@@ -2286,7 +2335,7 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
               <b>Casino</b> — draw a card. Follow it, then continue.
             </li>
             <li>
-              <b>Jail</b> — {moves ? "land here and you get +1 move back. You do not skip a turn." : "you are only visiting. Nothing to pay."}
+              <b>Jail</b> — you are only visiting. Nothing to pay, no extra move.
             </li>
           </ul>
           <p>Then you get extras (build, fuel, trade) and hit <b>End turn</b>.</p>
@@ -2302,16 +2351,13 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
             </p>
             <ul className="how-stack">
               <li>
-                Pass GO: choose <b>$200</b> or <b>+1 move</b> — never both, never automatic.
-              </li>
-              <li>
-                Collect rent: the owner gets a spark. Four sparks = <b>+1 move</b>
-              </li>
-              <li>
-                Rest in Jail: <b>+1 move</b>
+                Pass GO (a full lap): choose <b>$200</b> or <b>+1 move</b> — never both, never automatic.
               </li>
               <li>
                 Buy a move in More: <b>$100</b>, then $200, then $300. Once per turn.
+              </li>
+              <li>
+                Jail, rent, and buying a brand never give a move.
               </li>
             </ul>
             <p>Run out of moves and you drop every brand. The table keeps going without you.</p>
@@ -2680,7 +2726,7 @@ function deskCopy(state: State, walking: boolean): { kicker: string; title: stri
       return {
         kicker: "Rest",
         title: "Jail",
-        amount: state.mode === "moves" ? "+1 move" : "Visiting",
+        amount: "Visiting",
       };
     }
     const name = brands(state).find((c) => c.id === id)?.name || standsFor(state).find((s) => s.id === id)?.label || id;
@@ -3060,7 +3106,7 @@ function CornerFloat({
   if (!space) return null;
   const copy =
     id === "rest"
-      ? { kicker: "Jail", cash: mode === "moves" ? "+1 move" : "Visit", note: mode === "moves" ? "Land here. You get a move back." : "Nothing to pay. You keep walking next turn." }
+      ? { kicker: "Jail", cash: "Visit", note: "Nothing to pay. You keep walking next turn." }
       : id === "home"
         ? { kicker: "GO", cash: "$200", note: mode === "moves" ? "Pass or land — pick cash or a move." : "Collect $200." }
         : { kicker: "Casino", cash: "Card", note: "Draw one card, then extras." };
@@ -3081,9 +3127,7 @@ function CornerCard({ id, mode }: { id: "rest" | "home" | "dream"; mode: Mode })
       ? {
           kicker: "Corner",
           title: "Jail",
-          dep: mode === "moves"
-            ? "Land here and you get +1 move. That puts back the move this turn spent. You are not stuck. Next turn you roll as usual."
-            : "Just visiting. No rent, no skip. Next turn you roll as usual.",
+          dep: "Just visiting. No rent, no extra move, no skip. Next turn you roll as usual.",
         }
       : id === "home"
         ? {

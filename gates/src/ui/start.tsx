@@ -453,16 +453,13 @@ export function TableLinkStrip({
   note: string;
 }) {
   const tone = status === "lost" ? "bad" : status === "linked" && !warn ? "ok" : "wait";
+  const label = warn || [title, note].filter(Boolean).join(" · ");
   return (
-    <div className={`link-meter is-${tone} is-${role}`} role="status" title={warn || `${title}. ${note}`}>
+    <div className={`link-meter is-${tone} is-${role}`} role="status" title={label}>
       <i className="link-dot" aria-hidden />
-      <div className="link-copy">
-        <b>{title}</b>
-        <small>{note}</small>
-      </div>
+      <b>{title}</b>
       {ping != null && role === "guest" ? <span className="link-ping">{Math.round(ping)}ms</span> : null}
       {role === "host" && linked ? <span className="link-ping">{linked} in</span> : null}
-      {warn ? <em className="link-warn">{warn}</em> : null}
     </div>
   );
 }

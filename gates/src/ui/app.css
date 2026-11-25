@@ -183,37 +183,16 @@ html.in-discord .trade-seat { padding: 2px 6px 2px 2px; font-size: 10px; }
 html.in-discord .trade-floor {
   padding: 4px;
   gap: 4px;
-  grid-template-columns: 1fr;
-  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
 }
 html.in-discord .trade-swap span {
   width: 20px;
   height: 20px;
   font-size: 11px;
-  transform: rotate(90deg);
 }
 html.in-discord .stock-grid {
-  grid-template-columns: 1fr;
-  gap: 3px;
+  gap: 4px;
   padding: 4px;
-  scrollbar-width: auto;
 }
-html.in-discord .mark-plate { width: 24px; height: 24px; }
-html.in-discord .mark-plate .brand-logo,
-html.in-discord .mark-plate .brand-fallback {
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
-}
-html.in-discord .stock {
-  flex-direction: row;
-  justify-content: flex-start;
-  padding: 4px 6px;
-  gap: 8px;
-}
-html.in-discord .stock span { font-size: 11px; text-align: left; }
-html.in-discord .stock em { display: none; }
 html.in-discord .trade-crate header { padding: 4px 6px; gap: 4px; }
 html.in-discord .trade-crate header b { font-size: 11px; }
 html.in-discord .trade-tenders { padding: 4px 6px 0; gap: 4px; }
@@ -2540,6 +2519,8 @@ button:disabled { opacity: 0.4; cursor: default; }
   border: 2px solid color-mix(in srgb, var(--set) 45%, #8a6840);
   box-shadow: 2px 2px 0 var(--hard);
 }
+.stall-chip .brand-logo,
+.stall-chip .brand-fallback,
 .stall-deeds .brand-logo,
 .stall-deeds .brand-fallback {
   display: block;
@@ -2548,6 +2529,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   min-width: 24px;
   min-height: 24px;
   padding: 0;
+  color: #141820;
   background: none;
   border: 0;
 }
@@ -2828,6 +2810,17 @@ button:disabled { opacity: 0.4; cursor: default; }
   color: #141820;
 }
 .mark-plate .brand-fallback { color: #141820; }
+.mark-plate .brand-logo.img-sil,
+.stall-chip .brand-logo.img-sil,
+.stall-deeds .brand-logo.img-sil {
+  filter: brightness(0);
+}
+.slip-co .brand-logo {
+  color: var(--ink-hi);
+}
+.slip-co .brand-logo.img-sil {
+  filter: brightness(0) invert(1);
+}
 .stock.on .mark-plate {
   border-color: var(--ink-hi);
   box-shadow:
@@ -3187,7 +3180,7 @@ input {
 }
 .dive.cover .dive-word { animation: dive-go 0.7s steps(8) both; }
 .dive.open .dive-word { opacity: 0; }
-.app.is-open .play {
+.app.is-open .board {
   animation: board-immerse 0.62s steps(8) both;
 }
 
@@ -3445,32 +3438,43 @@ input {
   border-bottom: 3px solid var(--trim);
 }
 .link-meter {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex: none;
   flex-wrap: nowrap;
-  height: 36px;
-  max-height: 36px;
-  margin: 0;
-  padding: 0 12px;
+  width: max-content;
+  max-width: 100%;
+  height: 28px;
+  margin: 8px 12px 0;
+  padding: 0 8px;
   overflow: hidden;
   color: var(--ink-deep);
   background:
     linear-gradient(180deg, #fff8dc, #e8d5a0);
-  border-bottom: 3px solid var(--trim);
+  border: 2px solid var(--trim);
+  box-shadow: 2px 2px 0 var(--hard);
+  align-self: flex-start;
+}
+.wait > .link-meter {
+  margin: 6px 12px 0;
 }
 .play > .link-meter {
-  grid-column: 1 / -1;
-  height: 36px;
-  max-height: 36px;
-  border: 3px solid var(--trim);
-  margin: 0 0 8px;
-  box-shadow: 3px 3px 0 var(--hard);
+  position: absolute;
+  z-index: 18;
+  top: 0;
+  left: 0;
+  grid-column: auto;
+  margin: 0;
+  height: 26px;
+  max-width: 196px;
+}
+.play:has(> .link-meter) .roster {
+  padding-top: 32px;
 }
 .link-meter .link-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   flex: none;
   border-radius: 50%;
   background: #2f6b32;
@@ -3481,40 +3485,22 @@ input {
 .link-meter.is-bad {
   background: linear-gradient(180deg, #ffe4c8, #e8b48a);
 }
-.link-meter .link-copy {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  overflow: hidden;
-}
 .link-meter b {
   flex: none;
   font-family: var(--display);
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1;
   white-space: nowrap;
-}
-.link-meter small {
-  min-width: 0;
-  color: #5c4a28;
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .link-meter .link-ping {
   flex: none;
   font-family: "Press Start 2P", var(--display), sans-serif;
-  font-size: 8px;
-  padding: 3px 5px;
+  font-size: 7px;
+  padding: 2px 4px;
   background: #1a1410;
   color: #fde68a;
   border: 2px solid #3a2a20;
 }
-.link-meter .link-warn { display: none; }
 .wait-auth {
   display: flex;
   align-items: center;
@@ -5135,34 +5121,16 @@ input {
   .trade-floor {
     padding: 4px;
     gap: 4px;
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   }
   .trade-swap span {
     width: 22px;
     height: 22px;
     font-size: 12px;
-    transform: rotate(90deg);
   }
   .stock-grid {
-    grid-template-columns: 1fr;
-    gap: 3px;
+    gap: 4px;
     padding: 4px;
-    scrollbar-width: auto;
   }
-  .stock-grid::-webkit-scrollbar { width: 10px; }
-  .mark-plate { width: 26px; height: 26px; }
-  .mark-plate .brand-logo,
-  .mark-plate .brand-fallback { width: 16px; height: 16px; min-width: 16px; min-height: 16px; }
-  .stock {
-    flex-direction: row;
-    justify-content: flex-start;
-    align-items: center;
-    padding: 4px 8px;
-    gap: 8px;
-  }
-  .stock span { font-size: 11px; text-align: left; }
-  .stock em { display: none; }
   .trade-crate header { padding: 4px 6px; }
   .trade-crate header b { font-size: 11px; }
   .trade-tenders { padding: 4px 6px 0; }
@@ -5380,6 +5348,6 @@ input {
   .rent-shot i, .rent-shot-amt, .pawn.is-collect, .pawn.is-paying, .fx-ping, .fx-spark,
   .dice-row.is-land, .chance::after, .ledger-row, .tile.hot.is-live, .pawn.acting .token-pad,
   .menu-vault, .menu-bill, .menu-stamp, .menu-chip, .menu-mascot, .menu-copy, .start-kicker, .start-menu h1 span, .start-lead, .mode-card,
-  .lobby.is-in, .join-rail, .wait-booth, .stall-btn, .stall-menu, .how-card, .dive-bars i, .dive-word, .app.is-open .play,
+  .lobby.is-in, .join-rail, .wait-booth, .stall-btn, .stall-menu, .how-card, .dive-bars i, .dive-word, .app.is-open .board,
   .boot-track::after, .pocket-mark span, .houses, .fate-banner h2 { animation: none; transition: none; }
 }

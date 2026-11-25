@@ -33,6 +33,18 @@ describe("room people and turns", () => {
     expect(saved.seq).toBe(4);
   });
 
+  it("moves hostId when the host sits under their Discord id", () => {
+    const saved = patchRoom(
+      { hostId: "seat-1", hostName: "You", joined: [{ id: "seat-1", name: "You" }], seq: 1 },
+      { leave: "seat-1", sit: { id: "99", name: "Alex" } },
+      "r",
+      "ABCD",
+    );
+    expect(saved.hostId).toBe("99");
+    expect(saved.hostName).toBe("Alex");
+    expect(saved.joined.map((p: { id: string }) => p.id)).toEqual(["99"]);
+  });
+
   it("remaps a seat id onto a Discord id in play state", () => {
     const state = remapStateIds(
       {

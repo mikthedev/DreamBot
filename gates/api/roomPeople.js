@@ -213,6 +213,10 @@ export function patchRoom(cur, incoming, id, code) {
   };
   if (incoming.leave && incoming.sit?.id) {
     saved.state = remapStateIds(saved.state, String(incoming.leave), incoming.sit.id, incoming.sit);
+    if (String(saved.hostId) === String(incoming.leave)) {
+      saved.hostId = incoming.sit.id;
+      if (!placeholderName(incoming.sit.name)) saved.hostName = incoming.sit.name;
+    }
   }
   if (hostWrite || takingHost) {
     if (incoming.screen) saved.screen = incoming.screen;

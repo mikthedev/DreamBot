@@ -44,6 +44,7 @@ export type NetHandle = {
   path: () => LinkPath;
   send: (msg: WireMsg) => void;
   broadcast: (msg: WireMsg) => void;
+  adopt: (ids: string[], self?: string) => void;
   close: () => void;
 };
 
@@ -119,7 +120,7 @@ export function startHostNet(opts: {
   onPeers: (peers: PeerInfo[]) => void;
 }): NetHandle {
   let stop = false;
-  const me = uniqueIds(opts.youId, opts.publicId, ...opts.aliases);
+  let me = uniqueIds(opts.youId, opts.publicId, ...opts.aliases);
   const publicId = opts.publicId || opts.youId;
   const pcs = new Map<string, RTCPeerConnection>();
   const chans = new Map<string, RTCDataChannel>();
@@ -312,6 +313,9 @@ export function startHostNet(opts: {
       if (!ids.length) relaySend("*", msg);
       else for (const id of ids) relaySend(id, msg);
     },
+    adopt: (ids) => {
+      me = uniqueIds(...me, ...ids);
+    },
     close: () => {
       stop = true;
       window.clearInterval(t);
@@ -339,7 +343,7 @@ export function startGuestNet(opts: {
   onLink: (info: PeerInfo & { warn: string | null; path: LinkPath }) => void;
 }): NetHandle {
   let stop = false;
-  const me = uniqueIds(opts.youId, ...opts.aliases);
+  let me = uniqueIds(opts.youId, ...opts.aliases);
   const publicId = opts.youId;
   let pc: RTCPeerConnection | null = null;
   let ch: RTCDataChannel | null = null;
@@ -514,6 +518,9 @@ export function startGuestNet(opts: {
       if (sendRaw(ch, msg)) return;
       relaySend(msg);
     },
+    adopt: (ids) => {
+      me = uniqueIds(...me, ...ids);
+    },
     close: () => {
       stop = true;
       window.clearInterval(t);
@@ -535,16 +542,12 @@ export function pingLabel(ms: number | null) {
   return `${Math.round(ms)}ms`;
 }
 
-export function linkCopy(role: "host" | "guest" | "solo", status: LinkKind, ping: number | null, linked: number, via: LinkPath = "down") {
-  if (role === "solo") return { title: "Local table", note: "Only this computer." };
-  if (role === "host") {
-    if (via === "direct") return { title: "You host", note: linked ? `${linked} linked` : "Waiting for players" };
-    if (via === "relay") return { title: "You host", note: linked ? `${linked} on this table` : "Waiting for players" };
-    return { title: "You host", note: "Match runs on this PC" };
-  }
-  if (status === "calling") return { title: "Linking", note: "Connecting to the host" };
-  if (status === "lost") return { title: "No link", note: "Keep this Activity open" };
-  if (via === "relay") return { title: ping != null ? `Host · ${pingLabel(ping)}` : "On host", note: "Match runs on their PC" };
-  if (status === "weak") return { title: `Direct · ${pingLabel(ping)}`, note: "Slow link" };
-  return { title: `Direct · ${pingLabel(ping)}`, note: "On the host's PC" };
+export function linkCopy(role: "host" | "guest" | "solo", status: LinkKind, _ping: number | null, linked: number, via: LinkPath = "down") {
+  if (role === "solo") return { title: "Local", note: "" };
+  if (role === "host") return { title: "Host", note: linked ? `${linked} in` : "" };
+  if (status === "calling") return { title: "Linking", note: "" };
+  if (status === "lost") return { title: "No link", note: "" };
+  if (via === "relay") return { title: "Host", note: "" };
+  if (status === "weak") return { title: "Slow", note: "" };
+  return { title: "Direct", note: "" };
 }

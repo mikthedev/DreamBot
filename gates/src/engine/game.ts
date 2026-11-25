@@ -241,10 +241,8 @@ function shops(state: Pick<State, "world">) {
   return storesOf(worldId(state));
 }
 
-function grantMove(state: State, p: Player, why: string) {
-  if (state.mode !== "moves" || p.moves >= MOVE_CAP) return;
-  p.moves += 1;
-  say(state, `${p.name} +1 move (${why}).`);
+function spark(_state: State, p: Player) {
+  p.sparks += 1;
 }
 
 export function hasSet(state: State, playerId: string, set: SetId) {
@@ -375,14 +373,6 @@ function drawCard(state: State, p: Player) {
   state.pendingCard = card;
   state.phase = "card";
   say(state, `${p.name} draws a Casino card — ${CARD_LABEL[card]}.`);
-}
-
-function spark(state: State, p: Player) {
-  p.sparks += 1;
-  if (p.sparks >= 4) {
-    p.sparks = 0;
-    grantMove(state, p, "pace");
-  }
 }
 
 function payCash(state: State, from: Player, to: Player | null, printed: number, stackSplit: boolean, set?: SetId) {
@@ -771,10 +761,8 @@ function resolveRentChoice(state: State, p: Player, pick: "note" | "move" | "sur
   if (pick === "move") {
     if (state.mode !== "moves" || p.moves < 1) return;
     p.moves -= 1;
-    grantMove(state, owner, "rent paid in a move");
-    spark(state, owner);
     state.rentDue = null;
-    say(state, `${p.name} paid ${owner.name} the rent with 1 move instead of cash.`);
+    say(state, `${p.name} settled ${owner.name}'s rent with 1 move. No cash, no extra move.`);
     afterRent(state, p);
     return;
   }
@@ -898,8 +886,7 @@ function resolveLanding(state: State, p: Player, id: string) {
     return;
   }
   if (id === "rest") {
-    if (state.mode === "moves") grantMove(state, p, "Jail");
-    else say(state, `${p.name} is just visiting Jail.`);
+    say(state, `${p.name} is just visiting Jail.`);
     restOnSpace(state, p);
     return;
   }

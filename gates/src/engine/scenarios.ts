@@ -29,7 +29,9 @@ export function runScenarios(): ScenarioResult[] {
     stayOnLandedTile(),
     outOfMovesFreesBoard(),
     marketLetsYouTradeFree(),
-    jailGrantsAMove(),
+    jailDoesNotGrantAMove(),
+    buyDoesNotGrantAMove(),
+    hostSnapKeepsGuestMoves(),
   ];
 }
 
@@ -114,7 +116,7 @@ function unpaidRentMustSettle(): ScenarioResult {
   }
   s = apply(s, { type: "rent", pick: "move" });
   const you = s.players[0];
-  const ok = s.phase === "extra" && you.moves === 7 && s.players[1].moves === START_MOVES + 1 && s.players[1].cash === nova;
+  const ok = s.phase === "extra" && you.moves === 7 && s.players[1].moves === START_MOVES && s.players[1].cash === nova;
   return {
     id: "rent-debt",
     name: "Unpaid rent waits for a choice",
@@ -229,7 +231,7 @@ function marketLetsYouTradeFree(): ScenarioResult {
   };
 }
 
-function jailGrantsAMove(): ScenarioResult {
+function jailDoesNotGrantAMove(): ScenarioResult {
   let s = createGame(four(), { seed: 3 });
   const you = s.players[0];
   you.stand = 22;
@@ -240,14 +242,54 @@ function jailGrantsAMove(): ScenarioResult {
   const moves = you.moves;
   s = apply(s, { type: "path", pick: "walk" });
   const landed = s.land === "rest" && s.players[0].stand === 24;
-  const gained = s.players[0].moves === moves + 1;
+  const same = s.players[0].moves === moves;
   const extra = s.phase === "extra";
-  const ok = landed && gained && extra;
+  const ok = landed && same && extra;
   return {
     id: "jail",
-    name: "Jail rest grants a move",
+    name: "Jail does not grant a move",
     ok,
-    detail: ok ? "Landed on Jail and gained +1 move" : `land ${s.land} stand ${s.players[0].stand} moves ${s.players[0].moves} phase ${s.phase}`,
+    detail: ok ? "Visiting Jail left moves unchanged" : `land ${s.land} stand ${s.players[0].stand} moves ${s.players[0].moves} phase ${s.phase}`,
+  };
+}
+
+function buyDoesNotGrantAMove(): ScenarioResult {
+  let s = createGame(four(), { seed: 3 });
+  s.players[0].cash = 5000;
+  s.players[0].moves = 10;
+  s.players[0].sparks = 3;
+  s.phase = "land";
+  s.land = "discord";
+  s = apply(s, { type: "land", pick: "buy" });
+  const you = s.players[0];
+  const ok = you.moves === 10 && s.companies.discord.owner === "you" && you.cash < 5000;
+  return {
+    id: "buy-moves",
+    name: "Buying a brand does not grant a move",
+    ok,
+    detail: ok ? "Cash down, moves unchanged" : `moves ${you.moves} cash ${you.cash} owner ${s.companies.discord.owner}`,
+  };
+}
+
+function hostSnapKeepsGuestMoves(): ScenarioResult {
+  let host = createGame(four(), { seed: 3 });
+  host.players[0].cash = 5000;
+  host.players[0].moves = 9;
+  host.players[1].moves = 12;
+  host.phase = "land";
+  host.land = "discord";
+  host = apply(host, { type: "land", pick: "buy" });
+  const guest = structuredClone(host);
+  const ok =
+    guest.players[0].moves === 9 &&
+    guest.players[1].moves === 12 &&
+    guest.companies.discord.owner === "you" &&
+    guest.players[0].cash === host.players[0].cash;
+  return {
+    id: "snap-moves",
+    name: "A guest snapshot of a buy keeps everyone's moves",
+    ok,
+    detail: ok ? "Host and guest agree after buy" : `host ${host.players[0].moves} guest ${guest.players[0].moves}/${guest.players[1].moves}`,
   };
 }
 

@@ -370,6 +370,19 @@ html[data-theme="lcd"] .brand-logo {
 html[data-theme="lcd"] .brand-logo.img-sil {
   filter: brightness(0) invert(1) drop-shadow(1px 1px 0 #041008);
 }
+html[data-theme="lcd"] .mark-plate .brand-logo,
+html[data-theme="lcd"] .stall-chip .brand-logo,
+html[data-theme="lcd"] .stall-deeds .brand-logo {
+  color: #141820;
+}
+html[data-theme="lcd"] .mark-plate .brand-logo.img-sil,
+html[data-theme="lcd"] .stall-chip .brand-logo.img-sil,
+html[data-theme="lcd"] .stall-deeds .brand-logo.img-sil {
+  filter: brightness(0);
+}
+html[data-theme="lcd"] .slip-co .brand-logo.img-sil {
+  filter: brightness(0) invert(1);
+}
 html[data-theme="lcd"] .join-code input::placeholder { color: #c5d9cc;}
 html[data-theme="lcd"] .join-code {
   box-shadow: 4px 4px 0 #041008;

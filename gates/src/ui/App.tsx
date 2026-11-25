@@ -47,6 +47,26 @@ function seatKey(list: SeatPerson[]) {
   return list.map((p) => `${p.id}:${p.name}:${p.avatar || ""}:${p.color || ""}:${p.look || ""}:${p.frame || ""}:${p.skin || ""}`).sort().join("|");
 }
 
+function keepMineLooks(incoming: SeatPerson[], mine: SeatPerson | undefined, youId: string) {
+  if (!mine) return incoming;
+  let found = false;
+  const next = incoming.map((p) => {
+    if (p.id !== youId && p.id !== mine.id) return p;
+    found = true;
+    return {
+      ...p,
+      id: youId,
+      name: mine.name || p.name,
+      avatar: mine.avatar || p.avatar,
+      color: mine.color,
+      look: mine.look,
+      frame: mine.frame,
+      skin: mine.skin,
+    };
+  });
+  return found ? next : [...next, mine];
+}
+
 function brands(s: State) {
   return companiesOf(s.world);
 }
@@ -764,7 +784,12 @@ export function App() {
       if (room.hostName) setTableHostName(String(room.hostName));
       if (room.code) setLobbyCode(String(room.code));
       if (Array.isArray(room.joined)) {
-        setJoined((cur) => (seatKey(cur) === seatKey(room.joined as SeatPerson[]) ? cur : (room.joined as SeatPerson[])));
+        const incoming = room.joined as SeatPerson[];
+        setJoined((cur) => {
+          const mine = cur.find((p) => p.id === youId);
+          const next = keepMineLooks(incoming, mine, youId);
+          return seatKey(cur) === seatKey(next) ? cur : next;
+        });
       }
       if (Array.isArray(room.spectators)) {
         setSpectators((cur) => (seatKey(cur) === seatKey(room.spectators as SeatPerson[]) ? cur : (room.spectators as SeatPerson[])));

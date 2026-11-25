@@ -130,6 +130,7 @@ let presenceStart = 0;
 let lastPresence: { details?: string; state?: string; party?: number } = {};
 let oauthClient = "";
 let oauthBusy = false;
+let oauthPrompted = false;
 const OAUTH_SCOPES = ["identify"];
 
 function presencePayload(withArt: boolean) {
@@ -208,25 +209,15 @@ async function authorizeCode(clientId: string, force = false) {
           prompt: "none",
           scope: OAUTH_SCOPES,
         }),
-        2500,
+        4000,
       );
-      if (silent.code) return silent.code;
+      return silent.code || "";
     } catch {
-      /* show the consent screen */
+      return "";
     }
   }
-  try {
-    const asked = await sdk.commands.authorize({
-      client_id: clientId,
-      response_type: "code",
-      state: "",
-      prompt: "consent",
-      scope: OAUTH_SCOPES,
-    });
-    if (asked.code) return asked.code;
-  } catch {
-    /* SDK may not take prompt=consent */
-  }
+  if (oauthPrompted) return "";
+  oauthPrompted = true;
   const asked = await sdk.commands.authorize({
     client_id: clientId,
     response_type: "code",
@@ -297,7 +288,7 @@ export async function bootDiscord() {
   disc.ready = true;
   disc.instanceId = sdk.instanceId || null;
   bump();
-  await tryOAuth(clientId).catch((err) => console.warn("DreamPoly Discord login", err));
+  await tryOAuth(clientId, false).catch((err) => console.warn("DreamPoly Discord login", err));
   await pullPeople();
   publishActivity();
   try {
@@ -305,24 +296,15 @@ export async function bootDiscord() {
       if (data.participants) applyPeople(data.participants);
     });
   } catch {
-    window.setInterval(() => void pullPeople(), 2000);
+    window.setInterval(() => void pullPeople(), 4000);
   }
-  window.setInterval(() => void pullPeople(), 2500);
-  let tries = 0;
-  window.setInterval(() => {
-    if (disc.authed || tries >= 8) return;
-    void (async () => {
-      if (!(await oauthReady())) return;
-      tries += 1;
-      await tryOAuth(clientId, tries > 1).catch(() => undefined);
-    })();
-  }, 4000);
 }
 
 export async function connectDiscord() {
   if (disc.authed) return;
   const clientId = oauthClient;
   if (!clientId) return;
+  oauthPrompted = false;
   await tryOAuth(clientId, true);
 }
 

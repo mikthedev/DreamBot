@@ -3759,17 +3759,22 @@ input {
   background: #fb7185;
   color: var(--ink-deep);
 }
-.wait-auth {
-  flex: none;
-  width: 100%;
-  margin: 0 0 4px;
-}
-.wait-auth small {
-  display: block;
-  opacity: 0.78;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+.wait-sign {
+  border: 0;
+  background: transparent;
+  color: var(--gold);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.wait-sign:hover {
+  color: var(--ink-hi, var(--gold));
 }
 .wait-booth {
   height: 100%;

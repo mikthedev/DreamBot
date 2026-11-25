@@ -366,15 +366,14 @@ export function Lobby({
           </div>
 
           <aside className="wait-me" aria-label="Wardrobe">
-            {needAuth ? (
-              <button type="button" className="stall-btn primary wait-auth" onClick={() => { sfx("click"); onConnect?.(); }}>
-                <b>Use my Discord</b>
-                <small>So the table can see your name</small>
-              </button>
-            ) : null}
             <WaitingBooth
-              you={joined.find((p) => p.id === youId) || { id: youId, name: "You", avatar: null, ...savedLooks() }}
+              you={{
+                ...(joined.find((p) => p.id === youId) || { id: youId, name: "You", avatar: null }),
+                ...savedLooks(),
+              }}
               onLooks={onLooks}
+              needAuth={needAuth}
+              onConnect={onConnect}
             />
           </aside>
         </div>
@@ -482,9 +481,13 @@ function SeatMark({ person, big, studio }: { person: SeatPerson; big?: boolean; 
 function WaitingBooth({
   you,
   onLooks,
+  needAuth,
+  onConnect,
 }: {
   you: SeatPerson;
   onLooks: (patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) => void;
+  needAuth?: boolean;
+  onConnect?: () => void;
 }) {
   const color = you.color || COLORS[0];
   const look = you.look === "icon" ? "icon" : "pawn";
@@ -497,8 +500,13 @@ function WaitingBooth({
       <div className="wait-me-head">
         <div>
           <p>Wardrobe</p>
-          <b>{you.name}</b>
+          <b>{you.name && you.name !== "You" ? you.name : "Your look"}</b>
         </div>
+        {needAuth ? (
+          <button type="button" className="wait-sign" onClick={() => { sfx("click"); onConnect?.(); }}>
+            Sign in
+          </button>
+        ) : null}
       </div>
       <button
         type="button"

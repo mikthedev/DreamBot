@@ -9,11 +9,8 @@ import {
   createGame,
   describePhase,
   fuelPrice,
-  hasSet,
   licenseNeeded,
-  ownerOfSet,
   noteBlock,
-  notesLeft,
   tradeFee,
   tradeProblem,
   type Action,
@@ -533,24 +530,6 @@ export function App() {
     setJoined((j) => [...j, person]);
     if (roomId) {
       void writeRoom(roomId, { sit: person }).then((saved) => {
-        if (!saved) return;
-        if (isHostRef.current) {
-          if (Array.isArray(saved.joined)) setJoined(saved.joined as SeatPerson[]);
-          if (Array.isArray(saved.spectators)) setSpectators(saved.spectators as SeatPerson[]);
-          return;
-        }
-        applyRoom(saved);
-      });
-    }
-  }
-
-  function spectateSeat(id: string) {
-    const person = joined.find((p) => p.id === id);
-    if (!person) return;
-    setJoined((j) => j.filter((p) => p.id !== id));
-    setSpectators((s) => (s.some((p) => p.id === id) ? s : [...s, person]));
-    if (roomId) {
-      void writeRoom(roomId, { watch: person }).then((saved) => {
         if (!saved) return;
         if (isHostRef.current) {
           if (Array.isArray(saved.joined)) setJoined(saved.joined as SeatPerson[]);
@@ -2187,7 +2166,7 @@ function samePay(a: State["lastPay"], b: State["lastPay"]) {
   return a.from === b.from && a.to === b.to && a.amount === b.amount && a.via === b.via && a.viaAmount === b.viaAmount;
 }
 
-function payShare(pay: State["lastPay"], meId: string | undefined) {
+function payShare(pay: State["lastPay"] | undefined, meId: string | undefined) {
   if (!pay || !meId) return null;
   if (pay.via === meId) return pay.viaAmount ?? 0;
   if (pay.to === meId) return pay.amount - (pay.viaAmount ?? 0);
@@ -2448,7 +2427,9 @@ function buttonsFor(
     if (state.mode !== "moves") {
       return [{ label: "Take cash", price: "$200", action: { type: "home", pick: "cash" }, needsYou: true }];
     }
-    const out = [{ label: "Take cash", price: "$200", action: { type: "home", pick: "cash" } as Action, needsYou: true }];
+    const out: { label: string; price?: string; action: Action; ghost?: boolean; needsYou: boolean }[] = [
+      { label: "Take cash", price: "$200", action: { type: "home", pick: "cash" }, needsYou: true },
+    ];
     if ((actor(state)?.moves ?? 0) < MOVE_CAP) {
       out.push({ label: "Take a move", price: "+1", action: { type: "home", pick: "move" }, ghost: true, needsYou: true });
     }

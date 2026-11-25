@@ -209,8 +209,6 @@ export function Lobby({
   onKick,
   onPlayBots,
   onLooks,
-  needAuth,
-  onConnect,
   people = [],
   link,
 }: {
@@ -230,8 +228,6 @@ export function Lobby({
   onKick: (id: string) => void;
   onPlayBots: () => void;
   onLooks: (patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) => void;
-  needAuth?: boolean;
-  onConnect?: () => void;
   people?: { id: string; name: string }[];
   link?: {
     role: "solo" | "host" | "guest";
@@ -318,17 +314,6 @@ export function Lobby({
           )}
         </header>
         {link ? <TableLinkStrip {...link} /> : null}
-        {needAuth ? (
-          <div className="wait-auth">
-            <div>
-              <b>Use your Discord</b>
-              <p>The table needs your account so you are not shown as a guest.</p>
-            </div>
-            <button type="button" className="stall-btn primary" onClick={() => { sfx("click"); onConnect?.(); }}>
-              <b>Sign in</b>
-            </button>
-          </div>
-        ) : null}
 
         <div className="wait-body">
           <div className="wait-stage">
@@ -399,8 +384,6 @@ export function Lobby({
                 ...savedLooks(),
               }}
               onLooks={onLooks}
-              needAuth={needAuth}
-              onConnect={onConnect}
             />
           </aside>
         </div>
@@ -556,13 +539,9 @@ function SeatMark({ person, big, studio }: { person: SeatPerson; big?: boolean; 
 function WaitingBooth({
   you,
   onLooks,
-  needAuth,
-  onConnect,
 }: {
   you: SeatPerson;
   onLooks: (patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) => void;
-  needAuth?: boolean;
-  onConnect?: () => void;
 }) {
   const color = you.color || COLORS[0];
   const look = you.look === "icon" ? "icon" : "pawn";
@@ -577,11 +556,6 @@ function WaitingBooth({
           <p>Wardrobe</p>
           <b>{you.name && you.name !== "You" ? you.name : "Your look"}</b>
         </div>
-        {needAuth ? (
-          <button type="button" className="wait-sign" onClick={() => { sfx("click"); onConnect?.(); }}>
-            Sign in
-          </button>
-        ) : null}
       </div>
       <button
         type="button"

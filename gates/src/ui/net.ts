@@ -1,10 +1,15 @@
-import { readRoom, writeRoom } from "./discord";
+import { isDiscordFrame, readRoom, writeRoom } from "./discord";
 import type { Action, Mode, State } from "../engine/game";
 import type { SeatPerson } from "./start";
 
 const ICE: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
 ];
+
+/** Discord's proxy does not support WebRTC — only HTTPS/WSS. */
+function allowRtc() {
+  return !isDiscordFrame();
+}
 
 export type LinkKind = "off" | "calling" | "linked" | "weak" | "lost";
 export type LinkPath = "down" | "direct" | "relay";
@@ -188,6 +193,12 @@ export function startHostNet(opts: {
   }
 
   async function takeOffer(from: string, sdp: string) {
+    if (!allowRtc()) {
+      remember(from);
+      relayUp = true;
+      emitPeers();
+      return;
+    }
     const old = pcs.get(from);
     if (old) old.close();
     const pc = new RTCPeerConnection({ iceServers: ICE });
@@ -410,6 +421,11 @@ export function startGuestNet(opts: {
   async function offer() {
     if (stop || offered) return;
     offered = true;
+    if (!allowRtc()) {
+      relayUp = true;
+      report("linked", null);
+      return;
+    }
     pc = new RTCPeerConnection({ iceServers: ICE });
     const channel = pc.createDataChannel("dream");
     bindChannel(channel);

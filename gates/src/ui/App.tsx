@@ -21,7 +21,8 @@ import {
 } from "../engine/game";
 import { BootCurtain, PocketDesk, usePocketDesk } from "./boot";
 import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, TableLinkStrip, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
-import { apiPath, connectDiscord, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
+import { apiPath, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
+import { guestShouldApply, isPlaceholderName, publicSeatName, sanitizeHostSnap } from "../engine/tableSync";
 import { linkCopy, pingLabel, startGuestNet, startHostNet, uniqueIds, type LinkKind, type LinkPath, type NetHandle, type PeerInfo, type SnapMsg, type WireMsg } from "./net";
 import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxHover, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
 import { THEME_KEY, THEMES, applyTheme, savedTheme, type ThemeId } from "./theme";
@@ -123,9 +124,14 @@ function retagPlay(play: State, from: string, to: string, sit: { id: string; nam
 function selfLook(user: { id?: string; name: string; avatar: string | null } | null | undefined, profile: Profile | null, wire = false) {
   const id = user?.id || profile?.id;
   return {
+    // Never publish "You" onto a shared table — Discord/other clients treat it as a real name.
     name: realName(user?.name, profile?.username) || (wire ? "Player" : "You"),
     avatar: user?.avatar || profile?.avatar || (id ? `${apiPath("/api/face")}?id=${encodeURIComponent(id)}` : null),
   };
+}
+
+function seatForWire(person: SeatPerson): SeatPerson {
+  return { ...person, name: publicSeatName(person.name) };
 }
 
 export function App() {
@@ -165,6 +171,7 @@ export function App() {
   const hostIdRef = useRef<string | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const appliedSeq = useRef(0);
+  const seenPending = useRef(new Set<string>());
   const netRef = useRef<NetHandle | null>(null);
   const hostMsgRef = useRef<(from: string, msg: WireMsg) => void>(() => {});
   const applySnapRef = useRef<(msg: SnapMsg) => void>(() => {});
@@ -179,7 +186,6 @@ export function App() {
   const [linkPeers, setLinkPeers] = useState<PeerInfo[]>([]);
   const [linkWarn, setLinkWarn] = useState<string | null>(null);
   const [linkPath, setLinkPath] = useState<LinkPath>("down");
-  const askedAuth = useRef(false);
   const roomId = tableId;
   const isHost = hostSeatRef.current === seatId || (!!hostId && (hostId === youId || hostId === seatId));
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) === "on");
@@ -363,9 +369,9 @@ export function App() {
       screen: patch.screen || screenRef.current,
       mode: patch.mode || modeRef.current,
       hostId: patch.hostId || hostIdRef.current || youId,
-      hostName: patch.hostName || selfLook(discord.user, profile).name,
+      hostName: publicSeatName(patch.hostName || selfLook(discord.user, profile, true).name, "Host"),
       code: patch.code || codeRef.current,
-      joined: patch.joined || joinedRef.current,
+      joined: (patch.joined || joinedRef.current).map(seatForWire),
       spectators: patch.spectators || spectatorsRef.current,
       state: patch.state !== undefined ? patch.state : stateRef.current,
     };
@@ -374,8 +380,37 @@ export function App() {
   function publishHost(patch: Record<string, unknown> = {}) {
     if (!isHostRef.current) return;
     if (patch.state) stateRef.current = patch.state as State;
-    const snap = takeSnap(patch as Partial<SnapMsg>);
+    const raw = takeSnap(patch as Partial<SnapMsg>);
+    const clean = sanitizeHostSnap({
+      hostId: raw.hostId,
+      hostName: raw.hostName,
+      screen: raw.screen,
+      mode: raw.mode,
+      joined: raw.joined,
+      spectators: raw.spectators,
+      state: raw.state,
+      seq: raw.seq,
+      code: raw.code,
+    });
+    const snap: SnapMsg = { ...raw, hostName: clean.hostName, joined: clean.joined };
+    // Discord Activities block WebRTC — the room API is the real sync path.
     netRef.current?.broadcast(snap);
+    const id = roomIdRef.current;
+    if (!id) return;
+    const host = String(snap.hostId || hostIdRef.current || youIdRef.current);
+    void writeRoom(id, {
+      asHost: true,
+      claimHost: host,
+      hostId: host,
+      wasHost: hostSeatRef.current || seatId,
+      hostName: snap.hostName,
+      screen: snap.screen,
+      mode: snap.mode,
+      joined: snap.joined,
+      spectators: snap.spectators || [],
+      state: snap.state,
+      seq: snap.seq,
+    });
   }
 
   function cheatTile(id: string) {
@@ -423,6 +458,9 @@ export function App() {
   function act(action: Action) {
     if (roomId && !isHostRef.current) {
       netRef.current?.send({ t: "action", action });
+      void writeRoom(roomId, {
+        pending: [{ from: youId, action }],
+      });
       return;
     }
     setState((s) => {
@@ -499,8 +537,9 @@ export function App() {
   }
 
   async function openHost(mode: Mode) {
-    const { name, avatar } = selfLook(discord.user, profile);
-    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
+    const look = selfLook(discord.user, profile, true);
+    const name = publicSeatName(look.name);
+    const you: SeatPerson = { id: youId, name, avatar: look.avatar, ...savedLooks() };
     const id = discord.instanceId || `poly-${Date.now().toString(36)}`;
     hostSeatRef.current = seatId;
     setPickedMode(mode);
@@ -509,6 +548,8 @@ export function App() {
     setHostId(youId);
     setTableHostName(name);
     setTableId(id);
+    roomSeq.current = 1;
+    appliedSeq.current = 1;
     const saved = await writeRoom(id, {
       asHost: true,
       claimHost: youId,
@@ -519,6 +560,7 @@ export function App() {
       mode,
       joined: [you],
       spectators: [],
+      state: null,
       seq: 1,
     });
     if (saved?.id) setTableId(String(saved.id));
@@ -607,7 +649,7 @@ export function App() {
     setLinkPeers([]);
     setLinkWarn(null);
     setLinkPath("down");
-    askedAuth.current = false;
+    seenPending.current.clear();
   }
 
   function leaveTable() {
@@ -887,13 +929,13 @@ export function App() {
         const live = discord.people.find((x) => x.id === p.id);
         if (!live?.name) return p;
         if (p.name === live.name && p.avatar === live.avatar) return p;
-        if (p.name && p.name !== "You" && p.name !== "Guest" && p.avatar) return p;
+        if (!isPlaceholderName(p.name) && p.avatar) return p;
         changed = true;
         return { ...p, name: live.name, avatar: live.avatar || p.avatar };
       });
       const named = new Set(next.map((p) => p.id));
       const leftover = discord.people.filter((p) => p.id !== youId && !named.has(p.id));
-      const blanks = next.filter((p) => !p.bot && p.id !== youId && (!p.name || p.name === "You" || p.name === "Guest" || p.name === "Player"));
+      const blanks = next.filter((p) => !p.bot && p.id !== youId && isPlaceholderName(p.name));
       if (leftover.length === 1 && blanks.length === 1) {
         const live = leftover[0];
         next = next.map((p) => (p.id === blanks[0].id ? { ...p, id: live.id, name: live.name, avatar: live.avatar || p.avatar } : p));
@@ -901,16 +943,12 @@ export function App() {
       }
       return changed ? next : j;
     });
-  }, [discord.people, youId]);
-
-  useEffect(() => {
-    if (askedAuth.current) return;
-    if (screen !== "lobby" && screen !== "play") return;
-    if (!discord.framed || !discord.ready || discord.authed) return;
-    if (/^\d{8,}$/.test(discord.user?.id || "")) return;
-    askedAuth.current = true;
-    void connectDiscord();
-  }, [screen, discord.framed, discord.ready, discord.authed]);
+    setTableHostName((cur) => {
+      if (!isPlaceholderName(cur)) return cur;
+      const live = discord.people.find((p) => p.id === hostId);
+      return live?.name || cur;
+    });
+  }, [discord.people, youId, hostId]);
 
   useEffect(() => {
     if (!isHost || !discord.people.length) return;
@@ -1121,10 +1159,84 @@ export function App() {
     window.clearTimeout(pushTimer.current);
     pushTimer.current = window.setTimeout(() => {
       lastHostPush.current = stamp;
-      netRef.current?.broadcast(takeSnap());
-    }, netRef.current?.path() === "direct" ? 80 : 400);
+      publishHost();
+    }, 350);
     return () => window.clearTimeout(pushTimer.current);
   }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state]);
+
+  // Guests poll the shared room — Discord docs: instanceId + server state, not WebRTC.
+  useEffect(() => {
+    if (!roomId || isHost) return;
+    let stop = false;
+    const tick = async () => {
+      const room = await readRoom(roomId);
+      if (stop || !room) return;
+      if (room.closed) {
+        resetLocalTable();
+        return;
+      }
+      if (
+        !guestShouldApply(
+          room as { seq?: number; screen?: string; state?: unknown },
+          appliedSeq.current,
+          screenRef.current,
+          !!stateRef.current,
+        )
+      ) {
+        return;
+      }
+      applySnapRef.current({
+        t: "snap",
+        seq: Number(room.seq || 0),
+        screen: (room.screen as SnapMsg["screen"]) || "lobby",
+        mode: (room.mode as Mode) || "moves",
+        hostId: String(room.hostId || ""),
+        hostName: publicSeatName(String(room.hostName || ""), "Host"),
+        code: String(room.code || ""),
+        joined: Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : [],
+        spectators: Array.isArray(room.spectators) ? (room.spectators as SeatPerson[]) : [],
+        state: (room.state as State) || null,
+      });
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 650);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [roomId, isHost]);
+
+  // Host applies guest moves that arrived over HTTPS when the peer pipe is dead.
+  useEffect(() => {
+    if (!roomId || !isHost) return;
+    let stop = false;
+    const tick = async () => {
+      const room = await readRoom(roomId);
+      if (stop || !room) return;
+      const pending = Array.isArray(room.pending) ? room.pending : [];
+      if (!pending.length) return;
+      const acks: string[] = [];
+      for (const item of pending) {
+        if (!item || typeof item !== "object") continue;
+        const row = item as { nid?: string; from?: string; action?: Action };
+        if (!row.action || !row.from) continue;
+        const key = String(row.nid || `${row.from}:${JSON.stringify(row.action)}`);
+        if (seenPending.current.has(key)) {
+          if (row.nid) acks.push(String(row.nid));
+          continue;
+        }
+        seenPending.current.add(key);
+        hostMsgRef.current(String(row.from), { t: "action", action: row.action });
+        if (row.nid) acks.push(String(row.nid));
+      }
+      if (acks.length) void writeRoom(roomId, { ack: acks });
+    };
+    const t = window.setInterval(() => void tick(), 700);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [roomId, isHost]);
 
   const primary = useMemo(
     () => (state ? buttonsFor(state, mine, !!diceSpin || walking) : []),
@@ -1251,9 +1363,15 @@ export function App() {
             youId={youId}
             hostId={hostId}
             hostName={
-              joined.find((p) => p.id === hostId)?.name ||
-              tableHostName ||
-              (isHost ? selfLook(discord.user, profile).name : "Host")
+              publicSeatName(
+                realName(
+                  joined.find((p) => p.id === hostId)?.name,
+                  discord.people.find((p) => p.id === hostId)?.name,
+                  tableHostName,
+                  isHost ? selfLook(discord.user, profile, true).name : "",
+                ),
+                "Host",
+              )
             }
             lobbyCode={lobbyCode}
             isHost={isHost}
@@ -1267,8 +1385,6 @@ export function App() {
             onKick={kickSeat}
             onPlayBots={playWithBots}
             onLooks={applyLooks}
-            needAuth={discord.framed && !discord.authed && !/^\d{8,}$/.test(discord.user?.id || "")}
-            onConnect={() => void connectDiscord()}
             people={discord.people}
             link={{
               role: linkRole,

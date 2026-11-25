@@ -294,7 +294,12 @@ export async function bootDiscord() {
   disc.ready = true;
   disc.instanceId = sdk.instanceId || null;
   bump();
+  // Discord already shows one authorize modal when needed — do that once here.
+  // No second in-game Sign in button; guests/hosts need a real id before the table.
   await tryOAuth(clientId, false).catch((err) => console.warn("DreamPoly Discord login", err));
+  if (!disc.user?.id) {
+    await tryOAuth(clientId, true).catch((err) => console.warn("DreamPoly Discord login", err));
+  }
   await pullPeople();
   publishActivity();
   try {

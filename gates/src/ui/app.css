@@ -20,7 +20,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
+html, body, #root { height: 100%; width: 100%; margin: 0; overflow: hidden; }
 body {
   background:
     radial-gradient(ellipse 80% 50% at 50% -10%, #2a2030 0%, transparent 50%),
@@ -30,12 +30,13 @@ body {
 
 .app {
   height: 100%;
+  width: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 12px 16px 14px;
-  gap: 10px;
+  max-width: none;
+  margin: 0;
+  padding: 8px 12px 10px;
+  gap: 8px;
 }
 
 .top {
@@ -184,9 +185,10 @@ body {
 .play {
   position: relative;
   min-height: 0;
+  height: 100%;
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 176px minmax(0, 1fr);
+  gap: 8px;
   align-items: stretch;
 }
 .roster {
@@ -323,11 +325,13 @@ body {
 
 .stage {
   min-height: 0;
+  height: 100%;
   display: grid;
   place-items: center;
 }
 .board {
-  width: min(100%, calc(100dvh - 128px));
+  width: min(100%, calc(100dvh - 64px));
+  max-width: 100%;
   max-height: 100%;
   aspect-ratio: 1;
   position: relative;
@@ -361,7 +365,7 @@ body {
   z-index: 8;
 }
 .table-core {
-  width: min(92%, 360px);
+  width: min(88%, 420px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2575,6 +2579,13 @@ input {
 .warn-card .leave-warn-act { margin-top: 14px; }
 .pixel-caution { image-rendering: pixelated; }
 .sheet.is-stall .overlay-close { pointer-events: auto; }
+@supports (width: 1cqh) {
+  .stage { container-type: size; }
+  .board {
+    width: min(100cqw, 100cqh);
+    height: min(100cqw, 100cqh);
+  }
+}
 @media (max-width: 760px) {
   .how-grid { grid-template-columns: 1fr; }
   .how-card { padding: 14px; }

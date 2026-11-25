@@ -59,12 +59,13 @@ const SFX_MUTE_KEY = "gates-sfx";
 const MUSIC_VOL_KEY = "gates-music-vol";
 const SFX_VOL_KEY = "gates-sfx-vol";
 const MUSIC_MAX = 0.2;
-const OPEN_HZ = 18000;
+const OPEN_HZ = 12000;
 const MUFFLE_HZ = 480;
 
 const cache = new Map<SfxName, HTMLAudioElement>();
 let hoverAt = 0;
 let playHoverAt = 0;
+let liveSfx = 0;
 type Kind = "menu" | "play";
 type BedGraph = {
   ver: 2;
@@ -107,12 +108,22 @@ function node(name: SfxName) {
 
 export function sfx(name: SfxName, rate = 1) {
   if (!sfxOn || sfxLevel <= 0) return;
+  if (liveSfx > 7) return;
   const src = node(name);
   const shot = src.cloneNode(true) as HTMLAudioElement;
   shot.volume = Math.min(1, VOL[name] * sfxLevel);
   shot.preservesPitch = false;
-  shot.playbackRate = Math.min(2, Math.max(0.65, rate));
-  void shot.play().catch(() => {});
+  shot.playbackRate = Math.min(1.35, Math.max(0.78, rate));
+  liveSfx += 1;
+  const done = () => {
+    liveSfx = Math.max(0, liveSfx - 1);
+    shot.removeEventListener("ended", done);
+    shot.removeEventListener("error", done);
+    shot.src = "";
+  };
+  shot.addEventListener("ended", done);
+  shot.addEventListener("error", done);
+  void shot.play().catch(done);
 }
 
 export function sfxHover() {
@@ -210,9 +221,9 @@ export function muffleMusic(on: boolean) {
   g.filter.frequency.cancelScheduledValues(now);
   g.musicGain.gain.cancelScheduledValues(now);
   g.filter.Q.cancelScheduledValues(now);
-  g.filter.Q.setTargetAtTime(on ? 1.4 : 0.7, now, 0.05);
-  g.filter.frequency.setTargetAtTime(on ? MUFFLE_HZ : OPEN_HZ, now, 0.05);
-  g.musicGain.gain.setTargetAtTime(targetGain(), now, 0.05);
+  g.filter.Q.setTargetAtTime(on ? 1.1 : 0.7, now, 0.12);
+  g.filter.frequency.setTargetAtTime(on ? MUFFLE_HZ : OPEN_HZ, now, 0.12);
+  g.musicGain.gain.setTargetAtTime(targetGain(), now, 0.08);
 }
 
 function targetGain() {
@@ -250,6 +261,9 @@ function ensureGraph(): BedGraph | null {
   filter.connect(ctx.destination);
   graph = { ver: 2, ctx, musicGain, filter, buffers: {}, loading: {}, voice: null, kind: null };
   w.__dreamBed = graph;
+  ctx.onstatechange = () => {
+    if (ctx.state === "running") keepBedAlive();
+  };
   return graph;
 }
 
@@ -268,7 +282,7 @@ function seamBuffer(ctx: AudioContext, src: AudioBuffer) {
   const start = firstLoud(ch0);
   const end = lastLoud(ch0) + 1;
   const span = Math.max(2, end - start);
-  const fade = Math.min(Math.floor(src.sampleRate * 0.18), Math.floor(span / 6));
+  const fade = Math.min(Math.floor(src.sampleRate * 0.04), Math.floor(span / 10));
   const outLen = Math.max(fade * 2, span - fade);
   const out = ctx.createBuffer(src.numberOfChannels, outLen, src.sampleRate);
   for (let c = 0; c < src.numberOfChannels; c++) {
@@ -278,7 +292,7 @@ function seamBuffer(ctx: AudioContext, src: AudioBuffer) {
     for (let i = 0; i < fade; i++) {
       const t = i / fade;
       const head = a[start + i] ?? 0;
-      const tail = a[start + outLen + i] ?? a[start + span - fade + i] ?? 0;
+      const tail = a[end - fade + i] ?? 0;
       b[i] = head * t + tail * (1 - t);
     }
   }
@@ -310,14 +324,20 @@ function applyMusicGain() {
 }
 
 function stopVoice(g: BedGraph) {
-  if (!g.voice) return;
+  const voice = g.voice;
+  g.voice = null;
+  if (!voice) return;
+  voice.onended = null;
   try {
-    g.voice.stop();
+    voice.stop();
   } catch {
     /* already ended */
   }
-  g.voice.disconnect();
-  g.voice = null;
+  try {
+    voice.disconnect();
+  } catch {
+    /* already gone */
+  }
 }
 
 function pauseAll() {
@@ -331,11 +351,19 @@ async function startTrack(kind: Kind) {
   const token = ++playGen;
   const g = ensureGraph();
   if (!g || !musicOn) return;
-  await g.ctx.resume().catch(() => {});
+  try {
+    await g.ctx.resume();
+  } catch {
+    /* autoplay / Discord hold */
+  }
   if (token !== playGen) return;
   if (g.kind === kind && g.voice) return;
   const buf = await decodeKind(kind);
   if (token !== playGen || !buf || !musicOn) return;
+  const now = g.ctx.currentTime;
+  g.musicGain.gain.cancelScheduledValues(now);
+  g.musicGain.gain.setValueAtTime(g.musicGain.gain.value, now);
+  g.musicGain.gain.linearRampToValueAtTime(0.0001, now + 0.04);
   stopVoice(g);
   const voice = g.ctx.createBufferSource();
   voice.buffer = buf;
@@ -343,11 +371,36 @@ async function startTrack(kind: Kind) {
   voice.loopStart = 0;
   voice.loopEnd = buf.duration;
   voice.connect(g.musicGain);
-  voice.start(0);
+  voice.onended = () => {
+    if (g.voice !== voice) return;
+    g.voice = null;
+    if (musicOn && g.kind) void startTrack(g.kind);
+  };
+  try {
+    voice.start();
+  } catch {
+    return;
+  }
   g.voice = voice;
   g.kind = kind;
+  const later = g.ctx.currentTime;
+  g.musicGain.gain.cancelScheduledValues(later);
+  g.musicGain.gain.setValueAtTime(0.0001, later);
+  g.musicGain.gain.linearRampToValueAtTime(targetGain(), later + 0.08);
+}
+
+function keepBedAlive() {
+  const g = graph;
+  if (!g || !musicOn || !track) return;
+  void g.ctx.resume().then(() => {
+    if (!g.voice) void startTrack(track ?? "menu");
+  }).catch(() => {});
 }
 
 if (typeof window !== "undefined") {
   window.addEventListener("pointerdown", armAudio, { once: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") keepBedAlive();
+  });
+  window.addEventListener("focus", keepBedAlive);
 }

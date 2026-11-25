@@ -714,21 +714,23 @@ export function App() {
   }, [discord.user, profile, seatId]);
 
   useEffect(() => {
-    if (!roomId || !discord.user?.id || discord.user.id === seatId) return;
-    if (!joined.some((p) => p.id === seatId)) return;
+    if (!roomId || !discord.user?.id) return;
+    if (!/^\d{8,}$/.test(discord.user.id)) return;
     const look = selfLook(discord.user, profile);
+    if (!look.name || look.name === "You") return;
+    const person = { id: discord.user.id, name: look.name, avatar: look.avatar, ...savedLooks() };
     void writeRoom(roomId, {
       leave: seatId,
-      sit: { id: discord.user.id, name: look.name, avatar: look.avatar, ...savedLooks() },
+      sit: person,
     }).then((saved) => {
       if (!saved) return;
       if (isHostRef.current) {
-        if (Array.isArray(saved.joined)) setJoined(saved.joined as SeatPerson[]);
+        if (Array.isArray(saved.joined)) setJoined(keepMineLooks(saved.joined as SeatPerson[], person, person.id));
         return;
       }
       applyRoom(saved);
     });
-  }, [discord.user, profile, roomId, seatId, joined]);
+  }, [discord.user, profile, roomId, seatId]);
 
   useEffect(() => {
     if (!discord.instanceId || screen !== "menu") {
@@ -755,6 +757,23 @@ export function App() {
       window.clearInterval(t);
     };
   }, [discord.instanceId, youId, screen]);
+
+  useEffect(() => {
+    if (!discord.people.length) return;
+    setJoined((j) => {
+      let changed = false;
+      const next = j.map((p) => {
+        if (p.bot) return p;
+        const live = discord.people.find((x) => x.id === p.id);
+        if (!live?.name) return p;
+        if (p.name === live.name && p.avatar === live.avatar) return p;
+        if (p.name && p.name !== "You" && p.name !== "Guest" && p.avatar) return p;
+        changed = true;
+        return { ...p, name: live.name, avatar: live.avatar || p.avatar };
+      });
+      return changed ? next : j;
+    });
+  }, [discord.people]);
 
   useEffect(() => {
     if (!isHost || !discord.people.length) return;
@@ -1028,6 +1047,7 @@ export function App() {
             onLooks={applyLooks}
             needAuth={discord.framed && !discord.authed}
             onConnect={() => void connectDiscord()}
+            people={discord.people}
           />
         ) : (
           <StartMenu

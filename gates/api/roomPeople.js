@@ -86,7 +86,9 @@ export function patchRoom(cur, incoming, id, code) {
     if (incoming.screen) saved.screen = incoming.screen;
     if (incoming.mode) saved.mode = incoming.mode;
     if (incoming.hostName) saved.hostName = incoming.hostName;
-    if ("state" in incoming) saved.state = incoming.state;
+    const incomingSeq = Number(incoming.seq || 0);
+    const curSeq = Number(cur.seq || 0);
+    if ("state" in incoming && (takingHost || incomingSeq >= curSeq)) saved.state = incoming.state;
     if (writer && /^\d{8,}$/.test(writer)) saved.hostId = writer;
     else if (incoming.claimHost && takingHost) saved.hostId = String(incoming.claimHost);
     if (takingHost) saved.closed = false;

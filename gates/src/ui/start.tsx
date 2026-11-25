@@ -211,6 +211,7 @@ export function Lobby({
   onLooks,
   needAuth,
   onConnect,
+  people = [],
 }: {
   mode: Mode;
   youId: string;
@@ -230,6 +231,7 @@ export function Lobby({
   onLooks: (patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) => void;
   needAuth?: boolean;
   onConnect?: () => void;
+  people?: { id: string; name: string }[];
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
   const inTable = joined.some((p) => p.id === youId);
@@ -318,6 +320,7 @@ export function Lobby({
                 canSit={!inTable}
                 onSit={onSit}
                 onKick={onKick}
+                people={people || []}
               />
             </div>
             {desk && isHost ? (
@@ -408,6 +411,14 @@ export function Lobby({
   );
 }
 
+function chairName(p: SeatPerson, youId: string, people: { id: string; name: string }[]) {
+  if (p.id === youId) return "You";
+  const live = people.find((x) => x.id === p.id)?.name?.trim();
+  const name = (live || p.name || "").trim();
+  if (name && name !== "You" && name !== "Guest") return name;
+  return live || "Player";
+}
+
 function ChairRow({
   chairs,
   start,
@@ -417,6 +428,7 @@ function ChairRow({
   canSit,
   onSit,
   onKick,
+  people,
 }: {
   chairs: (SeatPerson | null)[];
   start: number;
@@ -426,6 +438,7 @@ function ChairRow({
   canSit: boolean;
   onSit: () => void;
   onKick: (id: string) => void;
+  people: { id: string; name: string }[];
 }) {
   return (
     <ul className="wait-chairs">
@@ -441,7 +454,7 @@ function ChairRow({
             {p ? (
               <>
                 <SeatMark person={p} />
-                <span>{p.id === youId ? "You" : p.name && p.name !== "You" ? p.name : "Guest"}</span>
+                <span>{chairName(p, youId, people)}</span>
                 {p.id === hostId ? <em className="chair-tag host">host</em> : p.bot ? <em className="chair-tag">bot</em> : null}
                 {isHost && p.bot ? (
                   <button type="button" className="seat-kick" title={`Remove ${p.name}`} onClick={() => { sfx("back"); onKick(p.id); }}>

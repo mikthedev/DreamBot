@@ -305,7 +305,7 @@ export function App() {
           if (!s) return s;
           const action = botAction(s);
           const next = apply(s, action);
-          cuePlay(s, next, action);
+          cuePlay(s, next, action, youIdRef.current);
           stateRef.current = next;
           publishHost({ screen: "play", state: next });
           return next;
@@ -351,11 +351,21 @@ export function App() {
   }, [trading]);
 
   function overlayNames(play: State, seats: SeatPerson[] = joined) {
+    const used = new Set(play.players.map((p) => p.id));
+    const leftovers = discord.people.filter((x) => !used.has(x.id));
+    const blanks = play.players.filter((p) => !p.bot && isPlaceholderName(p.name));
     return {
       ...play,
       players: play.players.map((p) => {
         const seat = seats.find((x) => x.id === p.id);
-        const live = discord.people.find((x) => x.id === p.id);
+        let live = discord.people.find((x) => x.id === p.id);
+        // Host often starts as "Player"/seat-* before OAuth finishes — match the leftover participant.
+        if (!live && isPlaceholderName(p.name) && leftovers.length === 1 && blanks.length === 1 && blanks[0].id === p.id) {
+          live = leftovers[0];
+        }
+        if (!live && isPlaceholderName(p.name) && p.id === hostId) {
+          live = discord.people.find((x) => x.id === hostId) || leftovers[0];
+        }
         const name = realName(live?.name, seat?.name, p.name) || p.name;
         return { ...p, name, avatar: live?.avatar || seat?.avatar || p.avatar };
       }),
@@ -467,7 +477,7 @@ export function App() {
     setState((s) => {
       if (!s) return s;
       const next = apply(s, action);
-      cuePlay(s, next, action);
+      cuePlay(s, next, action, youId);
       stateRef.current = next;
       publishHost({ screen: "play", state: next });
       return next;
@@ -476,10 +486,7 @@ export function App() {
 
   function rollThen(action: Action) {
     if (diceSpin != null || !me) return;
-    if (roomId && !isHostRef.current) {
-      act(action);
-      return;
-    }
+    // Guests need the same dice FX as the host — they used to skip straight to a silent action.
     sfx("dice");
     setHeld({ cash: me.cash, moves: me.moves });
     let n = 0;
@@ -938,6 +945,7 @@ export function App() {
 
   useEffect(() => {
     if (!discord.people.length) return;
+    setState((cur) => (cur ? overlayNames(cur) : cur));
     setJoined((j) => {
       let changed = false;
       let next = j.map((p) => {
@@ -981,6 +989,7 @@ export function App() {
 
   function applySnap(msg: SnapMsg) {
     if (msg.seq && msg.seq < appliedSeq.current) return;
+    const prevSeq = appliedSeq.current;
     appliedSeq.current = Math.max(appliedSeq.current, msg.seq || 0);
     if (msg.hostId) setHostId(msg.hostId);
     if (msg.hostName) setTableHostName(msg.hostName);
@@ -997,6 +1006,8 @@ export function App() {
     if (Array.isArray(msg.spectators)) setSpectators(msg.spectators);
     if (msg.state) {
       const labeled = overlayNames(msg.state, msg.joined || joinedRef.current);
+      const prev = stateRef.current;
+      if (prev && (msg.seq || 0) >= prevSeq) cueFromSnap(prev, labeled, youIdRef.current);
       stateRef.current = labeled;
       setState(labeled);
     } else {
@@ -1046,7 +1057,7 @@ export function App() {
       const turn = actor(cur)?.id;
       if (msg.action.type !== "quit" && turn && from !== turn) return;
       const next = apply(cur, msg.action);
-      cuePlay(cur, next, msg.action);
+      cuePlay(cur, next, msg.action, youIdRef.current);
       stateRef.current = next;
       setState(next);
       publishHost({ state: next, screen: "play" });
@@ -1214,7 +1225,7 @@ export function App() {
       });
     };
     void tick();
-    const t = window.setInterval(() => void tick(), 650);
+    const t = window.setInterval(() => void tick(), 350);
     return () => {
       stop = true;
       window.clearInterval(t);
@@ -1259,7 +1270,7 @@ export function App() {
       if (acks.length) void writeRoom(roomId, { ack: acks });
     };
     void tick();
-    const t = window.setInterval(() => void tick(), 700);
+    const t = window.setInterval(() => void tick(), 350);
     return () => {
       stop = true;
       window.clearInterval(t);
@@ -2691,10 +2702,10 @@ function FateBanner({ fate, onDismiss, onLeave }: { fate: Fate; onDismiss: () =>
   );
 }
 
-function cuePlay(prev: State, next: State, action: Action) {
-  const you = prev.players[0]?.id;
-  const mine = actor(prev)?.id === you;
-  if (action.type === "path" && actor(prev)?.bot) sfx("dice");
+function cuePlay(prev: State, next: State, action: Action, youId?: string) {
+  const you = youId || prev.players[0]?.id;
+  const mine = !!you && actor(prev)?.id === you;
+  if (action.type === "path") sfx("dice");
   if (action.type === "build") sfx("upgrade");
   if (action.type === "fuel" || action.type === "license" || (action.type === "store" && action.pick === "buy") || (action.type === "land" && action.pick === "buy")) {
     sfx("pay");
@@ -2711,6 +2722,26 @@ function cuePlay(prev: State, next: State, action: Action) {
     else if (actor(prev)?.id === you) sfx("pay");
   }
   if (next.players.some((p) => p.out && !prev.players.find((x) => x.id === p.id)?.out)) sfx("death");
+}
+
+/** Guests only see snaps — recreate the cues the host already heard when applying them. */
+function cueFromSnap(prev: State, next: State, youId: string) {
+  // Skip dice if this client already spun locally for their own roll.
+  if (prev.rollTick !== next.rollTick && next.lastRoll && actor(prev)?.id !== youId) sfx("dice");
+  if (!samePay(prev.lastPay, next.lastPay) && next.lastPay) {
+    if (next.lastPay.to === youId || next.lastPay.via === youId) sfx("received");
+    else sfx("pay");
+  }
+  const prevOwn = Object.entries(prev.companies).filter(([, o]) => o.owner).length;
+  const nextOwn = Object.entries(next.companies).filter(([, o]) => o.owner).length;
+  if (nextOwn > prevOwn) sfx("pay");
+  if (nextOwn < prevOwn) sfx("received");
+  if (next.players.some((p) => p.out && !prev.players.find((x) => x.id === p.id)?.out)) sfx("death");
+  if (next.log[0] && next.log[0] !== prev.log[0]) {
+    const line = next.log[0].toLowerCase();
+    if (line.includes("bank note") || line.includes("repays") || line.includes("took")) sfx("received");
+    if (line.includes("hotel") || line.includes("house") || line.includes("upgrade")) sfx("upgrade");
+  }
 }
 
 function parseLog(line: string) {

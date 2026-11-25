@@ -736,7 +736,10 @@ function settleNote(state: State, p: Player) {
     state.companies[cheapest.id] = { owner: null, level: 0 };
     p.notesOpen -= 1;
     p.note = p.notesOpen > 0;
-    say(state, `${p.name} loses ${cheapest.name} to a bank note.`);
+    say(
+      state,
+      `${p.name} could not repay a bank note ($${NOTE_REPAY}), so the bank took ${cheapest.name} instead.`,
+    );
   } else {
     p.cash = 0;
     p.notesOpen -= 1;

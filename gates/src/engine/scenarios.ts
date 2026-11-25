@@ -1,5 +1,5 @@
 import { playUntil } from "./bot";
-import { COMPANIES, STACK_CUT } from "./data";
+import { COMPANIES, STACK_CUT, START_MOVES } from "./data";
 import { apply, createGame, fuelPrice, type State } from "./game";
 
 export type ScenarioResult = {
@@ -22,11 +22,14 @@ export function runScenarios(): ScenarioResult[] {
   return [
     fullBotTable(),
     homeIsAChoice(),
+    passGoIsAChoice(),
+    unpaidRentMustSettle(),
     fuelGetsExpensive(),
     cloudPaysChips(),
     stayOnLandedTile(),
     outOfMovesFreesBoard(),
     marketLetsYouTradeFree(),
+    jailGrantsAMove(),
   ];
 }
 
@@ -66,6 +69,58 @@ function homeIsAChoice(): ScenarioResult {
   s = apply(s, { type: "home", pick: "move" });
   const ok = s.players[0].moves === moves + 1 && s.players[0].cash === before;
   return { id: "home", name: "Home is cash or a move", ok, detail: ok ? "Took a move, kept the cash" : "Home choice did not convert" };
+}
+
+function passGoIsAChoice(): ScenarioResult {
+  let s = createGame(four(), { seed: 9 });
+  const you = s.players[0];
+  you.stand = 30;
+  you.leftHome = true;
+  s.phase = "path";
+  s.forcedRoll = [2, 2];
+  const cash = you.cash;
+  const moves = you.moves;
+  s = apply(s, { type: "path", pick: "walk" });
+  if (s.phase !== "home" || s.players[0].cash !== cash || s.players[0].moves !== moves) {
+    return {
+      id: "pass-go",
+      name: "Passing GO waits for a choice",
+      ok: false,
+      detail: `phase ${s.phase} cash ${s.players[0].cash} moves ${s.players[0].moves}`,
+    };
+  }
+  s = apply(s, { type: "home", pick: "cash" });
+  const ok = s.players[0].cash === cash + 200 && s.players[0].moves === moves && s.players[0].stand === 2;
+  return {
+    id: "pass-go",
+    name: "Passing GO waits for a choice",
+    ok,
+    detail: ok ? "Cash only after picking $200" : `cash ${s.players[0].cash} stand ${s.players[0].stand}`,
+  };
+}
+
+function unpaidRentMustSettle(): ScenarioResult {
+  let s = createGame(four(), { seed: 11 });
+  s.players[0].stand = 1;
+  s.players[0].cash = 20;
+  s.players[0].moves = 8;
+  s.phase = "path";
+  s.forcedRoll = [1, 1];
+  s.companies.instagram = { owner: "nova", level: 0 };
+  const nova = s.players[1].cash;
+  s = apply(s, { type: "path", pick: "walk" });
+  if (s.phase !== "rent" || s.players[1].cash !== nova) {
+    return { id: "rent-debt", name: "Unpaid rent waits for a choice", ok: false, detail: `phase ${s.phase}` };
+  }
+  s = apply(s, { type: "rent", pick: "move" });
+  const you = s.players[0];
+  const ok = s.phase === "extra" && you.moves === 7 && s.players[1].moves === START_MOVES + 1 && s.players[1].cash === nova;
+  return {
+    id: "rent-debt",
+    name: "Unpaid rent waits for a choice",
+    ok,
+    detail: ok ? "Paid the rent with a move" : `phase ${s.phase} moves ${you.moves} nova ${s.players[1].moves}`,
+  };
 }
 
 function fuelGetsExpensive(): ScenarioResult {
@@ -171,6 +226,28 @@ function marketLetsYouTradeFree(): ScenarioResult {
     name: "Market lets you trade free",
     ok,
     detail: ok ? "Swapped Discord for Uber with no desk fee" : `uber ${s.companies.uber.owner} cash ${you.cash}`,
+  };
+}
+
+function jailGrantsAMove(): ScenarioResult {
+  let s = createGame(four(), { seed: 3 });
+  const you = s.players[0];
+  you.stand = 22;
+  you.leftHome = true;
+  you.moves = 8;
+  s.phase = "path";
+  s.forcedRoll = [1, 1];
+  const moves = you.moves;
+  s = apply(s, { type: "path", pick: "walk" });
+  const landed = s.land === "rest" && s.players[0].stand === 24;
+  const gained = s.players[0].moves === moves + 1;
+  const extra = s.phase === "extra";
+  const ok = landed && gained && extra;
+  return {
+    id: "jail",
+    name: "Jail rest grants a move",
+    ok,
+    detail: ok ? "Landed on Jail and gained +1 move" : `land ${s.land} stand ${s.players[0].stand} moves ${s.players[0].moves} phase ${s.phase}`,
   };
 }
 

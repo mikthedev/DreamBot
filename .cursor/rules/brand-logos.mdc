@@ -1,0 +1,22 @@
+---
+description: Board brand marks stay readable across themes
+alwaysApply: true
+---
+
+# Brand logos
+
+Tiles change with the visual theme: **8-bit** and **Classic** deed tiles are cream, **LCD** tiles are dark green. **Store tiles** on 8-bit (and LCD) are dark — logos there must be **light / cream**, not `--ink`. Classic stores stay cream, so logos stay dark.
+
+Do **not**:
+
+- Wrap logos in squares, plates, or bordered chips
+- Use Google favicons or other raster icons
+- Bake a fill that only works on one theme
+- Use two-letter initials as a stand-in. Every company has a real mark.
+
+Do:
+
+- One **24×24 SVG** per brand (`viewBox="0 0 24 24"`), same CSS size as the others
+- `fill="currentColor"` so deeds use theme `--ink` (dark on cream, light on LCD)
+- Store tiles: `color: var(--ink-hi)` on 8-bit/LCD; invert local silhouettes
+- Simple Icons first; else Icons8 brand marks (`https://icons8.com/`) as 256px PNGs at the same 24×24 CSS size; else a real SVG silhouette; never two-letter initials

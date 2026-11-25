@@ -223,7 +223,9 @@ export function CornerArt({ id }: { id: string }) {
   if (id === "rest") {
     return (
       <svg className="corner-art" viewBox="0 0 80 80" aria-hidden>
-        <path stroke="#1b140c" strokeWidth="3.2" strokeLinecap="round" d="M18 22h44M24 22v36M36 22v36M48 22v36M60 22v36M18 58h44" />
+        <rect x="16" y="18" width="48" height="44" rx="3" fill="#2a2430" stroke="#e8dcc8" strokeWidth="3" />
+        <path stroke="#f3eadf" strokeWidth="3.4" strokeLinecap="round" d="M24 22v36M36 22v36M48 22v36M60 22v36" />
+        <path stroke="#c9b48a" strokeWidth="3.4" strokeLinecap="round" d="M16 22h48M16 58h48" />
       </svg>
     );
   }

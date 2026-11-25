@@ -30,11 +30,45 @@
         0%, 100% { transform: translateY(0); }
         50% { transform: translateY(-6px); }
       }
+      html[data-theme="lcd"], html[data-theme="lcd"] body, html[data-theme="lcd"] #root {
+        background: #10281c; color: #f4fff8;
+      }
+      html[data-theme="lcd"] #boot { background: #10281c; color: #f4fff8; }
+      html[data-theme="lcd"] #boot b { color: #f4fff8; text-shadow: none; }
+      html[data-theme="lcd"] #boot small { color: #d7ead4; }
+      html[data-theme="lcd"] #boot i { background: #0f380f; box-shadow: 3px 3px 0 #143014; }
+      html[data-theme="classic"], html[data-theme="classic"] body, html[data-theme="classic"] #root {
+        background: #0c5a30; color: #fff8e7;
+      }
+      html[data-theme="classic"] #boot {
+        background: radial-gradient(ellipse at 50% 40%, #1f8f49, #0c5a30 60%, #08341c);
+      }
+      html[data-theme="classic"] #boot b {
+        font-family: Georgia, "Iowan Old Style", serif;
+        color: #fff8e7;
+        text-shadow: 0 2px 0 #08341c;
+      }
+      html[data-theme="classic"] #boot small { color: #efe6c9; }
+      html[data-theme="classic"] #boot i {
+        background: #fffaf0;
+        box-shadow: 0 6px 12px rgba(0,0,0,.25);
+        border-radius: 4px;
+      }
     </style>
     <script>
       if (/\.discordsays\.com$/.test(location.hostname) || /(?:\?|&)frame_id=/.test(location.search) || window.parent !== window) {
         document.documentElement.classList.add("in-discord");
       }
+      (function () {
+        var id = "bit";
+        try {
+          var saved = localStorage.getItem("gates-theme");
+          if (saved === "lcd" || saved === "classic") id = saved;
+        } catch (e) {}
+        document.documentElement.dataset.theme = id;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", id === "lcd" ? "#10281c" : id === "classic" ? "#0c5a30" : "#141018");
+      })();
     </script>
   </head>
   <body>

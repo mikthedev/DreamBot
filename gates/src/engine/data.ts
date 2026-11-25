@@ -15,7 +15,10 @@ export type Company = {
   die: 1 | 2 | 3;
   price: number;
   rent: [number, number, number];
+  logo?: string;
 };
+
+export type WorldId = "tech" | "food" | "fashion" | "sports";
 
 export const SETS: { id: SetId; label: string; alley: number; color: string }[] = [
   { id: "social", label: "Social", alley: 20, color: "#5865f2" },
@@ -140,17 +143,221 @@ export const CARD_LABEL: Record<CardId, string> = {
   rezone: "Rezone — $40 from the bank",
 };
 
-export function setOf(id: SetId) {
-  return SETS.find((s) => s.id === id)!;
+export type World = {
+  id: WorldId;
+  label: string;
+  sets: typeof SETS;
+  companies: Company[];
+  stores: { id: StoreId; name: string; logo?: string }[];
+};
+
+function paint(rows: Record<string, [string, string]>): Company[] {
+  return COMPANIES.map((c) => {
+    const hit = rows[c.id];
+    return hit ? { ...c, name: hit[0], logo: hit[1] } : { ...c, logo: c.id };
+  });
 }
 
-export function companiesIn(set: SetId) {
-  return COMPANIES.filter((co) => co.set === set);
+const TECH_STORES = [...STORES];
+
+export const WORLDS: Record<WorldId, World> = {
+  tech: {
+    id: "tech",
+    label: "Tech",
+    sets: SETS,
+    companies: COMPANIES.map((c) => ({ ...c, logo: c.id })),
+    stores: TECH_STORES.map((s) => ({ ...s, logo: s.id })),
+  },
+  food: {
+    id: "food",
+    label: "Food",
+    sets: [
+      { id: "social", label: "Coffee", alley: 20, color: "#6f4e37" },
+      { id: "music", label: "Burgers", alley: 20, color: "#d4a017" },
+      { id: "watch", label: "Pizza", alley: 40, color: "#c0392b" },
+      { id: "cloud", label: "Distributors", alley: 40, color: "#4a7c59" },
+      { id: "ai", label: "Soda", alley: 40, color: "#e11d48" },
+      { id: "ride", label: "Delivery", alley: 60, color: "#0ea5e9" },
+      { id: "chips", label: "Farms", alley: 60, color: "#3f6212" },
+      { id: "giants", label: "Food giants", alley: 60, color: "#1e3a5f" },
+    ],
+    companies: paint({
+      discord: ["Starbucks", "starbucks"],
+      reddit: ["Dunkin'", "dunkin"],
+      instagram: ["Tim Hortons", "timhortons"],
+      spotify: ["McDonald's", "mcdonalds"],
+      applemusic: ["Burger King", "burgerking"],
+      soundcloud: ["Wendy's", "wendys"],
+      youtube: ["Domino's", "dominos"],
+      netflix: ["Pizza Hut", "pizzahut"],
+      disney: ["Papa John's", "papajohns"],
+      aws: ["Sysco", "sysco"],
+      azure: ["US Foods", "usfoods"],
+      gcloud: ["Gordon Food", "gordonfood"],
+      openai: ["Coca-Cola", "cocacola"],
+      anthropic: ["Pepsi", "pepsi"],
+      xai: ["Red Bull", "redbull"],
+      uber: ["DoorDash", "doordash"],
+      tesla: ["Uber Eats", "ubereats"],
+      waymo: ["Instacart", "instacart"],
+      intel: ["Cargill", "cargill"],
+      amd: ["Tyson", "tyson"],
+      nvidia: ["John Deere", "johndeere"],
+      samsung: ["Nestlé", "nestle"],
+      microsoft: ["Unilever", "unilever"],
+      apple: ["PepsiCo", "pepsico"],
+    }),
+    stores: [
+      { id: "app", name: "7-Eleven", logo: "seveneleven" },
+      { id: "play", name: "Costco", logo: "costco" },
+      { id: "steam", name: "Whole Foods", logo: "wholefoods" },
+      { id: "epic", name: "Target", logo: "target" },
+    ],
+  },
+  fashion: {
+    id: "fashion",
+    label: "Fashion",
+    sets: [
+      { id: "social", label: "Fast fashion", alley: 20, color: "#111827" },
+      { id: "music", label: "Sneakers", alley: 20, color: "#1a1a1a" },
+      { id: "watch", label: "Denim", alley: 40, color: "#1e3a5f" },
+      { id: "cloud", label: "Platforms", alley: 40, color: "#7c3aed" },
+      { id: "ai", label: "Beauty", alley: 40, color: "#db2777" },
+      { id: "ride", label: "Shipping", alley: 60, color: "#b45309" },
+      { id: "chips", label: "Materials", alley: 60, color: "#57534e" },
+      { id: "giants", label: "Luxury", alley: 60, color: "#854d0e" },
+    ],
+    companies: paint({
+      discord: ["Zara", "zara"],
+      reddit: ["H&M", "hm"],
+      instagram: ["Uniqlo", "uniqlo"],
+      spotify: ["Nike", "nike"],
+      applemusic: ["Adidas", "adidas"],
+      soundcloud: ["Puma", "puma"],
+      youtube: ["Levi's", "levis"],
+      netflix: ["Gap", "gap"],
+      disney: ["Carhartt", "carhartt"],
+      aws: ["Shopify", "shopify"],
+      azure: ["Zalando", "zalando"],
+      gcloud: ["Farfetch", "farfetch"],
+      openai: ["Sephora", "sephora"],
+      anthropic: ["Ulta", "ulta"],
+      xai: ["MAC", "mac"],
+      uber: ["FedEx", "fedex"],
+      tesla: ["UPS", "ups"],
+      waymo: ["DHL", "dhl"],
+      intel: ["DuPont", "dupont"],
+      amd: ["3M", "threem"],
+      nvidia: ["Gore-Tex", "goretex"],
+      samsung: ["LVMH", "lvmh"],
+      microsoft: ["Kering", "kering"],
+      apple: ["Richemont", "richemont"],
+    }),
+    stores: [
+      { id: "app", name: "Nordstrom", logo: "nordstrom" },
+      { id: "play", name: "Macy's", logo: "macys" },
+      { id: "steam", name: "TK Maxx", logo: "tkmaxx" },
+      { id: "epic", name: "Foot Locker", logo: "footlocker" },
+    ],
+  },
+  sports: {
+    id: "sports",
+    label: "Media Sports",
+    sets: [
+      { id: "social", label: "Merch", alley: 20, color: "#b91c1c" },
+      { id: "music", label: "Balls", alley: 20, color: "#ea580c" },
+      { id: "watch", label: "Leagues", alley: 40, color: "#1d4ed8" },
+      { id: "cloud", label: "Broadcast", alley: 40, color: "#0f766e" },
+      { id: "ai", label: "Games", alley: 40, color: "#7c3aed" },
+      { id: "ride", label: "Venues", alley: 60, color: "#334155" },
+      { id: "chips", label: "Gear", alley: 60, color: "#111827" },
+      { id: "giants", label: "Media", alley: 60, color: "#1e3a8a" },
+    ],
+    companies: paint({
+      discord: ["Fanatics", "fanatics"],
+      reddit: ["Lids", "lids"],
+      instagram: ["Mitchell & Ness", "mitchellness"],
+      spotify: ["Wilson", "wilson"],
+      applemusic: ["Spalding", "spalding"],
+      soundcloud: ["Rawlings", "rawlings"],
+      youtube: ["NBA", "nba"],
+      netflix: ["FIFA", "fifa"],
+      disney: ["F1", "f1"],
+      aws: ["ESPN", "espn"],
+      azure: ["Sky Sports", "skysports"],
+      gcloud: ["DAZN", "dazn"],
+      openai: ["EA Sports", "ea"],
+      anthropic: ["2K", "twok"],
+      xai: ["Konami", "konami"],
+      uber: ["MSG", "msg"],
+      tesla: ["Wembley", "wembley"],
+      waymo: ["SoFi", "sofi"],
+      intel: ["Nike", "nike"],
+      amd: ["Adidas", "adidas"],
+      nvidia: ["Puma", "puma"],
+      samsung: ["Disney", "disney"],
+      microsoft: ["Warner Bros", "warnerbros"],
+      apple: ["NBC", "nbc"],
+    }),
+    stores: [
+      { id: "app", name: "Ticketmaster", logo: "ticketmaster" },
+      { id: "play", name: "StubHub", logo: "stubhub" },
+      { id: "steam", name: "Foot Locker", logo: "footlocker" },
+      { id: "epic", name: "Nike Store", logo: "nike" },
+    ],
+  },
+};
+
+export const WORLD_IDS: WorldId[] = ["tech", "food", "fashion", "sports"];
+
+export function worldOf(id?: WorldId | null): World {
+  return WORLDS[id && id in WORLDS ? id : "tech"];
 }
 
-export const MOVE_CAP = 14;
-export const START_CASH = 900;
-export const START_MOVES = 10;
+export function pickWorld(seed: number): WorldId {
+  return WORLD_IDS[Math.abs(Math.floor(seed)) % WORLD_IDS.length];
+}
+
+export function companiesOf(world?: WorldId | null) {
+  return worldOf(world).companies;
+}
+
+export function setsOf(world?: WorldId | null) {
+  return worldOf(world).sets;
+}
+
+export function storesOf(world?: WorldId | null) {
+  return worldOf(world).stores;
+}
+
+export function standsOf(world?: WorldId | null) {
+  const shops = storesOf(world);
+  return STANDS.map((s) => {
+    if (!s.store) return s;
+    const name = shops.find((x) => x.id === s.store)?.name;
+    return name ? { ...s, label: name } : s;
+  });
+}
+
+export function setOf(id: SetId, world?: WorldId | null) {
+  return setsOf(world).find((s) => s.id === id) ?? SETS.find((s) => s.id === id)!;
+}
+
+export function companiesIn(set: SetId, world?: WorldId | null) {
+  return companiesOf(world).filter((co) => co.set === set);
+}
+
+export function brandLogoId(c: { id: string; logo?: string }) {
+  return c.logo || c.id;
+}
+
+export const MOVE_CAP = 28;
+export const START_CASH = 1150;
+export const START_MOVES = 15;
+export const TRADE_FEE = 50;
+export const NOTE_MAX = 5;
+export const NOTE_PAY = 300;
+export const NOTE_REPAY = 360;
 export const STACK_CUT = 3;
 export const HARD_STOP_ROUNDS = 24;
 export const MIN_PLAYERS = 3;

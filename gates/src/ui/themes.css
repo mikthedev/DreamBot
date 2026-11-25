@@ -1,0 +1,978 @@
+/* Theme picker. Sits in a sound-desk style panel. */
+
+.theme-desk { width: min(240px, calc(100vw - 32px)); }
+.theme-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.theme-picks button.theme-pip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--panel-void);
+  color: var(--ink-hi);
+  border: 2px solid var(--trim);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--hard);
+  font-family: Outfit, "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.theme-picks button.theme-pip svg { flex: none; }
+.theme-picks button.theme-pip:hover:not(:disabled) {
+  background: var(--panel-warm);
+  color: var(--ink-hi);
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--hard);
+}
+.theme-picks button.theme-pip.on,
+.theme-picks button.theme-pip.on:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--ink);
+  border-color: var(--ink-deep);
+}
+html[data-theme="lcd"] .theme-picks button.theme-pip.on,
+html[data-theme="lcd"] .theme-picks button.theme-pip.on:hover:not(:disabled) {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+html[data-theme="classic"] .theme-picks button.theme-pip.on,
+html[data-theme="classic"] .theme-picks button.theme-pip.on:hover:not(:disabled) {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #1a120c;
+}
+
+.deed-band { display: none; }
+
+/* —— LCD: Game Boy shell, four-green screen —— */
+
+html[data-theme="lcd"] {
+  color-scheme: dark;
+  --bg-deep: #07140e;
+  --bg: #10281c;
+  --panel: #163528;
+  --panel-2: #1c4032;
+  --line: #d7ead4;
+  --text: #f4fff8;
+  --muted: #c5d9cc;
+  --faint: #8fbf9a;
+  --accent: #d7ead4;
+  --accent-dim: #8fbf9a;
+  --action: #1e4a36;
+  --action-hover: #276048;
+  --on-action: #f4fff8;
+  --arena: #0c1f16;
+  --tile-face: #1e4a36;
+  --tile-edge: #24543c;
+  --ink: #f4fff8;
+  --ink-hi: #f4fff8;
+  --ink-soft: #d7ead4;
+  --ink-dim: #b7cfc0;
+  --ink-deep: #041008;
+  --hard: #041008;
+  --trim: #d7ead4;
+  --gold: #7da884;
+  --gold-hi: #f4fff8;
+  --paper: #1c4032;
+  --panel-warm: #1c4032;
+  --panel-deep: #122c20;
+  --panel-void: #10281c;
+  --panel-hot: #1a3d2c;
+  --panel-night: #122c20;
+  --panel-shade: #163528;
+  --panel-abyss: #0e2418;
+  --panel-dusk: #143026;
+  --panel-soil: #0e2418;
+  --display: "Pixelify Sans", Outfit, sans-serif;
+  --mono: "Press Start 2P", "Pixelify Sans", monospace;
+}
+
+html[data-theme="lcd"] body {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.18), transparent 28%),
+    linear-gradient(165deg, #163528 0%, #0c1f16 46%, #07140e 100%);
+  color: #f4fff8;
+}
+html[data-theme="lcd"] .app {
+  background: #10281c;
+  border: 14px solid #0c1f16;
+  border-radius: 22px;
+  box-shadow:
+    inset 0 0 0 3px #d7ead4,
+    0 0 0 5px #07140e;
+}
+html.in-discord[data-theme="lcd"] .app {
+  border-width: 8px;
+  border-radius: 14px;
+}
+html[data-theme="lcd"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(7, 20, 12, 0.06) 0 1px,
+    transparent 1px 4px
+  );
+}
+html[data-theme="lcd"] h1,
+html[data-theme="lcd"] h2,
+html[data-theme="lcd"] .brand,
+html[data-theme="lcd"] .app.pregame .brand,
+html[data-theme="lcd"] .logo,
+html[data-theme="lcd"] .till-readout b,
+html[data-theme="lcd"] .boot-title,
+html[data-theme="lcd"] .mix-head h2,
+html[data-theme="lcd"] .stall-head h2,
+html[data-theme="lcd"] .wait-title h1,
+html[data-theme="lcd"] .start-menu h1 {
+  text-shadow: none;
+}
+html[data-theme="lcd"] button:not(.mix-scrim):not(.swatch) {
+  color: #f4fff8;
+  border-style: solid;
+  border-width: 2px;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] button.ghost,
+html[data-theme="lcd"] button.ghost:hover:not(:disabled) {
+  background: transparent;
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] button:hover:not(:disabled) {
+  box-shadow: 3px 3px 0 #041008;
+}
+html[data-theme="lcd"] .board {
+  background: #0c1f16;
+  border: 6px solid #d7ead4;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 2px #306230, 4px 4px 0 #041008;
+}
+html[data-theme="lcd"] .tile,
+html[data-theme="lcd"] .tile.corner,
+html[data-theme="lcd"] .tile.store-tile {
+  background: #1e4a36;
+  color: #f4fff8;
+  box-shadow: inset 0 0 0 1px #8fbf9a;
+}
+html[data-theme="lcd"] .tile.store-tile { background: #1c4032;}
+html[data-theme="lcd"] .tile:hover,
+html[data-theme="lcd"] .tile.open {
+  box-shadow: inset 0 0 0 2px #041008;
+}
+html[data-theme="lcd"] .tile.grouped,
+html[data-theme="lcd"] .tile.held {
+  box-shadow: inset 0 0 0 2px #d7ead4, inset 0 0 0 4px #041008;
+}
+html[data-theme="lcd"] .tile.corner.accent-home,
+html[data-theme="lcd"] .tile.corner.accent-dream { --corner-accent: #0f380f;}
+html[data-theme="lcd"] .tile.corner.accent-market,
+html[data-theme="lcd"] .tile.corner.accent-rest { --corner-accent: #306230;}
+html[data-theme="lcd"] .tile.corner b,
+html[data-theme="lcd"] .tile.corner em,
+html[data-theme="lcd"] .deed-body em,
+html[data-theme="lcd"] .tile.store-tile .deed-name,
+html[data-theme="lcd"] .tile.store-tile .deed-body em,
+html[data-theme="lcd"] .tile.store-tile .brand-fallback { color: #f4fff8;}
+html[data-theme="lcd"] .table-core,
+html[data-theme="lcd"] .table-core.is-market,
+html[data-theme="lcd"] .desk-head,
+html[data-theme="lcd"] .float-card,
+html[data-theme="lcd"] .holdings,
+html[data-theme="lcd"] .chance,
+html[data-theme="lcd"] .mix-desk,
+html[data-theme="lcd"] .sheet article,
+html[data-theme="lcd"] .stall-menu,
+html[data-theme="lcd"] .how-card,
+html[data-theme="lcd"] .sheet.is-stall article.how-card,
+html[data-theme="lcd"] .warn-card,
+html[data-theme="lcd"] .sheet.is-stall > article.warn-card {
+  background: #163528;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 4px 4px 0 #041008;
+}
+html[data-theme="lcd"] .how-panel,
+html[data-theme="lcd"] .how-panel.fuel,
+html[data-theme="lcd"] .how-panel.win {
+  background: #1c4032;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 3px 3px 0 #041008;
+}
+html[data-theme="lcd"] .wallet {
+  background: #0c2218;
+  border-color: #d7ead4;
+  box-shadow: inset 0 0 0 3px #d7ead4;
+}
+html[data-theme="lcd"] .till-readout {
+  background: #163528;
+  border-color: #d7ead4;
+  box-shadow: inset 2px 2px 0 #b7cbb0;
+}
+html[data-theme="lcd"] .till-readout b,
+html[data-theme="lcd"] .till-head small,
+html[data-theme="lcd"] .till-fuel,
+html[data-theme="lcd"] .wallet li span,
+html[data-theme="lcd"] .wallet li em,
+html[data-theme="lcd"] .wallet.is-paid .till-readout b {
+  color: #f4fff8;
+  text-shadow: none;
+}
+html[data-theme="lcd"] .menu-vault {
+  background: repeating-linear-gradient(0deg, rgba(15, 56, 15, 0.08) 0 2px, transparent 2px 6px);
+  mask-image: none;
+}
+html[data-theme="lcd"] .menu-bill,
+html[data-theme="lcd"] .menu-bill:nth-child(odd) {
+  background: #1c4032;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 2px 2px 0 #041008;
+}
+html[data-theme="lcd"] .menu-bill:nth-child(odd) {
+  background: #1a3d2c;
+  color: #f4fff8;
+}
+html[data-theme="lcd"] .menu-stamp {
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] .menu-mascot { filter: none;}
+html[data-theme="lcd"] .menu-mascot img {
+  mix-blend-mode: normal;
+  filter: none;
+}
+html[data-theme="lcd"] .stall-btn,
+html[data-theme="lcd"] .stall-btn:hover:not(:disabled),
+html[data-theme="lcd"] .stall-btn.bots,
+html[data-theme="lcd"] .stall-btn.bots:hover:not(:disabled),
+html[data-theme="lcd"] .stall-btn.bots-off,
+html[data-theme="lcd"] .stall-btn.bots-off:hover:not(:disabled),
+html[data-theme="lcd"] .stall-btn.playbots,
+html[data-theme="lcd"] .stall-btn.playbots:hover:not(:disabled),
+html[data-theme="lcd"] .stall-btn.back,
+html[data-theme="lcd"] .mode-card,
+html[data-theme="lcd"] .mode-card:hover:not(:disabled),
+html[data-theme="lcd"] .mode-card.main {
+  background: #1c4032;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 4px 4px 0 #041008;
+}
+html[data-theme="lcd"] .stall-btn.primary,
+html[data-theme="lcd"] .stall-btn.primary:hover:not(:disabled),
+html[data-theme="lcd"] .mode-card.main {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] .mode-card.main b,
+html[data-theme="lcd"] .mode-card.main small,
+html[data-theme="lcd"] .stall-btn.primary b,
+html[data-theme="lcd"] .stall-btn.primary small { color: #f4fff8;}
+html[data-theme="lcd"] .mode-card span,
+html[data-theme="lcd"] .mode-card b,
+html[data-theme="lcd"] .mode-card small { color: inherit;}
+html[data-theme="lcd"] .wait-exit,
+html[data-theme="lcd"] .wait-exit:hover:not(:disabled),
+html[data-theme="lcd"] .wait-code,
+html[data-theme="lcd"] .wait-gear.on,
+html[data-theme="lcd"] .wait-gear.on:hover:not(:disabled),
+html[data-theme="lcd"] .look-tabs button.on,
+html[data-theme="lcd"] .look-frame.on,
+html[data-theme="lcd"] .wait-modes button.on,
+html[data-theme="lcd"] .rail-cap {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 3px 3px 0 #041008;
+}
+html[data-theme="lcd"] .wait-code b,
+html[data-theme="lcd"] .wait-code small,
+html[data-theme="lcd"] .wait-exit span,
+html[data-theme="lcd"] .rail-cap b { color: #f4fff8;}
+html[data-theme="lcd"] .look-tabs,
+html[data-theme="lcd"] .desk-act,
+html[data-theme="lcd"] .desk-act.bots,
+html[data-theme="lcd"] .desk-act.bots-off,
+html[data-theme="lcd"] .desk-act.playbots,
+html[data-theme="lcd"] .wait-desk-close {
+  background: #1c4032;
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] .center-actions .act-main button,
+html[data-theme="lcd"] .center-actions.is-choice .act-main button.go,
+html[data-theme="lcd"] .center-actions.is-choice .act-main button.ghost,
+html[data-theme="lcd"] .center-actions.is-choice .act-main button.ghost:hover:not(:disabled),
+html[data-theme="lcd"] .center-actions.is-choice .act-main button.warn {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 3px 3px 0 #041008;
+}
+html[data-theme="lcd"] .center-actions .act-main button em { color: #f4fff8;}
+html[data-theme="lcd"] .pay-chip {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  text-shadow: none;
+}
+html[data-theme="lcd"] .trade-banner {
+  background: repeating-linear-gradient(90deg, #0f380f 0 8px, #306230 8px 16px);
+  color: #f4fff8;
+  box-shadow: none;
+}
+html[data-theme="lcd"] .trade-banner b { color: #f4fff8; text-shadow: none;}
+html[data-theme="lcd"] .trade-banner em { background: #163528; color: #0c2218;}
+html[data-theme="lcd"] .dive-bars i { background: #0c2218; border-bottom-color: #1a3d2c;}
+html[data-theme="lcd"] .dive-word { color: #f4fff8; text-shadow: none;}
+html[data-theme="lcd"] .boot-curtain,
+html[data-theme="lcd"] .pocket-desk {
+  background: #163528;
+  color: #f4fff8;
+}
+html[data-theme="lcd"] .fate-banner,
+html[data-theme="lcd"] .fate-banner.is-out,
+html[data-theme="lcd"] .fate-banner.is-win {
+  background: rgba(15, 56, 15, 0.88);
+}
+html[data-theme="lcd"] .fate-banner h2,
+html[data-theme="lcd"] .fate-kicker,
+html[data-theme="lcd"] .fate-banner.is-out .fate-kicker { color: #f4fff8;}
+html[data-theme="lcd"] .pixel-die svg rect:nth-child(1) { fill: #0f380f;}
+html[data-theme="lcd"] .pixel-die svg rect:nth-child(2) { fill: #f4fff8;}
+html[data-theme="lcd"] .pixel-die svg rect:nth-child(3) { fill: #ffffff;}
+html[data-theme="lcd"] .pixel-die svg rect:nth-child(n + 4) { fill: #0f380f;}
+html[data-theme="lcd"] .pixel-bill,
+html[data-theme="lcd"] .pixel-house,
+html[data-theme="lcd"] .pixel-hotel,
+html[data-theme="lcd"] .pixel-caution,
+html[data-theme="lcd"] .corner-art {
+  filter: grayscale(1) sepia(0.55) hue-rotate(38deg) saturate(2.8) contrast(1.05);
+}
+html[data-theme="lcd"] .brand-logo {
+  color: #e8ffe8;
+  filter: drop-shadow(1px 1px 0 #041008);
+}
+html[data-theme="lcd"] .brand-logo.img-sil {
+  filter: brightness(0) invert(1) drop-shadow(1px 1px 0 #041008);
+}
+html[data-theme="lcd"] .join-code input::placeholder { color: #c5d9cc;}
+html[data-theme="lcd"] .join-code {
+  box-shadow: 4px 4px 0 #041008;
+}
+html[data-theme="lcd"] .join-code button,
+html[data-theme="lcd"] .join-code button:hover:not(:disabled) {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 3px 3px 0 #041008;
+}
+html[data-theme="lcd"] .broke-sign,
+html[data-theme="lcd"] .till-warn {
+  background: #1c4032;
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+
+/* —— Classic: green felt, cream spaces, printed cards —— */
+
+html[data-theme="classic"] {
+  color-scheme: light;
+  --bg-deep: #0c5a30;
+  --bg: #fffaf0;
+  --panel: #fffaf0;
+  --panel-2: #f6edd8;
+  --line: #1a120c;
+  --text: #1a120c;
+  --muted: #6a5648;
+  --faint: #8a7568;
+  --accent: #b42318;
+  --accent-dim: #8f1d16;
+  --action: #b42318;
+  --action-hover: #8f1d16;
+  --on-action: #fffaf0;
+  --arena: #efe6c9;
+  --tile-face: #fbf7ee;
+  --tile-edge: #e6dcc4;
+  --ink: #1a120c;
+  --ink-hi: #1a120c;
+  --ink-soft: #6b4e2e;
+  --ink-dim: #5c4636;
+  --ink-deep: #1a120c;
+  --hard: transparent;
+  --trim: #1a120c;
+  --gold: #e6c35a;
+  --gold-hi: #fff4cc;
+  --paper: #f4efe4;
+  --panel-warm: #fffaf0;
+  --panel-deep: #fffaf0;
+  --panel-void: #f6edd8;
+  --panel-hot: #fffaf0;
+  --panel-night: #fffaf0;
+  --panel-shade: #fffaf0;
+  --panel-abyss: #f6edd8;
+  --panel-dusk: #fffaf0;
+  --panel-soil: #fffaf0;
+  --display: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+  --mono: Outfit, "Segoe UI", system-ui, sans-serif;
+}
+
+html[data-theme="classic"] body {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.16), transparent 36%),
+    radial-gradient(ellipse at 50% 100%, rgba(0, 0, 0, 0.2), transparent 42%),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.04) 0 1px, transparent 1px 4px),
+    #0e6a38;
+  color: #fff8e7;
+}
+html[data-theme="classic"] .app { color: #1a120c; }
+html[data-theme="classic"] .start-menu { color: #efe6c9; }
+html[data-theme="classic"] .start-menu h1,
+html[data-theme="classic"] .start-lead,
+html[data-theme="classic"] .dive-word {
+  color: #fff8e7;
+  text-shadow: 0 2px 0 #08341c;
+}
+html[data-theme="classic"] h1,
+html[data-theme="classic"] h2,
+html[data-theme="classic"] .brand,
+html[data-theme="classic"] .logo,
+html[data-theme="classic"] .mode-card b,
+html[data-theme="classic"] .stall-head h2,
+html[data-theme="classic"] .mix-head h2,
+html[data-theme="classic"] .wait-title h1,
+html[data-theme="classic"] .boot-title,
+html[data-theme="classic"] .till-readout b {
+  text-shadow: none;
+}
+html[data-theme="classic"] .brand,
+html[data-theme="classic"] .app.pregame .brand {
+  color: #b42318;
+  background: #fffaf0;
+  border-color: #1a120c;
+  border-radius: 8px;
+  text-shadow: none;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.22);
+}
+html[data-theme="classic"] button:not(.swatch):not(.mix-scrim):not(.theme-pip) {
+  border-radius: 10px;
+}
+html[data-theme="classic"] button:hover:not(:disabled) {
+  box-shadow: 0 6px 16px rgba(26, 18, 12, 0.22);
+}
+html[data-theme="classic"] .top button.ghost {
+  color: #fff8e7;
+  border-color: rgba(255, 248, 231, 0.7);
+  background: transparent;
+}
+html[data-theme="classic"] .top button.ghost:hover:not(:disabled) {
+  background: rgba(255, 248, 231, 0.14);
+  color: #fff;
+}
+html[data-theme="classic"] .board {
+  background: #efe6c9;
+  border: 10px solid #6b3a1f;
+  border-radius: 4px;
+  box-shadow:
+    inset 0 0 0 3px #1a120c,
+    inset 0 0 0 7px #e7d3a1,
+    0 18px 36px rgba(0, 0, 0, 0.35);
+}
+html[data-theme="classic"] .tile,
+html[data-theme="classic"] .tile.corner {
+  background: #fbf7ee;
+  color: #1a120c;
+  box-shadow: inset 0 0 0 1px #1a120c;
+}
+html[data-theme="classic"] .tile.store-tile {
+  background: #f7f1e3;
+  color: #1a120c;
+}
+html[data-theme="classic"] .tile:hover,
+html[data-theme="classic"] .tile.open {
+  box-shadow: inset 0 0 0 2px #b42318;
+}
+html[data-theme="classic"] .tile.grouped,
+html[data-theme="classic"] .tile.held {
+  box-shadow: inset 0 0 0 2px #b42318, inset 0 0 0 4px #1a120c;
+}
+html[data-theme="classic"] .tile.corner.accent-home { --corner-accent: #c0392b; }
+html[data-theme="classic"] .tile.corner.accent-market { --corner-accent: #e67e22; }
+html[data-theme="classic"] .tile.corner.accent-dream { --corner-accent: #1e8449; }
+html[data-theme="classic"] .tile.corner.accent-rest { --corner-accent: #1a120c; }
+html[data-theme="classic"] .tile.corner b,
+html[data-theme="classic"] .tile.corner em { color: #1a120c; }
+html[data-theme="classic"] .deed-body em,
+html[data-theme="classic"] .tile.store-tile .deed-name,
+html[data-theme="classic"] .tile.store-tile .deed-body em,
+html[data-theme="classic"] .tile.store-tile .brand-fallback { color: #5c4636; }
+html[data-theme="classic"] .tile.store-tile .deed-name { color: #1a120c; }
+html[data-theme="classic"] .tile.store-tile .brand-logo {
+  color: #1a120c;
+}
+html[data-theme="classic"] .tile.store-tile .brand-logo.img-sil {
+  filter: brightness(0);
+}
+html[data-theme="classic"] .logo { color: #b42318; letter-spacing: 0.01em; }
+html[data-theme="classic"] .table-core,
+html[data-theme="classic"] .table-core.is-market,
+html[data-theme="classic"] .desk-head,
+html[data-theme="classic"] .float-card,
+html[data-theme="classic"] .holdings,
+html[data-theme="classic"] .mix-desk,
+html[data-theme="classic"] .sheet article,
+html[data-theme="classic"] .stall-menu,
+html[data-theme="classic"] .how-card,
+html[data-theme="classic"] .sheet.is-stall article.how-card,
+html[data-theme="classic"] .warn-card,
+html[data-theme="classic"] .sheet.is-stall > article.warn-card,
+html[data-theme="classic"] .seat {
+  background: #fffaf0;
+  color: #1a120c;
+  border-color: #1a120c;
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(8, 40, 16, 0.18);
+}
+html[data-theme="classic"] .seat,
+html[data-theme="lcd"] .seat {
+  opacity: 1;
+}
+html[data-theme="classic"] .tile,
+html[data-theme="classic"] .table-core,
+html[data-theme="classic"] .desk-head,
+html[data-theme="classic"] .float-card { border-radius: 0; }
+html[data-theme="classic"] .table-core,
+html[data-theme="classic"] .float-card,
+html[data-theme="classic"] .desk-head { border-radius: 4px; }
+html[data-theme="classic"] .chance {
+  background: #fffaf0;
+  color: #1a120c;
+  border: 2px solid #1a120c;
+  border-top: 12px solid #e25b12;
+  border-radius: 4px;
+  box-shadow: 0 10px 20px rgba(26, 18, 12, 0.16);
+}
+html[data-theme="classic"] .chance span { color: #e25b12; }
+html[data-theme="classic"] .how-panel,
+html[data-theme="classic"] .how-panel.fuel,
+html[data-theme="classic"] .how-panel.win {
+  background: #fffaf0;
+  color: #1a120c;
+  border-color: #1a120c;
+  border-radius: 10px;
+  box-shadow: none;
+}
+html[data-theme="classic"] .wallet {
+  background: #f4efe2;
+  border: 2px solid #1a120c;
+  border-radius: 10px;
+  box-shadow: none;
+}
+html[data-theme="classic"] .till-readout {
+  background: #fff;
+  border: 1px solid #1a120c;
+  border-radius: 6px;
+  box-shadow: none;
+}
+html[data-theme="classic"] .till-readout b,
+html[data-theme="classic"] .till-head small,
+html[data-theme="classic"] .till-fuel,
+html[data-theme="classic"] .wallet li span,
+html[data-theme="classic"] .wallet li em,
+html[data-theme="classic"] .wallet.is-paid .till-readout b {
+  color: #146c36;
+  text-shadow: none;
+}
+html[data-theme="classic"] .menu-vault {
+  background:
+    radial-gradient(ellipse at 70% 40%, rgba(255, 255, 255, 0.08), transparent 46%),
+    repeating-linear-gradient(90deg, transparent 0 48px, rgba(0, 0, 0, 0.05) 48px 50px);
+  mask-image: none;
+}
+html[data-theme="classic"] .menu-bill {
+  border-radius: 2px;
+  box-shadow: 0 8px 12px rgba(0, 0, 0, 0.22);
+}
+html[data-theme="classic"] .menu-mascot img { mix-blend-mode: normal; }
+html[data-theme="classic"] .mode-card,
+html[data-theme="classic"] .mode-card.main,
+html[data-theme="classic"] .mode-card:hover:not(:disabled) {
+  background: #fffaf0;
+  color: #1a120c;
+  border: 2px solid #1a120c;
+  border-radius: 14px;
+  box-shadow: 0 8px 0 rgba(8, 40, 16, 0.28);
+}
+html[data-theme="classic"] .mode-card.main { border-color: #b42318; }
+html[data-theme="classic"] .mode-card b { color: #b42318; }
+html[data-theme="classic"] .mode-card small { color: #8f1d16; }
+html[data-theme="classic"] .mode-card span { color: #5c4636; }
+html[data-theme="classic"] .stall-btn,
+html[data-theme="classic"] .stall-btn:hover:not(:disabled),
+html[data-theme="classic"] .stall-btn.bots,
+html[data-theme="classic"] .stall-btn.bots:hover:not(:disabled),
+html[data-theme="classic"] .stall-btn.bots-off,
+html[data-theme="classic"] .stall-btn.bots-off:hover:not(:disabled),
+html[data-theme="classic"] .stall-btn.playbots,
+html[data-theme="classic"] .stall-btn.playbots:hover:not(:disabled),
+html[data-theme="classic"] .stall-btn.back {
+  background: #fffaf0;
+  color: #1a120c;
+  border: 2px solid #1a120c;
+  box-shadow: 0 4px 0 rgba(26, 18, 12, 0.16);
+}
+html[data-theme="classic"] .stall-btn.primary,
+html[data-theme="classic"] .stall-btn.primary:hover:not(:disabled) {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #7f1510;
+  box-shadow: 0 4px 0 #7f1510;
+}
+html[data-theme="classic"] .wait {
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+html[data-theme="classic"] .wait-bar {
+  background: #f6edd8;
+  border-bottom-color: #1a120c;
+}
+html[data-theme="classic"] .wait-me {
+  background: #fffaf0;
+}
+html[data-theme="classic"] .wait-exit,
+html[data-theme="classic"] .wait-code,
+html[data-theme="classic"] .rail-cap {
+  background: linear-gradient(180deg, #fff8dc, #e6c35a);
+  color: #1a120c;
+  border-color: #fff8e7;
+  border-radius: 10px;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.2);
+}
+html[data-theme="classic"] .desk-act,
+html[data-theme="classic"] .desk-act.bots,
+html[data-theme="classic"] .desk-act.bots-off,
+html[data-theme="classic"] .desk-act.playbots,
+html[data-theme="classic"] .wait-desk-close,
+html[data-theme="classic"] .look-tabs {
+  background: #fffaf0;
+  color: #1a120c;
+  border-color: #1a120c;
+}
+html[data-theme="classic"] .look-tabs button.on,
+html[data-theme="classic"] .look-frame.on,
+html[data-theme="classic"] .wait-modes button.on,
+html[data-theme="classic"] .wait-gear.on {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #7f1510;
+}
+html[data-theme="classic"] .center-actions .act-main button,
+html[data-theme="classic"] .center-actions.is-choice .act-main button.go {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #7f1510;
+  box-shadow: 0 3px 0 #7f1510;
+}
+html[data-theme="classic"] .center-actions.is-choice .act-main button.ghost,
+html[data-theme="classic"] .center-actions.is-choice .act-main button.ghost:hover:not(:disabled) {
+  background: #fffaf0;
+  color: #1a120c;
+  border-color: #1a120c;
+  box-shadow: none;
+}
+html[data-theme="classic"] .center-actions .act-main button em { color: #f8e7b0; }
+html[data-theme="classic"] .center-actions.is-choice .act-main button.ghost em { color: #8f1d16; }
+html[data-theme="classic"] .pay-chip {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #7f1510;
+  border-radius: 8px;
+  text-shadow: none;
+}
+html[data-theme="classic"] .trade-banner {
+  background: #b42318;
+  color: #fffaf0;
+  box-shadow: none;
+}
+html[data-theme="classic"] .trade-banner b { color: #fffaf0; text-shadow: none; }
+html[data-theme="classic"] .trade-banner em { background: #fffaf0; color: #b42318; }
+html[data-theme="classic"] .dive-bars i { background: #08341c; border-bottom-color: transparent; }
+html[data-theme="classic"] .boot-curtain,
+html[data-theme="classic"] .pocket-desk {
+  background:
+    radial-gradient(ellipse at 50% 40%, #1f8f49, #0c5a30 62%, #08341c);
+  color: #fff8e7;
+}
+html[data-theme="classic"] .boot-title { color: #fff8e7; }
+html[data-theme="classic"] .fate-banner,
+html[data-theme="classic"] .fate-banner.is-out,
+html[data-theme="classic"] .fate-banner.is-win {
+  background: rgba(8, 52, 28, 0.82);
+}
+html[data-theme="classic"] .fate-banner h2 { color: #fff8e7; }
+html[data-theme="classic"] .pixel-die svg rect:nth-child(1) { fill: #d9c7a4; }
+html[data-theme="classic"] .pixel-die svg rect:nth-child(2) { fill: #fffdf8; }
+html[data-theme="classic"] .pixel-die svg rect:nth-child(3) { fill: #fff; }
+html[data-theme="classic"] .pixel-die svg rect:nth-child(n + 4) { fill: #1a120c; }
+html[data-theme="classic"] .pixel-die {
+  filter: drop-shadow(0 6px 8px rgba(40, 24, 8, 0.35));
+}
+html[data-theme="classic"] .brand-logo {
+  color: #1a120c;
+  filter: drop-shadow(1px 1px 0 rgba(26, 18, 12, 0.18));
+}
+html[data-theme="classic"] .brand-logo.img-sil {
+  filter: brightness(0);
+}
+html[data-theme="classic"] .join-code input::placeholder { color: #8a7568; }
+html[data-theme="classic"] .join-code {
+  background: #fffaf0;
+  box-shadow: 0 8px 0 rgba(8, 40, 16, 0.22);
+  border-radius: 12px;
+}
+html[data-theme="classic"] .join-code button,
+html[data-theme="classic"] .join-code button:hover:not(:disabled) {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #7f1510;
+  box-shadow: 0 3px 0 #7f1510;
+}
+html[data-theme="classic"] .wait-felt {
+  background:
+    radial-gradient(ellipse 70% 80% at 50% 42%, #1f8f49 0%, #0e6a38 70%, #0b4e2a 100%);
+  box-shadow: inset 0 0 0 2px #08341c;
+}
+html[data-theme="classic"] .wait-chair,
+html[data-theme="classic"] .wait-chair.filled {
+  background: #fffaf0;
+  border: 2px dashed #1a120c;
+  box-shadow: none;
+  border-radius: 10px;
+}
+html[data-theme="classic"] .wait-chair.filled { border-style: solid; }
+html[data-theme="classic"] .wait-chair.is-host { border-color: #b42318; box-shadow: none; }
+html[data-theme="classic"] .wait-chair.empty span,
+html[data-theme="classic"] .chair-tag,
+html[data-theme="classic"] .chair-pad {
+  color: #5c4636;
+  border-color: #1a120c;
+  background: transparent;
+}
+html[data-theme="classic"] .chair-pad {
+  background: #f6edd8;
+  border-radius: 6px;
+}
+html[data-theme="classic"] .chair-tag.host { color: #b42318; }
+html[data-theme="classic"] .look-stage {
+  background:
+    radial-gradient(ellipse 50% 40% at 50% 18%, rgba(255, 255, 255, 0.7), transparent 60%),
+    linear-gradient(180deg, #fffaf0, #f3e6c4);
+  color: #1a120c;
+  border-color: #1a120c;
+  border-radius: 12px;
+  box-shadow: none;
+}
+html[data-theme="classic"] .look-model,
+html[data-theme="classic"] .look-model:hover:not(.on):not(:disabled) {
+  background: #fffaf0;
+  color: #1a120c;
+  border-color: #1a120c;
+  border-radius: 10px;
+  box-shadow: none;
+}
+html[data-theme="classic"] .look-model.on {
+  background: #fff3c4;
+  color: #1a120c;
+  border-color: #b42318;
+}
+html[data-theme="classic"] .look-dye {
+  background: #fffaf0;
+  border-color: #1a120c;
+  border-radius: 999px;
+}
+html[data-theme="lcd"] .wait-felt {
+  background: #1a3d2c;
+  box-shadow: inset 0 0 0 2px #041008;
+}
+html[data-theme="lcd"] .wait-chair,
+html[data-theme="lcd"] .wait-chair.filled {
+  background: #1c4032;
+  border: 2px dashed #d7ead4;
+  box-shadow: 2px 2px 0 #041008;
+}
+html[data-theme="lcd"] .wait-chair.filled { border-style: solid;}
+html[data-theme="lcd"] .wait-chair.empty span,
+html[data-theme="lcd"] .chair-tag,
+html[data-theme="lcd"] .chair-pad,
+html[data-theme="lcd"] .wait-chair span {
+  color: #f4fff8;
+}
+html[data-theme="lcd"] .chair-pad {
+  background: #163528;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] .look-stage {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: inset 0 0 0 3px #d7ead4;
+}
+html[data-theme="lcd"] .look-stage small { color: #f4fff8;}
+html[data-theme="lcd"] .look-model,
+html[data-theme="lcd"] .look-model:hover:not(.on):not(:disabled) {
+  background: #163528;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 2px 2px 0 #041008;
+}
+html[data-theme="lcd"] .look-model.on {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] .look-dye {
+  background: #1c4032;
+  border-color: #d7ead4;
+}
+html[data-theme="classic"] .broke-sign,
+html[data-theme="classic"] .till-warn {
+  background: #fff6d8;
+  color: #1a120c;
+  border-color: #b42318;
+  border-radius: 6px;
+}
+/* Property bands sit just outside the tile, toward the centre menu. */
+
+html[data-theme="lcd"],
+html[data-theme="classic"] {
+  --band: 8px;
+}
+html[data-theme="lcd"] .tile,
+html[data-theme="classic"] .tile {
+  overflow: visible;
+}
+html[data-theme="lcd"] .tile:hover,
+html[data-theme="lcd"] .tile.open,
+html[data-theme="classic"] .tile:hover,
+html[data-theme="classic"] .tile.open {
+  z-index: 2;
+}
+html[data-theme="lcd"] .deed-band,
+html[data-theme="classic"] .deed-band {
+  display: block;
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+}
+html[data-theme="lcd"] .tile.bottom .deed-band,
+html[data-theme="classic"] .tile.bottom .deed-band {
+  top: calc(var(--band) * -1);
+  left: 0;
+  right: 0;
+  height: var(--band);
+}
+html[data-theme="lcd"] .tile.top .deed-band,
+html[data-theme="classic"] .tile.top .deed-band {
+  bottom: calc(var(--band) * -1);
+  left: 0;
+  right: 0;
+  height: var(--band);
+}
+html[data-theme="lcd"] .tile.left .deed-band,
+html[data-theme="classic"] .tile.left .deed-band {
+  right: calc(var(--band) * -1);
+  top: 0;
+  bottom: 0;
+  width: var(--band);
+}
+html[data-theme="lcd"] .tile.right .deed-band,
+html[data-theme="classic"] .tile.right .deed-band {
+  left: calc(var(--band) * -1);
+  top: 0;
+  bottom: 0;
+  width: var(--band);
+}
+html[data-theme="lcd"] .pawns,
+html[data-theme="classic"] .pawns {
+  z-index: 12;
+}
+
+html[data-theme="classic"] .tile.set-social .deed-band { background: #8b5a2b; }
+html[data-theme="classic"] .tile.set-music .deed-band { background: #aae0fa; }
+html[data-theme="classic"] .tile.set-watch .deed-band { background: #d93a96; }
+html[data-theme="classic"] .tile.set-cloud .deed-band { background: #f7941d; }
+html[data-theme="classic"] .tile.set-ai .deed-band { background: #ed1b24; }
+html[data-theme="classic"] .tile.set-ride .deed-band { background: #f6e21b; }
+html[data-theme="classic"] .tile.set-chips .deed-band { background: #1fb25a; }
+html[data-theme="classic"] .tile.set-giants .deed-band { background: #0072bb; }
+html[data-theme="classic"] .tile.set-store .deed-band { background: #1a120c; }
+
+html[data-theme="lcd"] .tile.set-social .deed-band { background: #0c2218;}
+html[data-theme="lcd"] .tile.set-music .deed-band { background: #1a3d2c;}
+html[data-theme="lcd"] .tile.set-watch .deed-band {
+  background: repeating-linear-gradient(90deg, #0f380f 0 2px, #306230 2px 4px);
+}
+html[data-theme="lcd"] .tile.set-cloud .deed-band {
+  background: repeating-linear-gradient(#0f380f 0 2px, #8fb89a 2px 4px);
+}
+html[data-theme="lcd"] .tile.set-ai .deed-band {
+  background: repeating-conic-gradient(#0f380f 0% 25%, #d5ead8 0% 50%) 0 0 / 4px 4px;
+}
+html[data-theme="lcd"] .tile.set-ride .deed-band {
+  background: radial-gradient(#0f380f 1.2px, transparent 1.4px) 0 0 / 4px 4px, #8fb89a;
+}
+html[data-theme="lcd"] .tile.set-chips .deed-band {
+  background: repeating-linear-gradient(135deg, #0f380f 0 2px, #306230 2px 4px);
+}
+html[data-theme="lcd"] .tile.set-giants .deed-band {
+  background: linear-gradient(#0f380f, #0f380f) center / 100% 34% no-repeat, #306230;
+}
+html[data-theme="lcd"] .tile.set-store .deed-band {
+  background: repeating-linear-gradient(90deg, #0f380f 0 3px, transparent 3px 5px);
+}
+
+html[data-theme="lcd"] .tile,
+html[data-theme="lcd"] .deed-name,
+html[data-theme="lcd"] .deed-body em {
+  color: #f4fff8;
+}
+html[data-theme="lcd"] .tile.owned,
+html[data-theme="lcd"] .tile.store-tile.owned {
+  background: color-mix(in srgb, var(--player) 38%, #163528);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--player) 72%, #07140e);
+}
+html[data-theme="lcd"] .tile.owned.mine {
+  background: color-mix(in srgb, var(--player) 50%, #163528);
+}
+html[data-theme="classic"] .tile.owned,
+html[data-theme="classic"] .tile.store-tile.owned {
+  background: color-mix(in srgb, var(--player) 46%, #fbf7ee);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--player) 78%, #1a120c);
+}
+html[data-theme="classic"] .tile.owned.mine {
+  background: color-mix(in srgb, var(--player) 58%, #fbf7ee);
+}
+html[data-theme="classic"] .tile.owned .deed-name,
+html[data-theme="classic"] .tile.owned .deed-body em,
+html[data-theme="lcd"] .tile.owned .deed-name,
+html[data-theme="lcd"] .tile.owned .deed-body em {
+  color: #f4fff8;
+}
+html[data-theme="classic"] .tile.owned .deed-name,
+html[data-theme="classic"] .tile.owned .deed-body em {
+  color: #1a120c;
+}

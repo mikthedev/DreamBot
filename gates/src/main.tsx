@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./ui/App";
 import { bootDiscord } from "./ui/discord";
 import "./ui/app.css";
+import "./ui/themes.css";
 
 void bootDiscord().catch(() => undefined);
 

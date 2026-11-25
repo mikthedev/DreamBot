@@ -248,16 +248,17 @@ export function Lobby({
 
   return (
     <div className="lobby is-in">
-      <div className="wait">
+      <div className="wait-shell">
+        <div className="wait">
         <header className="wait-bar">
           <button
             type="button"
             className="wait-exit"
-            title="Leave table"
             onMouseEnter={sfxHover}
             onClick={() => { sfx("back"); onLeave(); }}
           >
             <LeaveIcon />
+            <span>Back</span>
           </button>
           <div className="wait-title">
             <p className="wait-kicker">{mode === "moves" ? "DreamPoly" : "Classic"}</p>
@@ -269,8 +270,7 @@ export function Lobby({
             </p>
           </div>
           <p className="wait-count" aria-label={`${joined.length} of ${MAX_PLAYERS} seated`}>
-            <b>{joined.length}</b>
-            <em>/ {MAX_PLAYERS}</em>
+            <b>{joined.length}</b><em>/{MAX_PLAYERS}</em>
           </p>
           {isHost ? (
             <button
@@ -393,6 +393,7 @@ export function Lobby({
             )}
           </div>
         </footer>
+        </div>
       </div>
     </div>
   );
@@ -479,18 +480,7 @@ function WaitingBooth({
   const look = you.look === "icon" ? "icon" : "pawn";
   const frame = you.frame || "gold";
   const skin = parseSkin(you.skin);
-  const [dice, setDice] = useState<[number, number]>([3, 5]);
-  const [spin, setSpin] = useState(false);
   const [hop, setHop] = useState(0);
-
-  function toss() {
-    sfx("click");
-    setSpin(true);
-    window.setTimeout(() => {
-      setDice([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
-      setSpin(false);
-    }, 420);
-  }
 
   return (
     <div className="wait-booth">
@@ -499,10 +489,6 @@ function WaitingBooth({
           <p>Wardrobe</p>
           <b>{you.name}</b>
         </div>
-        <button type="button" className="booth-dice" onClick={toss} title="Toss while you wait">
-          <PixelDie n={dice[0]} spinning={spin} />
-          <PixelDie n={dice[1]} spinning={spin} />
-        </button>
       </div>
       <button
         type="button"
@@ -618,7 +604,7 @@ function RailFace({ person, big, studio, frame }: { person: SeatPerson; big?: bo
 function LeaveIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-      <path fill="currentColor" d="M4 3h8v2H6v14h6v2H4V3zm9 5 5 4-5 4v-3H8v-2h5V8z" />
+      <path fill="currentColor" d="M15.2 4.2 7 12l8.2 7.8 2.1-2.2L11.4 12l5.9-5.6z" />
     </svg>
   );
 }

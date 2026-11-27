@@ -1,6 +1,9 @@
 import {
   CARD_LABEL,
   CARDS,
+  CLASSIC_GO_PAY,
+  CLASSIC_START_CASH,
+  GO_PAY,
   HARD_STOP_ROUNDS,
   MOVE_CAP,
   NOTE_MAX,
@@ -10,7 +13,7 @@ import {
   STACK_CUT,
   START_CASH,
   START_MOVES,
-  TRADE_FEE,
+  UPKEEP_PER,
   companiesIn,
   companiesOf,
   setOf,
@@ -23,9 +26,24 @@ import {
   type StoreId,
   type WorldId,
 } from "./data";
-import { passedGo, tileAt, wrapIndex } from "./track";
+import { passedGo, tileAt, TRACK_ORDER, wrapIndex } from "./track";
 
 export type Mode = "moves" | "classic";
+
+export const JAIL_FINE = 50;
+
+export type VaultRewardKind = "cash" | "move" | "shield" | "jailfree";
+
+export type VaultSafe = {
+  kind: VaultRewardKind;
+  label: string;
+  value: number;
+};
+
+export type VaultResult = {
+  picked: 0 | 1 | 2;
+  safes: [VaultSafe, VaultSafe, VaultSafe];
+};
 
 export type Player = {
   id: string;
@@ -39,7 +57,7 @@ export type Player = {
   test: boolean;
   cash: number;
   moves: number;
-  /** Index on the 32-space board. Next roll starts from here. */
+  /** Index on the 36-space board. Next roll starts from here. */
   stand: number;
   sparks: number;
   fuelBuys: number;
@@ -55,12 +73,22 @@ export type Player = {
   insurance: boolean;
   nudge: boolean;
   openHouse: SetId | null;
+  rentShield?: boolean;
+  jailTurns: number;
+  jailFreeCards: number;
   lapKey: number;
 };
 
 export type Own = { owner: string | null; level: 0 | 1 | 2 };
 
-export type Phase = "home" | "store" | "card" | "path" | "land" | "rent" | "extra" | "over";
+export type Phase = "home" | "store" | "card" | "path" | "jail" | "land" | "rent" | "vault" | "casino" | "extra" | "over";
+
+export type CasinoResult = {
+  bet: number;
+  reels: [number, number, number];
+  payout: number;
+  outcome: "jackpot" | "pair" | "loss" | "skip";
+};
 
 export type State = {
   mode: Mode;
@@ -76,6 +104,8 @@ export type State = {
   licenses: { kind: "chips" | "cloud"; seller: string; buyer: string }[];
   deck: CardId[];
   pendingCard: CardId | null;
+  casinoResult?: CasinoResult | null;
+  vaultResult?: VaultResult | null;
   land: string | null;
   goLand: string | null;
   rentDue: { to: string; amount: number; stackSplit: boolean; set?: SetId; place?: string } | null;
@@ -94,8 +124,11 @@ export type Action =
   | { type: "store"; pick: "buy" | "skip" }
   | { type: "card" }
   | { type: "path"; pick: "walk" | "alley" }
+  | { type: "jail"; pick: "pay" | "card" | "roll" }
   | { type: "land"; pick: "buy" | "skip" }
   | { type: "rent"; pick: "note" | "move" | "surrender" }
+  | { type: "vault"; pick: 0 | 1 | 2 }
+  | { type: "casino"; bet: number }
   | { type: "fuel" }
   | { type: "build"; companyId: string }
   | { type: "sell"; companyId: string }
@@ -127,7 +160,7 @@ export type Offer = {
   fee: number;
 };
 
-export const COLORS = ["#3b5bdb", "#2b8a6e", "#c4922a", "#b44d7a", "#b54a4a", "#c56e2d", "#2f8f9a", "#6b5b95"];
+export const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ec4899", "#ef4444", "#8b5cf6", "#06b6d4", "#84cc16"];
 
 export function createGame(
   people: { id: string; name: string; avatar?: string | null; bot?: boolean; test?: boolean; color?: string; look?: "pawn" | "icon"; frame?: string; skin?: string }[],
@@ -135,8 +168,20 @@ export function createGame(
 ): State {
   const seed = opts?.seed ?? 1;
   const world = opts?.world ?? "tech";
+  const mode = opts?.mode ?? "moves";
+  const startCash = mode === "classic" ? CLASSIC_START_CASH : START_CASH;
+  const usedColors = new Set<string>();
+  const pickUniqueColor = (preferred?: string, idx = 0) => {
+    if (preferred && !usedColors.has(preferred)) {
+      usedColors.add(preferred);
+      return preferred;
+    }
+    const fresh = COLORS.find((c) => !usedColors.has(c)) ?? COLORS[idx % COLORS.length];
+    usedColors.add(fresh);
+    return fresh;
+  };
   const state: State = {
-    mode: opts?.mode ?? "moves",
+    mode,
     world,
     seed,
     rng: seed,
@@ -144,13 +189,13 @@ export function createGame(
       id: p.id,
       name: p.name,
       avatar: p.avatar ?? null,
-      color: p.color || COLORS[i % COLORS.length],
+      color: pickUniqueColor(p.color, i),
       look: p.look === "icon" ? "icon" : "pawn",
       frame: p.frame || "gold",
       skin: p.skin || "classic",
       bot: !!p.bot,
       test: !!p.test,
-      cash: START_CASH,
+      cash: startCash,
       moves: START_MOVES,
       stand: 0,
       sparks: 0,
@@ -167,6 +212,9 @@ export function createGame(
       insurance: false,
       nudge: false,
       openHouse: null,
+      rentShield: false,
+      jailTurns: 0,
+      jailFreeCards: 0,
       lapKey: 0,
     })),
     turn: 0,
@@ -177,6 +225,8 @@ export function createGame(
     licenses: [],
     deck: shuffle([...CARDS], seed),
     pendingCard: null,
+    casinoResult: null,
+    vaultResult: null,
     land: null,
     goLand: null,
     rentDue: null,
@@ -210,16 +260,23 @@ function say(state: State, line: string) {
 }
 
 function nextRng(state: State) {
-  state.rng = (Math.imul(state.rng, 1664525) + 1013904223) >>> 0;
-  return state.rng / 4294967296;
+  state.rng = (state.rng + 0x6d2b79f5) >>> 0;
+  let t = state.rng;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
 function shuffle<T>(list: T[], seed: number) {
-  let rng = seed || 1;
+  let rng = (seed ^ 0x9e3779b9) >>> 0 || 1;
   const arr = [...list];
   for (let i = arr.length - 1; i > 0; i--) {
-    rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0;
-    const j = rng % (i + 1);
+    rng = (rng + 0x6d2b79f5) >>> 0;
+    let t = rng;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    const u = (t ^ (t >>> 14)) >>> 0;
+    const j = u % (i + 1);
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
@@ -241,6 +298,14 @@ function shops(state: Pick<State, "world">) {
   return storesOf(worldId(state));
 }
 
+function isStoreId(state: Pick<State, "stores">, id: string): id is StoreId {
+  return Object.prototype.hasOwnProperty.call(state.stores, id);
+}
+
+function ownsDeed(state: Pick<State, "companies" | "stores">, ownerId: string, id: string) {
+  return isStoreId(state, id) ? state.stores[id] === ownerId : state.companies[id]?.owner === ownerId;
+}
+
 function spark(_state: State, p: Player) {
   p.sparks += 1;
 }
@@ -255,10 +320,8 @@ export function anySet(state: State, playerId: string) {
   );
 }
 
-export function tradeFee(state: State, p: Player) {
-  if (p.freeTrade) return 0;
-  if (hasSet(state, p.id, "watch")) return 0;
-  return TRADE_FEE;
+export function tradeFee(_state?: State, _p?: Player) {
+  return 0;
 }
 
 export function notesLeft(p: Player) {
@@ -292,8 +355,8 @@ export function tradeProblem(state: State, action: Extract<Action, { type: "trad
   if (other.moves - (action.getMove ? 1 : 0) + (action.giveMove ? 1 : 0) < 1) return `${other.name} would have no moves left.`;
   if (p.cash < action.giveCash + fee) return "Not enough cash for this deal.";
   if (other.cash < action.getCash) return `${other.name} cannot pay that.`;
-  for (const id of action.giveCompanies) if (state.companies[id]?.owner !== p.id) return "You do not own that company.";
-  for (const id of action.getCompanies) if (state.companies[id]?.owner !== other.id) return `${other.name} does not own that company.`;
+  for (const id of action.giveCompanies) if (!ownsDeed(state, p.id, id)) return "You do not own that brand or store.";
+  for (const id of action.getCompanies) if (!ownsDeed(state, other.id, id)) return `${other.name} does not own that brand or store.`;
   const empty =
     !action.giveCompanies.length &&
     !action.getCompanies.length &&
@@ -301,7 +364,7 @@ export function tradeProblem(state: State, action: Extract<Action, { type: "trad
     !action.getCash &&
     !action.giveMove &&
     !action.getMove;
-  if (empty) return "Put cash, a company, or a move in the deal.";
+  if (empty) return "Put cash, a brand, a store, or a move in the deal.";
   return null;
 }
 
@@ -338,6 +401,8 @@ function beginTurn(state: State) {
   state.movesBoughtThisTurn = false;
   state.land = null;
   state.lastPay = null;
+  state.casinoResult = null;
+  state.vaultResult = null;
   if (state.mode === "moves") {
     if (p.moves <= 0) {
       eliminate(state, p, "out of moves");
@@ -346,19 +411,14 @@ function beginTurn(state: State) {
     }
     p.moves -= 1;
   }
-  if (state.mode === "moves") {
-    const held = brands(state).filter((c) => state.companies[c.id].owner === p.id).length
-      + shops(state).filter((s) => state.stores[s.id] === p.id).length;
-    const upkeep = held * 12;
-    if (upkeep > 0) {
-      const pay = Math.min(upkeep, p.cash);
-      p.cash -= pay;
-      say(state, `${p.name} paid $${pay} upkeep for ${held} brand${held === 1 ? "" : "s"}.`);
-    }
-  }
   if (!p.leftHome && spaceId(p) === "home") {
     p.leftHome = true;
     say(state, `${p.name} leaves GO.`);
+  }
+  if (p.jailTurns > 0) {
+    state.phase = "jail";
+    say(state, `${p.name} is in Jail (${p.jailTurns} turn${p.jailTurns === 1 ? "" : "s"} left) — pay $${JAIL_FINE}, use pass, or roll doubles.`);
+    return;
   }
   state.phase = "path";
 }
@@ -372,7 +432,8 @@ function drawCard(state: State, p: Player) {
   const card = state.deck.shift()!;
   state.pendingCard = card;
   state.phase = "card";
-  say(state, `${p.name} draws a Casino card — ${CARD_LABEL[card]}.`);
+  const hereId = spaceId(p);
+  say(state, `${p.name} ${hereId.startsWith("chest") ? "opens a Mystery Box" : "draws a Chance card"} — ${CARD_LABEL[card]}.`);
 }
 
 function payCash(state: State, from: Player, to: Player | null, printed: number, stackSplit: boolean, set?: SetId) {
@@ -495,12 +556,14 @@ export function apply(prev: State, action: Action): State {
   if (state.offer && action.type !== "end") return state;
 
   if (action.type === "home" && state.phase === "home") {
+    const goCash = state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY;
     if (action.pick === "move" && state.mode === "moves" && p.moves < MOVE_CAP) {
-      p.moves += 1;
-      say(state, `${p.name} takes a move instead of $200.`);
+      const gain = Math.min(2, MOVE_CAP - p.moves);
+      p.moves += gain;
+      say(state, `${p.name} takes +${gain} moves instead of $${goCash}.`);
     } else {
-      p.cash += 200;
-      say(state, `${p.name} takes $200.`);
+      p.cash += goCash;
+      say(state, `${p.name} takes $${goCash}.`);
     }
     if (p.notesOpen > 0) settleNote(state, p);
     p.freeAlley = false;
@@ -533,9 +596,106 @@ export function apply(prev: State, action: Action): State {
   }
 
   if (action.type === "card" && state.phase === "card") {
+    const prevStand = p.stand;
+    const card = state.pendingCard;
     resolveCard(state, p);
     state.pendingCard = null;
+    if (card === "jail") {
+      state.land = "rest";
+      restOnSpace(state, p);
+      return state;
+    }
+    if (p.stand !== prevStand) {
+      const landedId = spaceId(p);
+      state.land = landedId;
+      if (landedId === "home") {
+        p.lapKey += 1;
+        state.goLand = "home";
+        state.phase = "home";
+        say(state, `${p.name} lands on GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY}${state.mode === "moves" ? " or +2 moves" : ""}.`);
+        return state;
+      }
+      resolveLanding(state, p, landedId);
+      return state;
+    }
     restOnSpace(state, p);
+    return state;
+  }
+
+  if (action.type === "jail" && state.phase === "jail") {
+    if (action.pick === "pay") {
+      if (p.cash >= JAIL_FINE) {
+        p.cash -= JAIL_FINE;
+        p.jailTurns = 0;
+        state.phase = "path";
+        say(state, `${p.name} pays the $${JAIL_FINE} Jail fine.`);
+      }
+      return state;
+    }
+    if (action.pick === "card") {
+      if ((p.jailFreeCards || 0) > 0) {
+        p.jailFreeCards -= 1;
+        p.jailTurns = 0;
+        state.phase = "path";
+        say(state, `${p.name} uses a Get Out of Jail Free card.`);
+      }
+      return state;
+    }
+    // Boosted doubles roll (~45% total doubles probability vs normal 16.7%)
+    const a = state.forcedRoll?.[0] ?? d6(state);
+    const boosted = !state.forcedRoll && nextRng(state) < 0.34;
+    const b = state.forcedRoll?.[1] ?? (boosted ? a : d6(state));
+    state.forcedRoll = null;
+    state.lastRoll = [a, b];
+    state.rollTick += 1;
+    const doubles = a === b;
+    if (doubles) {
+      p.jailTurns = 0;
+      const from = p.stand;
+      const steps = a + b;
+      p.stand = wrapIndex(from + steps);
+      const id = spaceId(p);
+      state.land = id;
+      say(state, `${p.name} rolled doubles ${a}+${b} and breaks out of Jail → ${labelOf(state, id)}.`);
+      if (passedGo(from, steps) && p.leftHome) {
+        p.lapKey += 1;
+        state.goLand = id;
+        state.phase = "home";
+        say(state, `${p.name} passed GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY} or +2 moves.`);
+        return state;
+      }
+      resolveLanding(state, p, id);
+      return state;
+    }
+    p.jailTurns = Math.max(0, (p.jailTurns || 0) - 1);
+    if (p.jailTurns > 0) {
+      say(state, `${p.name} rolled ${a}+${b} (no doubles) — ${p.jailTurns} Jail attempt${p.jailTurns === 1 ? "" : "s"} left.`);
+      restOnSpace(state, p);
+      return state;
+    }
+    if (state.mode === "classic" && p.cash < JAIL_FINE) {
+      liquidate(state, p, JAIL_FINE);
+      if (p.out) {
+        beginTurn(state);
+        return state;
+      }
+    }
+    const fine = Math.min(JAIL_FINE, Math.max(0, p.cash));
+    p.cash -= fine;
+    const from = p.stand;
+    const steps = a + b;
+    p.stand = wrapIndex(from + steps);
+    const id = spaceId(p);
+    state.land = id;
+    say(state, `${p.name} rolled ${a}+${b}, pays $${fine} fine after 3 turns, and leaves Jail → ${labelOf(state, id)}.`);
+    if (passedGo(from, steps) && p.leftHome) {
+      p.lapKey += 1;
+      state.goLand = id;
+      state.phase = "home";
+      say(state, `${p.name} passed GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY} or +2 moves.`);
+      return state;
+    }
+    resolveLanding(state, p, id);
     return state;
   }
 
@@ -559,10 +719,79 @@ export function apply(prev: State, action: Action): State {
       p.lapKey += 1;
       state.goLand = id;
       state.phase = "home";
-      say(state, `${p.name} passed GO — take $200 or +1 move.`);
+      say(state, `${p.name} passed GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY} or +2 moves.`);
       return state;
     }
     resolveLanding(state, p, id);
+    return state;
+  }
+
+  if (action.type === "vault" && state.phase === "vault") {
+    const pool: VaultSafe[] =
+      state.mode === "moves" && p.moves < MOVE_CAP
+        ? [
+            { kind: "cash", label: "+$220 Gold", value: 220 },
+            { kind: "move", label: "+2 Moves", value: 2 },
+            nextRng(state) < 0.5
+              ? { kind: "shield", label: "Rent Shield +$50", value: 50 }
+              : { kind: "jailfree", label: "Jail Pass +$60", value: 60 },
+          ]
+        : [
+            { kind: "cash", label: "+$240 Gold", value: 240 },
+            { kind: "shield", label: "Rent Shield +$60", value: 60 },
+            { kind: "jailfree", label: "Jail Pass +$80", value: 80 },
+          ];
+    const seedPick = Math.floor(nextRng(state) * 10000);
+    const ordered = shuffle(pool, seedPick) as [VaultSafe, VaultSafe, VaultSafe];
+    const pickIdx = (action.pick === 1 || action.pick === 2 ? action.pick : 0) as 0 | 1 | 2;
+    const prize = ordered[pickIdx];
+    if (prize.kind === "cash") {
+      p.cash += prize.value;
+    } else if (prize.kind === "move") {
+      const gain = Math.min(prize.value, MOVE_CAP - p.moves);
+      if (gain > 0) p.moves += gain;
+      else p.cash += 150;
+    } else if (prize.kind === "shield") {
+      p.rentShield = true;
+      p.cash += prize.value;
+    } else if (prize.kind === "jailfree") {
+      p.jailFreeCards = (p.jailFreeCards || 0) + 1;
+      p.cash += prize.value;
+    }
+    state.vaultResult = { picked: pickIdx, safes: ordered };
+    say(state, `${p.name} cracks Vault #${pickIdx + 1} — claims ${prize.label}!`);
+    restOnSpace(state, p);
+    return state;
+  }
+
+  if (action.type === "casino" && state.phase === "casino") {
+    const bet = Math.max(0, Math.floor(action.bet));
+    if (bet === 0 || p.cash < bet) {
+      state.casinoResult = { bet: 0, reels: [0, 0, 0], payout: 0, outcome: "skip" };
+      say(state, `${p.name} steps out of the Casino.`);
+      restOnSpace(state, p);
+      return state;
+    }
+    p.cash -= bet;
+    const r0 = Math.floor(nextRng(state) * 5);
+    const r1 = Math.floor(nextRng(state) * 5);
+    const r2 = Math.floor(nextRng(state) * 5);
+    let payout = 0;
+    let outcome: "jackpot" | "pair" | "loss" = "loss";
+    if (r0 === r1 && r1 === r2) {
+      payout = bet * 3;
+      outcome = "jackpot";
+      say(state, `${p.name} hits Casino JACKPOT! +$${payout}!`);
+    } else if (r0 === r1 || r1 === r2 || r0 === r2) {
+      payout = Math.round(bet * 1.8);
+      outcome = "pair";
+      say(state, `${p.name} pairs up in Casino — wins $${payout}!`);
+    } else {
+      say(state, `${p.name} spins $${bet} in Casino — no match.`);
+    }
+    p.cash += payout;
+    state.casinoResult = { bet, reels: [r0, r1, r2], payout, outcome };
+    restOnSpace(state, p);
     return state;
   }
 
@@ -689,6 +918,13 @@ function resolveOffer(state: State, pick: "accept" | "decline") {
     state.offer = null;
     return;
   }
+  if (
+    offer.giveCompanies.some((id) => !ownsDeed(state, from.id, id)) ||
+    offer.getCompanies.some((id) => !ownsDeed(state, to.id, id))
+  ) {
+    state.offer = null;
+    return;
+  }
   state.offer = null;
   from.cash -= offer.giveCash + offer.fee;
   to.cash += offer.giveCash;
@@ -702,8 +938,12 @@ function resolveOffer(state: State, pick: "accept" | "decline") {
     to.moves -= 1;
     from.moves = Math.min(MOVE_CAP, from.moves + 1);
   }
-  for (const id of offer.giveCompanies) state.companies[id].owner = to.id;
-  for (const id of offer.getCompanies) state.companies[id].owner = from.id;
+  const transferDeed = (id: string, nextOwner: string) => {
+    if (isStoreId(state, id)) state.stores[id] = nextOwner;
+    else if (state.companies[id]) state.companies[id].owner = nextOwner;
+  };
+  for (const id of offer.giveCompanies) transferDeed(id, to.id);
+  for (const id of offer.getCompanies) transferDeed(id, from.id);
   from.freeTrade = false;
 }
 
@@ -846,6 +1086,19 @@ function resolveCard(state: State, p: Player) {
     p.stand = wrapIndex(p.stand + 4);
     say(state, `${p.name} detours to ${labelOf(state, spaceId(p))}.`);
   }
+  if (card === "casino_trip") {
+    p.stand = TRACK_ORDER.indexOf("dream");
+    say(state, `${p.name} takes a VIP invite to Casino!`);
+  }
+  if (card === "jail") {
+    p.stand = TRACK_ORDER.indexOf("rest");
+    p.jailTurns = 3;
+    say(state, `${p.name} is sent to Jail!`);
+  }
+  if (card === "jailfree") {
+    p.jailFreeCards = (p.jailFreeCards || 0) + 1;
+    say(state, `${p.name} claims a Get Out of Jail Free card.`);
+  }
 }
 
 function resolveLanding(state: State, p: Player, id: string) {
@@ -878,18 +1131,25 @@ function resolveLanding(state: State, p: Player, id: string) {
     return;
   }
 
-  if (id === "dream") {
+  if (id.startsWith("chance") || id.startsWith("chest")) {
     drawCard(state, p);
     return;
   }
+  if (id === "dream") {
+    state.phase = "casino";
+    state.casinoResult = null;
+    say(state, `${p.name} steps into the Casino.`);
+    return;
+  }
   if (id === "market") {
-    p.freeTrade = true;
-    say(state, `${p.name} opens the Market. This trade is free.`);
-    restOnSpace(state, p);
+    state.phase = "vault";
+    state.vaultResult = null;
+    say(state, `${p.name} opens the Vault — pick a safe to crack.`);
     return;
   }
   if (id === "rest") {
-    say(state, `${p.name} is just visiting Jail.`);
+    p.jailTurns = 3;
+    say(state, `${p.name} is locked in Jail — pay $${JAIL_FINE}, use a pass, or roll doubles next turn.`);
     restOnSpace(state, p);
     return;
   }
@@ -897,9 +1157,10 @@ function resolveLanding(state: State, p: Player, id: string) {
   if (co) {
     const own = state.companies[co.id];
     if (own.owner && own.owner !== p.id) {
-      if (p.openHouse) {
+      if (p.openHouse || p.rentShield) {
         p.openHouse = null;
-        say(state, "Open house — no rent.");
+        p.rentShield = false;
+        say(state, "Rent shield — no rent.");
       } else {
         takeRent(state, p, player(state, own.owner), rentOf(state, co), true, co.set, co.name);
         if (state.phase === "rent") return;
@@ -967,7 +1228,19 @@ function labelOf(state: State, id: string) {
 
 function finishTurn(state: State) {
   const ending = actor(state);
-  if (ending) ending.freeTrade = false;
+  if (ending) {
+    ending.freeTrade = false;
+    if (state.mode === "moves" && !ending.out) {
+      const held = brands(state).filter((c) => state.companies[c.id].owner === ending.id).length
+        + shops(state).filter((s) => state.stores[s.id] === ending.id).length;
+      const upkeep = held * UPKEEP_PER;
+      if (upkeep > 0) {
+        const pay = Math.min(upkeep, ending.cash);
+        ending.cash -= pay;
+        say(state, `${ending.name} paid $${pay} upkeep for ${held} brand${held === 1 ? "" : "s"}.`);
+      }
+    }
+  }
   const live = living(state);
   state.turn += 1;
   if (state.turn % live.length === 0) state.round += 1;
@@ -987,15 +1260,20 @@ export function describePhase(state: State): string {
   const p = actor(state);
   if (!p || state.phase === "over") return state.winnerIds.length ? "Game over" : "";
   const here = labelOf(state, spaceId(p));
-  if (state.phase === "home") return "GO — take $200 or +1 move";
+  if (state.phase === "home") {
+    const go = state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY;
+    return state.mode === "moves" ? `GO — take $${go} or +2 moves` : `GO — take $${go}`;
+  }
   if (state.phase === "rent" && state.rentDue) {
     const who = player(state, state.rentDue.to);
     return `Cannot pay $${state.rentDue.amount} to ${who.name} — note, move, or surrender`;
   }
   if (state.phase === "store") return `Buy ${here}?`;
   if (state.offer) return "A deal is waiting at the stall";
-  if (state.phase === "extra" && onMarket(state)) return "Market is open — trade free this turn";
-  if (state.phase === "card") return "Casino card";
+  if (state.phase === "vault") return "Vault — pick a safe to crack";
+  if (state.phase === "jail") return `Jail (${p.jailTurns} left) — pay $50, pass, or roll doubles`;
+  if (state.phase === "casino") return "Casino — place a bet or pass";
+  if (state.phase === "card") return "Chance card";
   if (state.phase === "path") return "Roll two dice";
   if (state.phase === "land") return state.land ? `Buy ${company(state.land, state.world).name}?` : "Buy?";
   if (state.lastPay) {

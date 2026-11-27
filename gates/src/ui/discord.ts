@@ -338,11 +338,12 @@ export async function readRoomByCode(code: string) {
   return r.json();
 }
 
-export async function writeRoom(id: string, payload: Record<string, unknown>) {
+export async function writeRoom(id: string, payload: Record<string, unknown>, opts?: { keepalive?: boolean }) {
   const r = await fetch(apiPath("/api/room"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, id }),
+    keepalive: !!opts?.keepalive,
   });
   if (!r.ok) return null;
   return r.json() as Promise<Record<string, unknown>>;

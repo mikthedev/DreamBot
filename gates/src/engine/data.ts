@@ -84,7 +84,7 @@ export type StoreId = (typeof STORES)[number]["id"];
 export const STANDS: { id: string; label: string; set: SetId; store?: StoreId }[] = [
   { id: "home", label: "GO", set: "social" },
   { id: "app", label: "App Store", set: "music", store: "app" },
-  { id: "market", label: "Market", set: "watch" },
+  { id: "market", label: "Vault", set: "watch" },
   { id: "play", label: "Play Store", set: "cloud", store: "play" },
   { id: "dream", label: "Casino", set: "ai" },
   { id: "steam", label: "Steam", set: "ride", store: "steam" },
@@ -115,6 +115,9 @@ export const CARDS = [
   "bundle",
   "fair",
   "detour",
+  "casino_trip",
+  "jail",
+  "jailfree",
   "blueprint",
   "late",
   "insurance",
@@ -127,7 +130,7 @@ export type CardId = (typeof CARDS)[number];
 export const CARD_LABEL: Record<CardId, string> = {
   spare: "Spare key — take $80",
   openhouse: "Open house — next walker of a set you own pays nothing",
-  swap: "Swap — take $60 (simple test resolve)",
+  swap: "Swap — take $60",
   quiet: "Quiet alley — next three alleys free",
   roof: "Raise the roof — $80 if you cannot build free",
   split: "Split the bill — you and the poorest other take $80",
@@ -135,12 +138,15 @@ export const CARD_LABEL: Record<CardId, string> = {
   tax: "Skylight tax — $80 from Giants, or from the bank",
   bundle: "Store bundle — $25 per store, max $100",
   fair: "Street fair — others pay $15, you pay $40",
-  detour: "Detour — skip ahead one stand",
+  detour: "Detour — jump 4 spaces ahead",
+  casino_trip: "VIP Invite — head straight to the Casino!",
+  jail: "Go to Jail — pay $50, use a pass, or roll doubles (3 turns)",
+  jailfree: "Jailbreaker Pass — Get Out of Jail Free card",
   blueprint: "Blueprint — $80 toward building",
   late: "Late rent — $40 from the richest other player",
   insurance: "Insurance — next rent you owe is free",
   crowd: "Crowded table — $40 per player, max $100",
-  rezone: "Rezone — $40 from the bank",
+  rezone: "Rezone — $80 from the bank",
 };
 
 export type World = {
@@ -249,7 +255,7 @@ export const WORLDS: Record<WorldId, World> = {
       intel: ["DuPont", "dupont"],
       amd: ["3M", "threem"],
       nvidia: ["Gore-Tex", "goretex"],
-      samsung: ["LVMH", "lvmh"],
+      samsung: ["Louis Vuitton", "lvmh"],
       microsoft: ["Kering", "kering"],
       apple: ["Richemont", "richemont"],
     }),
@@ -308,7 +314,8 @@ export const WORLDS: Record<WorldId, World> = {
   },
 };
 
-export const WORLD_IDS: WorldId[] = ["tech", "food", "fashion", "sports"];
+/** Food world parked — logos incomplete. */
+export const WORLD_IDS: WorldId[] = ["tech", "fashion", "sports"];
 
 export function worldOf(id?: WorldId | null): World {
   return WORLDS[id && id in WORLDS ? id : "tech"];
@@ -351,14 +358,20 @@ export function brandLogoId(c: { id: string; logo?: string }) {
   return c.logo || c.id;
 }
 
-export const MOVE_CAP = 28;
-export const START_CASH = 1150;
-export const START_MOVES = 15;
-export const TRADE_FEE = 50;
+export const MOVE_CAP = 32;
+/** DreamPoly (moves) — rich starting bankroll & GO rewards to sustain building across laps 1-3. */
+export const START_CASH = 2200;
+/** Classic Monopoly-style opening cash. */
+export const CLASSIC_START_CASH = 2000;
+export const START_MOVES = 20;
+export const TRADE_FEE = 0;
 export const NOTE_MAX = 5;
-export const NOTE_PAY = 300;
-export const NOTE_REPAY = 360;
+export const NOTE_PAY = 400;
+export const NOTE_REPAY = 460;
 export const STACK_CUT = 3;
-export const HARD_STOP_ROUNDS = 24;
+export const HARD_STOP_ROUNDS = 28;
 export const MIN_PLAYERS = 3;
 export const MAX_PLAYERS = 8;
+export const GO_PAY = 320;
+export const CLASSIC_GO_PAY = 260;
+export const UPKEEP_PER = 4;

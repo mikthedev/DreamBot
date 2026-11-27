@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { SimpleIcon } from "simple-icons";
 import { WORDS } from "./brandWordmarks";
 import {
@@ -192,10 +192,37 @@ const FILES: Record<string, string> = {
   sofi: "/brands/sofi.png",
 };
 
-function Mark({ label, children }: { label: string; children: ReactNode }) {
+const BBOX_CACHE = new Map<string, string>();
+
+function Mark({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  const pathRef = useRef<SVGGElement | null>(null);
+  const [vb, setVb] = useState<string>(() => BBOX_CACHE.get(id) ?? "0 0 24 24");
+
+  useLayoutEffect(() => {
+    const cached = BBOX_CACHE.get(id);
+    if (cached) {
+      if (vb !== cached) setVb(cached);
+      return;
+    }
+    const g = pathRef.current;
+    if (!g) return;
+    try {
+      const box = g.getBBox();
+      if (box.width > 0.5 && box.height > 0.5) {
+        const padX = box.width * 0.04;
+        const padY = box.height * 0.04;
+        const next = `${(box.x - padX).toFixed(2)} ${(box.y - padY).toFixed(2)} ${(box.width + padX * 2).toFixed(2)} ${(box.height + padY * 2).toFixed(2)}`;
+        BBOX_CACHE.set(id, next);
+        setVb(next);
+      }
+    } catch {
+      /* SVG detached or headless test */
+    }
+  }, [id, vb]);
+
   return (
-    <svg className="brand-logo" viewBox="0 0 24 24" role="img" aria-label={label}>
-      {children}
+    <svg className="brand-logo" viewBox={vb} role="img" aria-label={label}>
+      <g ref={pathRef}>{children}</g>
     </svg>
   );
 }
@@ -205,7 +232,7 @@ export function BrandLogo({ id, label }: { id: string; label?: string }) {
   const icon = ICONS[id];
   if (icon) {
     return (
-      <Mark label={name}>
+      <Mark id={id} label={name}>
         <path d={icon.path} fill="currentColor" />
       </Mark>
     );
@@ -219,7 +246,7 @@ export function BrandLogo({ id, label }: { id: string; label?: string }) {
   const word = WORDS[id];
   if (word) return word(name);
   return (
-    <Mark label={name}>
+    <Mark id="fallback" label={name}>
       <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" />
     </Mark>
   );

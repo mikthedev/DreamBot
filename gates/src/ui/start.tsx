@@ -145,17 +145,17 @@ export function StartMenu({
         <h1>
           <span>DreamPoly</span>
         </h1>
-        <p className="start-lead">Whoever opens the table hosts it on their computer. Friends link to them — not to a web server.</p>
+        <p className="start-lead">Open a table, share the code, and play together in Discord.</p>
         <div className="start-picks">
           <button className="mode-card main" style={{ "--i": 0 } as CSSProperties} onMouseEnter={sfxHover} onClick={() => pick("moves")}>
             <small>You host</small>
             <b>DreamPoly</b>
-            <span>Your PC runs the match. Share the 4-letter code.</span>
+            <span>Moves meter, bank notes, stack rent. Share the 4-letter code.</span>
           </button>
           <button className="mode-card" style={{ "--i": 1 } as CSSProperties} onMouseEnter={sfxHover} onClick={() => pick("classic")}>
             <small>You host</small>
             <b>Classic</b>
-            <span>Same deal: you are the table. Friends join your code.</span>
+            <span>$1500 start, cash-only race. Friends join your code.</span>
           </button>
         </div>
         <div className="table-gate">
@@ -204,10 +204,8 @@ export function Lobby({
   onMode,
   onLeave,
   onSit,
-  onSeatBots,
-  onClearBots,
+  onAddBot,
   onKick,
-  onPlayBots,
   onLooks,
   people = [],
   link,
@@ -223,10 +221,8 @@ export function Lobby({
   onMode: (mode: Mode) => void;
   onLeave: () => void;
   onSit: () => void;
-  onSeatBots: () => void;
-  onClearBots: () => void;
+  onAddBot: () => void;
   onKick: (id: string) => void;
-  onPlayBots: () => void;
   onLooks: (patch: { color?: string; look?: PlayerLook; frame?: FrameId; skin?: SkinId }) => void;
   people?: { id: string; name: string }[];
   link?: {
@@ -242,7 +238,7 @@ export function Lobby({
 }) {
   const ready = joined.length >= MIN_PLAYERS && joined.length <= MAX_PLAYERS;
   const inTable = joined.some((p) => p.id === youId);
-  const botCount = joined.filter((p) => p.bot).length;
+  const full = joined.length >= MAX_PLAYERS;
   const need = Math.max(0, MIN_PLAYERS - joined.length);
   const host =
     joined.find((p) => p.id === hostId) ||
@@ -326,7 +322,9 @@ export function Lobby({
                 hostId={hostId}
                 isHost={isHost}
                 canSit={!inTable}
+                full={full}
                 onSit={onSit}
+                onAddBot={onAddBot}
                 onKick={onKick}
                 people={people || []}
                 pings={link?.pings}
@@ -355,20 +353,6 @@ export function Lobby({
                       </button>
                       <button className={mode === "classic" ? "on" : ""} onMouseEnter={sfxHover} onClick={() => { sfx("click"); onMode("classic"); }}>
                         Classic
-                      </button>
-                    </div>
-                  </div>
-                  <div className="wait-desk-block">
-                    <small>Bots</small>
-                    <div className="wait-desk-bots">
-                      <button type="button" className="desk-act bots" onMouseEnter={sfxHover} onClick={() => { sfx("click"); onSeatBots(); }}>
-                        Seat bots
-                      </button>
-                      <button type="button" className="desk-act bots-off" disabled={!botCount} onMouseEnter={sfxHover} onClick={() => { sfx("back"); onClearBots(); }}>
-                        Remove bots
-                      </button>
-                      <button type="button" className="desk-act playbots" onMouseEnter={sfxHover} onClick={() => { sfx("enter"); setDesk(false); onPlayBots(); }}>
-                        Fill & start
                       </button>
                     </div>
                   </div>
@@ -469,7 +453,9 @@ function ChairRow({
   hostId,
   isHost,
   canSit,
+  full,
   onSit,
+  onAddBot,
   onKick,
   people,
   pings,
@@ -480,7 +466,9 @@ function ChairRow({
   hostId: string | null;
   isHost: boolean;
   canSit: boolean;
+  full: boolean;
   onSit: () => void;
+  onAddBot: () => void;
   onKick: (id: string) => void;
   people: { id: string; name: string }[];
   pings?: Record<string, number | null>;
@@ -490,10 +478,11 @@ function ChairRow({
       {chairs.map((p, i) => {
         const n = start + i;
         const empty = !p;
+        const canBot = empty && !canSit && isHost && !full;
         return (
           <li
             key={p?.id ?? `empty-${n}`}
-            className={`wait-chair ${p ? "filled" : "empty"} ${p?.id === hostId ? "is-host" : ""} ${p?.bot ? "is-bot" : ""} ${p?.id === youId ? "is-you" : ""} ${empty && canSit ? "can-sit" : ""}`}
+            className={`wait-chair ${p ? "filled" : "empty"} ${p?.id === hostId ? "is-host" : ""} ${p?.bot ? "is-bot" : ""} ${p?.id === youId ? "is-you" : ""} ${empty && canSit ? "can-sit" : ""} ${canBot ? "can-bot" : ""}`}
             style={{ "--i": n } as CSSProperties}
           >
             {p ? (
@@ -511,6 +500,11 @@ function ChairRow({
               <button type="button" className="chair-sit" onMouseEnter={sfxHover} onClick={() => { sfx("click"); onSit(); }}>
                 <span className="chair-pad">{n + 1}</span>
                 <span>Sit</span>
+              </button>
+            ) : canBot ? (
+              <button type="button" className="chair-sit chair-bot" title="Add a bot to this empty seat" onMouseEnter={sfxHover} onClick={() => { sfx("click"); onAddBot(); }}>
+                <span className="chair-pad">+</span>
+                <span>Add bot</span>
               </button>
             ) : (
               <>
@@ -616,7 +610,7 @@ function WaitingBooth({
               type="button"
               className={`look-frame ${frame === f.id ? "on" : ""}`}
               onMouseEnter={sfxHover}
-              onClick={() => { sfx("paint"); onLooks({ frame: f.id }); }}
+              onClick={() => { sfx("click"); onLooks({ frame: f.id }); }}
             >
               <span className={`frame-mini ring-${f.id}`}>
                 {you.avatar ? <img src={you.avatar} alt="" /> : you.name.slice(0, 1)}

@@ -1,9 +1,21 @@
 export type SfxName =
   | "hover"
+  | "tileHover"
   | "click"
   | "enter"
+  | "turnStart"
+  | "gameStart"
   | "back"
-  | "pay"
+  | "buy"
+  | "someoneBought"
+  | "payRent"
+  | "payBank"
+  | "noteUsed"
+  | "chanceCard"
+  | "hint"
+  | "gainMove"
+  | "fullCircle"
+  | "fullStack"
   | "received"
   | "upgrade"
   | "move"
@@ -12,17 +24,32 @@ export type SfxName =
   | "peek"
   | "confirm"
   | "market"
+  | "tradeOk"
+  | "tradeFail"
   | "dice"
+  | "diceClack"
   | "owner"
   | "cash"
   | "paint";
 
 const FILES: Record<SfxName, string> = {
   hover: "/sfx/hover.wav",
+  tileHover: "/sfx/tile_hover.wav",
   click: "/sfx/click.wav",
   enter: "/sfx/enter.wav",
+  turnStart: "/sfx/turn_start.wav",
+  gameStart: "/sfx/game_start.wav",
   back: "/sfx/back.wav",
-  pay: "/sfx/pay.wav",
+  buy: "/sfx/buy.wav",
+  someoneBought: "/sfx/someone_bought.wav",
+  payRent: "/sfx/pay_rent.wav",
+  payBank: "/sfx/pay_bank.wav",
+  noteUsed: "/sfx/note_used.wav",
+  chanceCard: "/sfx/chance_card.wav",
+  hint: "/sfx/hint.wav",
+  gainMove: "/sfx/gain_move.wav",
+  fullCircle: "/sfx/full_circle.wav",
+  fullStack: "/sfx/full_stack.wav",
   received: "/sfx/received.wav",
   upgrade: "/sfx/upgrade.wav",
   move: "/sfx/move.wav",
@@ -31,30 +58,48 @@ const FILES: Record<SfxName, string> = {
   peek: "/sfx/peek.mp3",
   confirm: "/sfx/confirm.mp3",
   market: "/sfx/market.wav",
+  tradeOk: "/sfx/trade_ok.wav",
+  tradeFail: "/sfx/trade_fail.wav",
   dice: "/sfx/dice.mp3",
+  diceClack: "/sfx/dice_clack.wav",
   owner: "/sfx/owner.wav",
   cash: "/sfx/cash.mp3",
   paint: "/sfx/colour.wav",
 };
 
 const VOL: Record<SfxName, number> = {
-  hover: 0.4,
-  click: 0.45,
-  enter: 0.5,
-  back: 0.5,
-  pay: 0.55,
-  received: 0.55,
-  upgrade: 0.55,
-  move: 0.32,
-  death: 0.6,
-  warning: 0.55,
-  peek: 0.42,
-  confirm: 0.5,
-  market: 0.5,
-  dice: 0.55,
-  owner: 0.5,
-  cash: 0.45,
-  paint: 0.55,
+  hover: 0.34,
+  tileHover: 0.32,
+  click: 0.46,
+  enter: 0.48,
+  turnStart: 0.44,
+  gameStart: 0.52,
+  back: 0.44,
+  buy: 0.48,
+  someoneBought: 0.46,
+  payRent: 0.5,
+  payBank: 0.48,
+  noteUsed: 0.48,
+  chanceCard: 0.48,
+  hint: 0.44,
+  gainMove: 0.48,
+  fullCircle: 0.5,
+  fullStack: 0.52,
+  received: 0.48,
+  upgrade: 0.48,
+  move: 0.34,
+  death: 0.52,
+  warning: 0.48,
+  peek: 0.38,
+  confirm: 0.46,
+  market: 0.46,
+  tradeOk: 0.48,
+  tradeFail: 0.46,
+  dice: 0.48,
+  diceClack: 0.42,
+  owner: 0.44,
+  cash: 0.42,
+  paint: 0.46,
 };
 
 const MUSIC_MUTE_KEY = "gates-music";
@@ -68,6 +113,7 @@ const MUFFLE_HZ = 480;
 const cache = new Map<SfxName, HTMLAudioElement>();
 let hoverAt = 0;
 let playHoverAt = 0;
+let tileHoverAt = 0;
 type Kind = "menu" | "play";
 type BedGraph = {
   ver: 2;
@@ -108,11 +154,11 @@ function node(name: SfxName) {
   return a;
 }
 
-export function sfx(name: SfxName, rate = 1) {
+export function sfx(name: SfxName, rate = 1, gainScale = 1) {
   if (!sfxOn || sfxLevel <= 0) return;
   const src = node(name);
   const shot = src.cloneNode(true) as HTMLAudioElement;
-  shot.volume = Math.min(1, VOL[name] * sfxLevel);
+  shot.volume = Math.min(1, Math.max(0, VOL[name] * sfxLevel * gainScale));
   shot.preservesPitch = false;
   shot.playbackRate = Math.min(2, Math.max(0.65, rate));
   void shot.play().catch(() => {});
@@ -132,8 +178,37 @@ export function sfxPlayHover(rate?: unknown) {
   sfx("peek", typeof rate === "number" ? rate : 1);
 }
 
+// Coherent 10-step melodic contour per board side so neighboring tiles glide gently up and down.
+const SIDE_CONTOUR = [0.92, 0.95, 0.99, 1.03, 1.07, 1.11, 1.07, 1.03, 0.99, 0.95];
+const SIDE_SHIFT = [0, 0.02, 0.04, 0.02];
+
+export function sfxTileHover(index?: number) {
+  const now = performance.now();
+  if (now - tileHoverAt < 65) return;
+  tileHoverAt = now;
+  const idx = typeof index === "number" && Number.isFinite(index) ? Math.abs(Math.floor(index)) : 0;
+  const side = Math.floor(idx / 10) % 4;
+  const step = idx % 10;
+  const rate = Math.min(1.22, Math.max(0.9, SIDE_CONTOUR[step] + SIDE_SHIFT[side]));
+  sfx("tileHover", rate);
+}
+
 export function sfxCash(delta: number) {
   sfx("cash", delta < 0 ? 0.82 : 1.18);
+}
+
+let diceBounceAt = 0;
+export function sfxDiceBounce(intensity = 0.7, index = 0) {
+  if (!sfxOn || sfxLevel <= 0) return;
+  const now = performance.now();
+  if (now - diceBounceAt < 45) return;
+  diceBounceAt = now;
+  const src = node("diceClack");
+  const shot = src.cloneNode(true) as HTMLAudioElement;
+  shot.volume = Math.min(0.46, Math.max(0.11, intensity * 0.34) * sfxLevel);
+  shot.preservesPitch = false;
+  shot.playbackRate = Math.min(1.3, Math.max(0.75, 0.86 + intensity * 0.28 + (index === 1 ? 0.07 : -0.04)));
+  void shot.play().catch(() => {});
 }
 
 export function getMix() {

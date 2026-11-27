@@ -229,6 +229,41 @@ export function CornerArt({ id }: { id: string }) {
       </svg>
     );
   }
+  if (id === "chance") {
+    return (
+      <svg className="event-art event-chance-art" viewBox="0 0 24 24" aria-hidden>
+        <path
+          d="M8.4 8.6a3.9 3.9 0 0 1 7.6 1.2c0 2.1-2.5 2.8-2.9 4.5"
+          fill="none"
+          stroke="var(--ev-chance-ink, #78350f)"
+          strokeWidth="4.6"
+          strokeLinecap="round"
+          opacity="0.32"
+        />
+        <path
+          d="M8.4 8.6a3.9 3.9 0 0 1 7.6 1.2c0 2.1-2.5 2.8-2.9 4.5"
+          fill="none"
+          stroke="var(--ev-chance, #f59e0b)"
+          strokeWidth="3.2"
+          strokeLinecap="round"
+        />
+        <circle cx="13" cy="18.6" r="2.2" fill="var(--ev-chance-ink, #78350f)" opacity="0.28" />
+        <circle cx="13" cy="18.6" r="1.75" fill="var(--ev-chance-hi, #fde047)" />
+        <path fill="var(--ev-chance-star, #fde68a)" d="M5 4l.8 1.6L7.4 6l-1.6.6L5 8.2l-.6-1.6L2.8 6l1.6-.4zM19.5 14l.6 1.2 1.2.4-1.2.5-.6 1.2-.5-1.2-1.2-.5 1.2-.4z" />
+      </svg>
+    );
+  }
+  if (id === "chest") {
+    return (
+      <svg className="event-art event-chest-art" viewBox="0 0 24 24" aria-hidden>
+        <path fill="var(--ev-chest-ribbon, #facc15)" d="M8.5 5.5C6.8 5.5 6 7 7.6 8H11V6.8C11 6 9.8 5.5 8.5 5.5zm7 0C14.2 5.5 13 6 13 6.8V8h3.4C18 7 17.2 5.5 15.5 5.5z" />
+        <rect x="3.5" y="7.8" width="17" height="3.6" rx="1.2" fill="var(--ev-chest-top, #22d3ee)" stroke="var(--ev-chest-ink, #083344)" strokeWidth="1.2" />
+        <rect x="4.8" y="11.2" width="14.4" height="9" rx="1.4" fill="var(--ev-chest, #06b6d4)" stroke="var(--ev-chest-ink, #083344)" strokeWidth="1.2" />
+        <rect x="10.4" y="7.8" width="3.2" height="12.4" fill="var(--ev-chest-ribbon, #fde047)" />
+        <circle cx="12" cy="15.2" r="1.5" fill="var(--ev-chest-ink, #083344)" />
+      </svg>
+    );
+  }
   if (id === "dream") {
     return (
       <svg className="corner-art" viewBox="0 0 80 80" aria-hidden>
@@ -246,24 +281,44 @@ export function CornerArt({ id }: { id: string }) {
   }
   return (
     <svg className="corner-art" viewBox="0 0 80 80" aria-hidden shapeRendering="crispEdges">
-      <rect x="8" y="28" width="64" height="8" fill="#f59e0b" />
-      <rect x="8" y="20" width="8" height="8" fill="#b45309" />
-      <rect x="24" y="20" width="8" height="8" fill="#fbbf24" />
-      <rect x="40" y="20" width="8" height="8" fill="#b45309" />
-      <rect x="56" y="20" width="8" height="8" fill="#fbbf24" />
-      <rect x="72" y="20" width="0" height="8" fill="#b45309" />
-      <rect x="16" y="20" width="8" height="8" fill="#fbbf24" />
-      <rect x="32" y="20" width="8" height="8" fill="#f59e0b" />
-      <rect x="48" y="20" width="8" height="8" fill="#f59e0b" />
-      <rect x="64" y="20" width="8" height="8" fill="#b45309" />
-      <rect x="14" y="36" width="6" height="28" fill="#7c2d12" />
-      <rect x="60" y="36" width="6" height="28" fill="#7c2d12" />
-      <rect x="14" y="52" width="52" height="12" fill="#92400e" />
-      <rect x="22" y="44" width="10" height="8" fill="#fde68a" />
-      <rect x="36" y="40" width="10" height="12" fill="#fb7185" />
-      <rect x="50" y="46" width="8" height="6" fill="#38bdf8" />
-      <rect x="34" y="10" width="12" height="10" fill="#f8fafc" />
-      <rect x="36" y="12" width="8" height="6" fill="#f59e0b" />
+      <rect x="14" y="14" width="52" height="52" fill="#334155" />
+      <rect x="16" y="16" width="48" height="48" fill="#64748b" />
+      <rect x="20" y="20" width="40" height="40" fill="#1e293b" />
+      <rect x="24" y="24" width="32" height="32" fill="#94a3b8" />
+      <rect x="34" y="28" width="12" height="24" fill="#cbd5e1" />
+      <rect x="28" y="34" width="24" height="12" fill="#cbd5e1" />
+      <rect x="34" y="34" width="12" height="12" fill="#fbbf24" />
+      <rect x="37" y="37" width="6" height="6" fill="#78350f" />
+      <rect x="16" y="26" width="6" height="8" fill="#fbbf24" />
+      <rect x="16" y="46" width="6" height="8" fill="#fbbf24" />
+      <rect x="24" y="64" width="10" height="4" fill="#0f172a" />
+      <rect x="46" y="64" width="10" height="4" fill="#0f172a" />
+    </svg>
+  );
+}
+
+/** Crisp 16x16 pixel safe icon for Vault safe-picking doors. */
+export function PixelSafe({ open, picked, className }: { open?: boolean; picked?: boolean; className?: string }) {
+  return (
+    <svg className={className ?? "pixel-safe"} viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
+      <rect x="1" y="1" width="14" height="13" fill={picked ? "#f59e0b" : "#475569"} />
+      <rect x="2" y="2" width="12" height="11" fill={open ? "#1e1b18" : "#64748b"} />
+      {open ? (
+        <>
+          <rect x="3" y="3" width="10" height="9" fill="#0f172a" />
+          <rect x="4" y="6" width="8" height="4" fill="#fbbf24" />
+          <rect x="5" y="5" width="6" height="2" fill="#fef08a" />
+          <rect x="12" y="2" width="2" height="11" fill="#94a3b8" />
+        </>
+      ) : (
+        <>
+          <rect x="3" y="3" width="10" height="9" fill="#94a3b8" />
+          <rect x="6" y="5" width="4" height="5" fill="#1e293b" />
+          <rect x="7" y="6" width="2" height="3" fill="#fbbf24" />
+          <rect x="3" y="4" width="1" height="2" fill="#334155" />
+          <rect x="3" y="9" width="1" height="2" fill="#334155" />
+        </>
+      )}
     </svg>
   );
 }
@@ -308,6 +363,35 @@ export function PixelBill({ className }: { className?: string }) {
   );
 }
 
+export function PixelCoin({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? "pixel-coin"} viewBox="0 0 12 12" shapeRendering="crispEdges" aria-hidden>
+      <rect x="3" y="0" width="6" height="1" fill="#78350f" />
+      <rect x="1" y="1" width="10" height="1" fill="#78350f" />
+      <rect x="0" y="3" width="12" height="6" fill="#78350f" />
+      <rect x="1" y="9" width="10" height="2" fill="#78350f" />
+      <rect x="3" y="11" width="6" height="1" fill="#78350f" />
+      <rect x="3" y="1" width="6" height="10" fill="#f59e0b" />
+      <rect x="1" y="3" width="10" height="6" fill="#f59e0b" />
+      <rect x="2" y="2" width="8" height="8" fill="#fbbf24" />
+      <rect x="3" y="2" width="5" height="2" fill="#fef08a" />
+      <rect x="5" y="4" width="2" height="4" fill="#b45309" />
+      <rect x="4" y="4" width="1" height="2" fill="#fffbeb" />
+    </svg>
+  );
+}
+
+export function PixelSparkle({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? "pixel-sparkle"} viewBox="0 0 10 10" shapeRendering="crispEdges" aria-hidden>
+      <rect x="4" y="0" width="2" height="10" fill="#fde047" />
+      <rect x="0" y="4" width="10" height="2" fill="#fde047" />
+      <rect x="3" y="3" width="4" height="4" fill="#fef9c3" />
+      <rect x="4" y="4" width="2" height="2" fill="#ffffff" />
+    </svg>
+  );
+}
+
 export function PixelCaution({ className }: { className?: string }) {
   return (
     <svg className={className ?? "pixel-caution"} viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
@@ -327,16 +411,17 @@ export function PixelCaution({ className }: { className?: string }) {
 export function PixelHouse() {
   return (
     <svg className="pixel-house" viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
-      <rect x="7" y="1" width="2" height="2" fill="#14532d" />
-      <rect x="5" y="3" width="6" height="2" fill="#16a34a" />
-      <rect x="3" y="5" width="10" height="2" fill="#22c55e" />
-      <rect x="1" y="7" width="14" height="2" fill="#15803d" />
-      <rect x="3" y="8" width="10" height="7" fill="#fef3c7" />
-      <rect x="3" y="8" width="10" height="1" fill="#14532d" />
-      <rect x="4" y="10" width="3" height="2" fill="#7dd3fc" />
-      <rect x="9" y="10" width="3" height="2" fill="#7dd3fc" />
-      <rect x="7" y="11" width="2" height="4" fill="#92400e" />
-      <rect x="3" y="14" width="10" height="1" fill="#0a080c" />
+      <rect x="11" y="2" width="2" height="4" fill="var(--house-roof-dark, #14532d)" />
+      <rect x="7" y="1" width="2" height="2" fill="var(--house-roof-dark, #14532d)" />
+      <rect x="5" y="3" width="6" height="2" fill="var(--house-roof, #16a34a)" />
+      <rect x="3" y="5" width="10" height="2" fill="var(--house-roof-hi, #22c55e)" />
+      <rect x="1" y="7" width="14" height="2" fill="var(--house-roof-dark, #15803d)" />
+      <rect x="2" y="8" width="12" height="7" fill="var(--house-wall, #fef3c7)" />
+      <rect x="2" y="8" width="12" height="1" fill="var(--house-trim, #14532d)" />
+      <rect x="4" y="10" width="2" height="2" fill="var(--house-win, #38bdf8)" />
+      <rect x="10" y="10" width="2" height="2" fill="var(--house-win, #38bdf8)" />
+      <rect x="7" y="11" width="2" height="4" fill="var(--house-door, #92400e)" />
+      <rect x="2" y="14" width="12" height="1" fill="var(--house-trim, #0a080c)" />
     </svg>
   );
 }
@@ -344,18 +429,18 @@ export function PixelHouse() {
 export function PixelHotel() {
   return (
     <svg className="pixel-hotel" viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
-      <rect x="1" y="2" width="14" height="2" fill="#e6c35a" />
-      <rect x="6" y="0" width="4" height="3" fill="#e6c35a" />
-      <rect x="7" y="0" width="2" height="2" fill="#fff4cc" />
-      <rect x="2" y="4" width="12" height="11" fill="#b91c1c" />
-      <rect x="2" y="4" width="12" height="1" fill="#7f1d1d" />
-      <rect x="4" y="6" width="2" height="2" fill="#fde68a" />
-      <rect x="7" y="6" width="2" height="2" fill="#fde68a" />
-      <rect x="10" y="6" width="2" height="2" fill="#fde68a" />
-      <rect x="4" y="9" width="2" height="2" fill="#fde68a" />
-      <rect x="10" y="9" width="2" height="2" fill="#fde68a" />
-      <rect x="7" y="11" width="2" height="4" fill="#1a1208" />
-      <rect x="2" y="14" width="12" height="1" fill="#0a080c" />
+      <rect x="5" y="0" width="6" height="2" fill="var(--hotel-crown, #fde047)" />
+      <rect x="7" y="0" width="2" height="2" fill="var(--hotel-crown-hi, #fffbeb)" />
+      <rect x="1" y="2" width="14" height="2" fill="var(--hotel-roof, #eab308)" />
+      <rect x="2" y="4" width="12" height="11" fill="var(--hotel-body, #dc2626)" />
+      <rect x="2" y="4" width="12" height="1" fill="var(--hotel-trim, #7f1d1d)" />
+      <rect x="4" y="6" width="2" height="2" fill="var(--hotel-win, #fef08a)" />
+      <rect x="7" y="6" width="2" height="2" fill="var(--hotel-win, #fef08a)" />
+      <rect x="10" y="6" width="2" height="2" fill="var(--hotel-win, #fef08a)" />
+      <rect x="4" y="9" width="2" height="2" fill="var(--hotel-win, #fef08a)" />
+      <rect x="10" y="9" width="2" height="2" fill="var(--hotel-win, #fef08a)" />
+      <rect x="7" y="11" width="2" height="4" fill="var(--hotel-trim, #1a1208)" />
+      <rect x="2" y="14" width="12" height="1" fill="var(--hotel-trim, #0a080c)" />
     </svg>
   );
 }
@@ -508,5 +593,68 @@ function CatPx({ color }: { color: string }) {
       <rect x="5" y="17" width="2" height="1" fill="#1a1208" />
       <rect x="9" y="17" width="2" height="1" fill="#1a1208" />
     </>
+  );
+}
+
+/** Crisp 16x16 pixel-art slot symbols for Casino reels: 0 Cherry, 1 Clover, 2 Coin, 3 Gem, 4 Seven. */
+export function PixelCasinoSymbol({ id, className }: { id: number; className?: string }) {
+  const sym = ((Math.floor(id) % 5) + 5) % 5;
+  return (
+    <svg className={className ?? "pixel-casino-sym"} viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden>
+      {sym === 0 ? (
+        <>
+          <rect x="6" y="2" width="5" height="1" fill="#22c55e" />
+          <rect x="5" y="3" width="2" height="2" fill="#4ade80" />
+          <rect x="9" y="3" width="2" height="4" fill="#16a34a" />
+          <rect x="4" y="5" width="2" height="3" fill="#16a34a" />
+          <rect x="2" y="8" width="5" height="5" fill="#dc2626" />
+          <rect x="3" y="9" width="2" height="2" fill="#fca5a5" />
+          <rect x="8" y="8" width="5" height="5" fill="#b91c1c" />
+          <rect x="9" y="9" width="2" height="2" fill="#fca5a5" />
+          <rect x="3" y="13" width="3" height="1" fill="#7f1d1d" />
+          <rect x="9" y="13" width="3" height="1" fill="#7f1d1d" />
+        </>
+      ) : sym === 1 ? (
+        <>
+          <rect x="5" y="2" width="6" height="4" fill="#22c55e" />
+          <rect x="6" y="3" width="4" height="2" fill="#86efac" />
+          <rect x="2" y="5" width="5" height="5" fill="#16a34a" />
+          <rect x="9" y="5" width="5" height="5" fill="#22c55e" />
+          <rect x="6" y="6" width="4" height="4" fill="#4ade80" />
+          <rect x="6" y="10" width="4" height="2" fill="#15803d" />
+          <rect x="7" y="12" width="2" height="3" fill="#166534" />
+        </>
+      ) : sym === 2 ? (
+        <>
+          <rect x="4" y="2" width="8" height="12" fill="#92400e" />
+          <rect x="2" y="4" width="12" height="8" fill="#92400e" />
+          <rect x="4" y="3" width="8" height="10" fill="#f59e0b" />
+          <rect x="3" y="4" width="10" height="8" fill="#fbbf24" />
+          <rect x="5" y="4" width="4" height="2" fill="#fef08a" />
+          <rect x="7" y="5" width="2" height="6" fill="#b45309" />
+          <rect x="6" y="5" width="1" height="2" fill="#fffbeb" />
+        </>
+      ) : sym === 3 ? (
+        <>
+          <rect x="4" y="2" width="8" height="2" fill="#0ea5e9" />
+          <rect x="2" y="4" width="12" height="3" fill="#38bdf8" />
+          <rect x="3" y="4" width="4" height="2" fill="#e0f2fe" />
+          <rect x="6" y="4" width="4" height="3" fill="#7dd3fc" />
+          <rect x="4" y="7" width="8" height="3" fill="#0284c7" />
+          <rect x="6" y="10" width="4" height="3" fill="#0369a1" />
+          <rect x="7" y="13" width="2" height="1" fill="#075985" />
+        </>
+      ) : (
+        <>
+          <rect x="2" y="2" width="12" height="3" fill="#f59e0b" />
+          <rect x="3" y="2" width="10" height="2" fill="#fde047" />
+          <rect x="10" y="5" width="4" height="2" fill="#fbbf24" />
+          <rect x="8" y="7" width="4" height="2" fill="#f59e0b" />
+          <rect x="6" y="9" width="4" height="3" fill="#fbbf24" />
+          <rect x="5" y="12" width="4" height="2" fill="#d97706" />
+          <rect x="4" y="3" width="3" height="1" fill="#fffbeb" />
+        </>
+      )}
+    </svg>
   );
 }

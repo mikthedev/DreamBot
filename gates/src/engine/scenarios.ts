@@ -1,6 +1,7 @@
-import { playUntil } from "./bot";
-import { COMPANIES, STACK_CUT, START_MOVES } from "./data";
-import { apply, createGame, fuelPrice, type State } from "./game";
+import { playUntil, stepBot } from "./bot";
+import { COMPANIES, GO_PAY, STACK_CUT, START_MOVES, UPKEEP_PER } from "./data";
+import { TRACK_LEN, TRACK_ORDER } from "./track";
+import { actor, apply, createGame, fuelPrice, type State } from "./game";
 
 export type ScenarioResult = {
   id: string;
@@ -29,9 +30,14 @@ export function runScenarios(): ScenarioResult[] {
     stayOnLandedTile(),
     outOfMovesFreesBoard(),
     marketLetsYouTradeFree(),
-    jailDoesNotGrantAMove(),
+    jailRulesWork(),
+    chanceToCasinoOpensCasino(),
     buyDoesNotGrantAMove(),
     hostSnapKeepsGuestMoves(),
+    sellingChargesOnlyActiveUpkeep(),
+    symmetricalFortyTileBoard(),
+    rngFairLandingDistribution(),
+    storesCanBeTraded(),
   ];
 }
 
@@ -58,7 +64,7 @@ function fullBotTable(): ScenarioResult {
 function homeIsAChoice(): ScenarioResult {
   let s = createGame(four(), { seed: 2 });
   const you = s.players[0];
-  you.stand = 28;
+  you.stand = TRACK_LEN - 4;
   you.leftHome = true;
   you.moves = 4;
   for (const id of ["discord", "reddit", "instagram"]) s.companies[id] = { owner: "you", level: 0 };
@@ -69,14 +75,14 @@ function homeIsAChoice(): ScenarioResult {
   const moves = s.players[0].moves;
   if (s.phase !== "home") return { id: "home", name: "Home is cash or a move", ok: false, detail: s.phase };
   s = apply(s, { type: "home", pick: "move" });
-  const ok = s.players[0].moves === moves + 1 && s.players[0].cash === before;
-  return { id: "home", name: "Home is cash or a move", ok, detail: ok ? "Took a move, kept the cash" : "Home choice did not convert" };
+  const ok = s.players[0].moves === moves + 2 && s.players[0].cash === before;
+  return { id: "home", name: "Home is cash or a move", ok, detail: ok ? "Took moves, kept the cash" : "Home choice did not convert" };
 }
 
 function passGoIsAChoice(): ScenarioResult {
   let s = createGame(four(), { seed: 9 });
   const you = s.players[0];
-  you.stand = 30;
+  you.stand = TRACK_LEN - 2;
   you.leftHome = true;
   s.phase = "path";
   s.forcedRoll = [2, 2];
@@ -92,12 +98,12 @@ function passGoIsAChoice(): ScenarioResult {
     };
   }
   s = apply(s, { type: "home", pick: "cash" });
-  const ok = s.players[0].cash === cash + 200 && s.players[0].moves === moves && s.players[0].stand === 2;
+  const ok = s.players[0].cash === cash + GO_PAY && s.players[0].moves === moves && s.players[0].stand === 2;
   return {
     id: "pass-go",
     name: "Passing GO waits for a choice",
     ok,
-    detail: ok ? "Cash only after picking $200" : `cash ${s.players[0].cash} stand ${s.players[0].stand}`,
+    detail: ok ? "Cash only after picking GO pay" : `cash ${s.players[0].cash} stand ${s.players[0].stand}`,
   };
 }
 
@@ -147,7 +153,7 @@ function cloudPaysChips(): ScenarioResult {
     { seed: 4 },
   );
   s.turn = 0;
-  s.players[0].stand = 12;
+  s.players[0].stand = TRACK_ORDER.indexOf("gcloud") - 3;
   s.players[0].cash = 400;
   s.phase = "path";
   s.forcedRoll = [1, 2];
@@ -169,18 +175,19 @@ function cloudPaysChips(): ScenarioResult {
 
 function stayOnLandedTile(): ScenarioResult {
   let s = createGame(four(), { seed: 5 });
+  const appIdx = TRACK_ORDER.indexOf("app");
   s.phase = "path";
-  s.players[0].stand = 2;
+  s.players[0].stand = appIdx - 2;
   s.forcedRoll = [1, 1];
   s = apply(s, { type: "path", pick: "walk" });
-  const stayed = s.players[0].stand === 4 && s.land === "app";
+  const stayed = s.players[0].stand === appIdx && s.land === "app";
   s = apply(s, { type: "store", pick: "skip" });
-  const ok = stayed && s.players[0].stand === 4 && s.phase === "extra";
+  const ok = stayed && s.players[0].stand === appIdx && s.phase === "extra";
   return {
     id: "stay",
     name: "You stay on the tile you rolled onto",
     ok,
-    detail: ok ? "Reddit +2 stays on App Store" : `stand ${s.players[0].stand} phase ${s.phase}`,
+    detail: ok ? "Instagram +2 stays on App Store" : `stand ${s.players[0].stand} phase ${s.phase}`,
   };
 }
 
@@ -193,13 +200,17 @@ function marketLetsYouTradeFree(): ScenarioResult {
     { seed: 8 },
   );
   s.phase = "path";
-  s.players[0].stand = 6;
+  s.players[0].stand = TRACK_ORDER.indexOf("market") - 2;
   s.forcedRoll = [1, 1];
   s.companies.discord = { owner: "you", level: 0 };
   s.companies.uber = { owner: "nova", level: 0 };
   s = apply(s, { type: "path", pick: "walk" });
-  if (!s.players[0].freeTrade || s.phase !== "extra") {
-    return { id: "market", name: "Market lets you trade free", ok: false, detail: `phase ${s.phase} free ${s.players[0].freeTrade}` };
+  if (s.phase !== "vault") {
+    return { id: "market", name: "Vault lets you crack a safe & trade free", ok: false, detail: `phase ${s.phase}` };
+  }
+  s = apply(s, { type: "vault", pick: 1 });
+  if (!s.vaultResult || s.phase !== "extra") {
+    return { id: "market", name: "Vault lets you crack a safe & trade free", ok: false, detail: `phase ${s.phase}` };
   }
   const cash = s.players[0].cash;
   s = apply(s, {
@@ -213,7 +224,7 @@ function marketLetsYouTradeFree(): ScenarioResult {
     getMove: false,
   });
   if (!s.offer || s.companies.uber.owner !== "nova") {
-    return { id: "market", name: "Market lets you trade free", ok: false, detail: "Offer did not wait for accept" };
+    return { id: "market", name: "Vault lets you crack a safe & trade free", ok: false, detail: "Offer did not wait for accept" };
   }
   s = apply(s, { type: "offer", pick: "accept" });
   const you = s.players[0];
@@ -225,31 +236,66 @@ function marketLetsYouTradeFree(): ScenarioResult {
     !you.freeTrade;
   return {
     id: "market",
-    name: "Market lets you trade free",
+    name: "Vault lets you crack a safe & trade free",
     ok,
-    detail: ok ? "Swapped Discord for Uber with no desk fee" : `uber ${s.companies.uber.owner} cash ${you.cash}`,
+    detail: ok ? "Cracked Vault #2 and swapped Discord for Uber with $0 fee" : `uber ${s.companies.uber.owner} cash ${you.cash}`,
   };
 }
 
-function jailDoesNotGrantAMove(): ScenarioResult {
+function jailRulesWork(): ScenarioResult {
   let s = createGame(four(), { seed: 3 });
   const you = s.players[0];
-  you.stand = 22;
+  const restIdx = TRACK_ORDER.indexOf("rest");
+  you.stand = restIdx - 2;
   you.leftHome = true;
   you.moves = 8;
+  you.jailFreeCards = 1;
   s.phase = "path";
   s.forcedRoll = [1, 1];
-  const moves = you.moves;
   s = apply(s, { type: "path", pick: "walk" });
-  const landed = s.land === "rest" && s.players[0].stand === 24;
-  const same = s.players[0].moves === moves;
-  const extra = s.phase === "extra";
-  const ok = landed && same && extra;
+  if (s.land !== "rest" || s.players[0].jailTurns !== 3 || s.phase !== "extra") {
+    return { id: "jail", name: "Jail rules (pay $50, card, or doubles)", ok: false, detail: `jailTurns=${s.players[0].jailTurns} phase=${s.phase}` };
+  }
+  // Cycle to player's next turn cleanly via bot steps: moves decrements by 1 and enters phase "jail"
+  s = apply(s, { type: "end" });
+  let guard = 0;
+  while (actor(s)?.id !== "you" && s.phase !== "over" && guard < 120) {
+    s = stepBot(s);
+    guard += 1;
+  }
+  if (s.phase !== "jail" || s.players[0].moves !== 7) {
+    return { id: "jail", name: "Jail rules (pay $50, card, or doubles)", ok: false, detail: `expected jail phase & 7 moves, got ${s.phase}/${s.players[0].moves}` };
+  }
+  // Failed non-doubles uses a jail turn without moving
+  s.forcedRoll = [2, 5];
+  s = apply(s, { type: "jail", pick: "roll" });
+  if (s.players[0].jailTurns !== 2 || s.players[0].stand !== restIdx || s.phase !== "extra") {
+    return { id: "jail", name: "Jail rules (pay $50, card, or doubles)", ok: false, detail: `after non-double: turns=${s.players[0].jailTurns} stand=${s.players[0].stand}` };
+  }
+  // Escape with Get Out of Jail Free pass
+  s.phase = "jail";
+  s = apply(s, { type: "jail", pick: "card" });
+  const ok = s.phase === "path" && s.players[0].jailTurns === 0 && s.players[0].jailFreeCards === 0;
   return {
     id: "jail",
-    name: "Jail does not grant a move",
+    name: "Jail rules (pay $50, card, or doubles)",
     ok,
-    detail: ok ? "Visiting Jail left moves unchanged" : `land ${s.land} stand ${s.players[0].stand} moves ${s.players[0].moves} phase ${s.phase}`,
+    detail: ok ? "Locked 3 turns, consumed turn move on attempt, freed with Jail Pass" : `phase ${s.phase} turns ${s.players[0].jailTurns}`,
+  };
+}
+
+function chanceToCasinoOpensCasino(): ScenarioResult {
+  let s = createGame(four(), { seed: 12 });
+  s.players[0].stand = TRACK_ORDER.indexOf("chest2");
+  s.phase = "card";
+  s.pendingCard = "detour";
+  s = apply(s, { type: "card" });
+  const ok = s.phase === "casino" && TRACK_ORDER[s.players[0].stand] === "dream";
+  return {
+    id: "chance-casino",
+    name: "Chance card to Casino opens Casino immediately",
+    ok,
+    detail: ok ? "Detour onto Casino launched Casino phase instead of ending turn" : `phase ${s.phase} stand ${TRACK_ORDER[s.players[0].stand]}`,
   };
 }
 
@@ -303,6 +349,108 @@ function outOfMovesFreesBoard(): ScenarioResult {
   const you = s.players.find((p) => p.id === "you")!;
   const ok = you.out && s.companies.discord.owner === null;
   return { id: "out", name: "No moves left clears your companies", ok, detail: ok ? "Discord returned to the bank" : "Board did not clear" };
+}
+
+function sellingChargesOnlyActiveUpkeep(): ScenarioResult {
+  let s = createGame(four(), { seed: 5 });
+  for (const id of ["discord", "reddit", "spotify"]) s.companies[id] = { owner: "you", level: 0 };
+  s.phase = "extra";
+  s.players[0].cash = 1000;
+  s = apply(s, { type: "sell", companyId: "spotify" });
+  const cashAfterSell = s.players[0].cash;
+  s = apply(s, { type: "end" });
+  const paid = cashAfterSell - s.players[0].cash;
+  const expected = 2 * UPKEEP_PER;
+  const ok = paid === expected && s.companies.spotify.owner === null;
+  return {
+    id: "sell-upkeep",
+    name: "Selling a property excludes it from turn upkeep",
+    ok,
+    detail: ok ? `Charged $${paid} for 2 active brands` : `paid $${paid}, expected $${expected}`,
+  };
+}
+
+function symmetricalFortyTileBoard(): ScenarioResult {
+  const lenOk = TRACK_LEN === 40;
+  const sideStores = [
+    ["chance1", "app", "chest1"],
+    ["chance2", "play", "chest2"],
+    ["chance3", "steam", "chest3"],
+    ["chance4", "epic", "chest4"],
+  ];
+  const symOk = sideStores.every(([left, mid, right], sideIdx) => {
+    const base = sideIdx * 10;
+    return (
+      TRACK_ORDER[base + 4] === left &&
+      TRACK_ORDER[base + 5] === mid &&
+      TRACK_ORDER[base + 6] === right
+    );
+  });
+  const ok = lenOk && symOk;
+  return {
+    id: "sym-40",
+    name: "Symmetric 40-tile board places Chance & Mystery around every Store",
+    ok,
+    detail: ok ? "All 4 stores centered at offset +5 between Chance & Mystery" : `len=${TRACK_LEN}, symOk=${symOk}`,
+  };
+}
+
+function rngFairLandingDistribution(): ScenarioResult {
+  const seats = [0, 1, 2, 3];
+  const counts = seats.map(() => ({ dream: 0, market: 0, rest: 0, total: 0 }));
+  for (let round = 0; round < 160; round++) {
+    let s = createGame(four(), { seed: 100 + round });
+    for (let seatIdx = 0; seatIdx < 4; seatIdx++) {
+      const p = s.players[seatIdx];
+      p.stand = (round * 7 + seatIdx * 3) % TRACK_LEN;
+      s.turn = seatIdx;
+      s.phase = "path";
+      s = apply(s, { type: "path", pick: "walk" });
+      if (s.phase === "home") s = apply(s, { type: "home", pick: "cash" });
+      const landed = TRACK_ORDER[s.players[seatIdx].stand];
+      counts[seatIdx].total += 1;
+      if (landed === "dream") counts[seatIdx].dream += 1;
+      if (landed === "market") counts[seatIdx].market += 1;
+      if (landed === "rest") counts[seatIdx].rest += 1;
+    }
+  }
+  const ok = counts.every((c) => c.dream > 0 && c.market > 0 && c.rest > 0);
+  return {
+    id: "fair-rng",
+    name: "Mulberry32 dice lands all seats fairly on Casino, Vault, and Jail",
+    ok,
+    detail: ok
+      ? `Human specials hit: V=${counts[0].market} C=${counts[0].dream} J=${counts[0].rest}`
+      : JSON.stringify(counts),
+  };
+}
+
+function storesCanBeTraded(): ScenarioResult {
+  let s = createGame(four(), { seed: 11 });
+  s.phase = "extra";
+  s.stores.app = "you";
+  s.stores.play = "nova";
+  s = apply(s, {
+    type: "trade",
+    to: "nova",
+    giveCompanies: ["app"],
+    getCompanies: ["play"],
+    giveCash: 0,
+    getCash: 0,
+    giveMove: false,
+    getMove: false,
+  });
+  if (!s.offer) {
+    return { id: "trade-stores", name: "Players and bots can trade stores", ok: false, detail: "Store offer rejected" };
+  }
+  s = stepBot(s);
+  const ok = !s.offer && s.stores.app === "nova" && s.stores.play === "you";
+  return {
+    id: "trade-stores",
+    name: "Players and bots can trade stores",
+    ok,
+    detail: ok ? "Swapped App Store for Play Store via bot offer acceptance" : `app=${s.stores.app} play=${s.stores.play}`,
+  };
 }
 
 export function scenarioPeople() {

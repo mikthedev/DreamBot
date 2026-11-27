@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dreampoly-rooms",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-11-27",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GAME_ROOM",
+        "class_name": "GameRoom"
+      },
+      {
+        "name": "ROOM_CODES",
+        "class_name": "RoomCodes"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["GameRoom", "RoomCodes"]
+    }
+  ]
+}

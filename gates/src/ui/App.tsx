@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CARD_LABEL, COMPANIES, HARD_STOP_ROUNDS, MAX_PLAYERS, MOVE_CAP, NOTE_MAX, NOTE_PAY, STACK, STACK_CUT, STANDS, START_CASH, START_MOVES, STORES, TRADE_FEE, brandLogoId, companiesIn, companiesOf, pickWorld, setOf, setsOf, standsOf, storesOf, worldOf, type SetId } from "../engine/data";
+import { CARD_LABEL, CLASSIC_GO_PAY, CLASSIC_START_CASH, COMPANIES, GO_PAY, HARD_STOP_ROUNDS, MAX_PLAYERS, MIN_PLAYERS, MOVE_CAP, NOTE_MAX, NOTE_PAY, NOTE_REPAY, STACK, STACK_CUT, STANDS, START_CASH, START_MOVES, STORES, UPKEEP_PER, brandLogoId, companiesIn, companiesOf, pickWorld, setOf, setsOf, standsOf, storesOf, worldOf, type SetId } from "../engine/data";
 import { TRACK_ORDER } from "../engine/track";
 import { botAction, stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
 import {
+  JAIL_FINE,
   actor,
   apply,
   createGame,
   describePhase,
   fuelPrice,
+  hasSet,
   licenseNeeded,
   noteBlock,
   tradeFee,
@@ -18,25 +20,30 @@ import {
   type Offer,
   type Player,
   type State,
+  type VaultResult,
 } from "../engine/game";
 import { BootCurtain, PocketDesk, usePocketDesk } from "./boot";
-import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, TableLinkStrip, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
+import { FRAME_KEY, LOOK_KEY, Lobby, PIECE_KEY, SKIN_KEY, StartMenu, guestPool, savedLooks, type FrameId, type PlayerLook, type SeatPerson } from "./start";
 import { apiPath, isDiscordFrame, publishActivity, readRoom, readRoomByCode, useDiscord, writeRoom } from "./discord";
 import { guestShouldApply, isPlaceholderName, publicSeatName, sanitizeHostSnap } from "../engine/tableSync";
 import { linkCopy, pingLabel, startGuestNet, startHostNet, uniqueIds, type LinkKind, type LinkPath, type NetHandle, type PeerInfo, type SnapMsg, type WireMsg } from "./net";
-import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxHover, sfxPlayHover, toggleMusic, toggleSfx } from "./sfx";
+import { connectRoomSocket, ensureWsRoom, readWsRoom, wsAvailable, type WsRoomHandle } from "./wsRoom";
+import { armAudio, getMix, muffleMusic, resetMix, setMusicLevel, setSoundtrack, setSfxLevel, sfx, sfxCash, sfxHover, sfxPlayHover, sfxTileHover, toggleMusic, toggleSfx } from "./sfx";
 import { THEME_KEY, THEMES, applyTheme, savedTheme, type ThemeId } from "./theme";
 import { TRACK } from "../engine/track";
 import { BrandLogo } from "./brandLogos";
-import { CornerArt, PixelBill, PixelCaution, PixelDie, PixelFigure, PixelHotel, PixelHouse, type SkinId } from "./marks";
+import { BoardDice3D } from "./Dice3D";
+import { CornerArt, PixelBill, PixelCasinoSymbol, PixelCaution, PixelCoin, PixelDie, PixelFigure, PixelHotel, PixelHouse, PixelSafe, PixelSparkle, type SkinId } from "./marks";
 
 const TEST_KEY = "gates-test-tools";
 const DEV_NAMES = ["mikegtc"];
 const ID_KEY = "gates-discord-id";
+const NOTE_GUIDE_KEY = "gates-note-guide";
 type Fate = { kind: "out" | "win"; kicker: string; title: string; line: string };
-const CORNER = 1.12;
-const TRACK_SUM = CORNER * 2 + 7;
-const STEP_MS = 220;
+const CORNER = 1.15;
+const GRID_N = 11;
+const TRACK_SUM = CORNER * 2 + (GRID_N - 2);
+const STEP_MS = 160;
 
 type Profile = { id: string; username: string; avatar: string | null; linked: boolean };
 
@@ -175,7 +182,12 @@ export function App() {
   const roomIdRef = useRef<string | null>(null);
   const appliedSeq = useRef(0);
   const seenPending = useRef(new Set<string>());
+  const botMutAtRef = useRef(0);
   const netRef = useRef<NetHandle | null>(null);
+  const wsRef = useRef<WsRoomHandle | null>(null);
+  const [wsMode, setWsMode] = useState<"idle" | "trying" | "live" | "fallback">("idle");
+  const wsLiveRef = useRef(false);
+  wsLiveRef.current = wsMode === "live";
   const hostMsgRef = useRef<(from: string, msg: WireMsg) => void>(() => {});
   const applySnapRef = useRef<(msg: SnapMsg) => void>(() => {});
   const joinedRef = useRef<SeatPerson[]>([]);
@@ -204,6 +216,10 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [leaveWarn, setLeaveWarn] = useState(false);
   const [noteWhy, setNoteWhy] = useState<string | null>(null);
+  const [noteGuide, setNoteGuide] = useState(false);
+  const [moneyTip, setMoneyTip] = useState<{ id: number; title: string; detail?: string; tone?: "info" | "warn" | "gain" } | null>(null);
+  const tipTimer = useRef(0);
+  const tipSeq = useRef(0);
   const [fate, setFate] = useState<Fate | null>(null);
   const [brokeShake, setBrokeShake] = useState(0);
   const [menuMuffle, setMenuMuffle] = useState(false);
@@ -223,24 +239,52 @@ export function App() {
   modeRef.current = pickedMode;
   codeRef.current = lobbyCode;
   const [scenarios, setScenarios] = useState<ScenarioResult[] | null>(null);
-  const [diceSpin, setDiceSpin] = useState<[number, number] | null>(null);
+  const [settled, setSettled] = useState<State | null>(null);
+  const settledRef = useRef<State | null>(null);
+  settledRef.current = settled;
+  const [diceDrop, setDiceDrop] = useState<{ tick: number; roll: [number, number]; jail?: boolean } | null>(null);
+  const [diceSettledTick, setDiceSettledTick] = useState(0);
+  const prevRollTickRef = useRef(0);
   const [walk, setWalk] = useState<Record<string, number>>({});
   const boardRef = useRef<HTMLDivElement | null>(null);
   const tillPrev = useRef<{ cash: number; moves: number } | null>(null);
   const [tillGain, setTillGain] = useState<number | null>(null);
   const [moveGain, setMoveGain] = useState(0);
-  const [held, setHeld] = useState<{ cash: number; moves: number } | null>(null);
+  const [casinoHold, setCasinoHold] = useState<{ preCash: number; holding: boolean } | null>(null);
+  const [vaultHold, setVaultHold] = useState<{ preCash: number; preMoves: number; holding: boolean } | null>(null);
+  const casinoTimerRef = useRef<number>(0);
+  const vaultTimerRef = useRef<number>(0);
+  const lastGoLapRef = useRef<number>(0);
+  const prevScreenRef = useRef(screen);
   const [hoverId, setHoverId] = useState<string | null>(null);
-  const [openGroup, setOpenGroup] = useState<SetId | "store" | "market" | "rest" | "home" | "dream" | null>(null);
+  const [openGroup, setOpenGroup] = useState<SetId | "store" | "market" | "rest" | "home" | "dream" | "chance" | "chest" | null>(null);
   const [groupOwners, setGroupOwners] = useState(false);
   const [seatHover, setSeatHover] = useState<string | null>(null);
+  const [showRoster, setShowRoster] = useState(true);
+  const [showFeed, setShowFeed] = useState(true);
+  const prevRanksRef = useRef<Record<string, number>>({});
+  const [rankDelta, setRankDelta] = useState<Record<string, "up" | "down">>({});
   const [compareId, setCompareId] = useState<string | null>(null);
-  const hoverOwner = hoverId && state ? tileOwner(hoverId, state) : null;
-  const fortunePeek = seatHover || hoverOwner;
-  const bankHover = !!(hoverId && state && !hoverOwner && isDeedSpace(hoverId));
-  const cornerHover = hoverId === "rest" || hoverId === "home" || hoverId === "dream";
-  const hideDesk = !!(state && !trading && !state.offer && (bankHover || cornerHover || openGroup || compareId));
   const walking = Object.keys(walk).length > 0;
+  const rollPending = !!(state && state.rollTick > 0 && state.rollTick !== diceSettledTick);
+  const diceHolding = rollPending || !!(state && diceDrop && state.rollTick === diceDrop.tick && state.rollTick > diceSettledTick);
+  const walkPending = !!(
+    state &&
+    settled &&
+    !rollPending &&
+    state.players.some((p) => {
+      if (p.out) return false;
+      const prev = settled.players.find((x) => x.id === p.id);
+      return prev != null && !prev.out && prev.stand !== p.stand;
+    })
+  );
+  const revealing = !!(rollPending || diceHolding || walking || walkPending || casinoHold?.holding || vaultHold?.holding);
+  const view = revealing && settled ? settled : state;
+  const hoverOwner = hoverId && view ? tileOwner(hoverId, view) : null;
+  const fortunePeek = seatHover || hoverOwner;
+  const bankHover = !!(hoverId && view && !hoverOwner && isDeedSpace(hoverId));
+  const cornerHover = hoverId === "rest" || hoverId === "home" || hoverId === "dream" || hoverId === "market";
+  const hideDesk = !!(view && !trading && !view.offer && (bankHover || cornerHover || openGroup || compareId));
   useEffect(() => {
     localStorage.setItem(LOOK_KEY, look);
   }, [look]);
@@ -294,8 +338,8 @@ export function App() {
 
   useEffect(() => {
     if (!state || state.phase === "over") return;
-    if (walking) return;
-    if (roomId && !isHost) return;
+    if (revealing) return;
+    if (roomId && (!isHost || wsMode === "live" || wsMode === "trying")) return;
     const turnBot = actor(state)?.bot;
     const offerBot = state.offer && state.players.find((p) => p.id === state.offer?.to)?.bot;
     if (!turnBot && !offerBot) return;
@@ -313,23 +357,40 @@ export function App() {
       offerBot ? 900 : 720,
     );
     return () => window.clearTimeout(t);
-  }, [state, walking, isHost, roomId]);
+  }, [state, revealing, isHost, roomId]);
 
   const me =
     state?.players.find((p) => p.id === youId || p.id === seatId || p.id === discord.user?.id) ??
     (!roomId ? state?.players[0] : undefined);
+  const viewMe =
+    view?.players.find((p) => p.id === youId || p.id === seatId || p.id === discord.user?.id) ??
+    (!roomId ? view?.players[0] : undefined) ??
+    me;
+
   useEffect(() => {
-    if (!state || !me || state.mode !== "moves" || me.out) return;
-    if (me.moves > 4) {
+    if (!state || screen !== "play") {
+      setSettled(state ?? null);
+      return;
+    }
+    if (rollPending || diceHolding || walking || casinoHold?.holding || vaultHold?.holding) return;
+    const t = window.setTimeout(() => setSettled(state), walkPending ? 40 : 0);
+    return () => window.clearTimeout(t);
+  }, [state, screen, rollPending, diceHolding, walking, walkPending, casinoHold?.holding, vaultHold?.holding]);
+
+  useEffect(() => {
+    if (revealing || !view || !viewMe || view.mode !== "moves" || viewMe.out) return;
+    if (viewMe.moves > 4) {
       lowWarn.current = false;
       return;
     }
     if (lowWarn.current) return;
     lowWarn.current = true;
     sfx("warning");
-  }, [state, me]);
+  }, [revealing, view, viewMe]);
   const who = state ? actor(state) : undefined;
+  const viewWho = view ? actor(view) : undefined;
   const mine = !!(me && who?.id === me.id && !me.out);
+  const viewMine = !!(viewMe && viewWho?.id === viewMe.id && !viewMe.out && !revealing);
 
   useEffect(() => {
     if (!state || state.phase !== "extra") {
@@ -339,12 +400,12 @@ export function App() {
   }, [state?.phase]);
 
   useEffect(() => {
-    if (!state || !me) return;
-    if (state.offer) return;
-    if (!mine || walking || diceSpin || state.phase !== "extra" || !me.freeTrade) return;
+    if (!view || !viewMe) return;
+    if (view.offer) return;
+    if (!viewMine || revealing || view.phase !== "extra" || !viewMe.freeTrade) return;
     if (skipMarketOpen.current) return;
     setTrading(true);
-  }, [mine, walking, diceSpin, state?.phase, me?.freeTrade, state?.rollTick, state?.offer]);
+  }, [viewMine, revealing, view?.phase, viewMe?.freeTrade, view?.rollTick, view?.offer]);
 
   useEffect(() => {
     if (trading) sfx("market");
@@ -390,6 +451,7 @@ export function App() {
 
   function publishHost(patch: Record<string, unknown> = {}) {
     if (!isHostRef.current) return;
+    if (wsLiveRef.current) return;
     if (patch.state) stateRef.current = patch.state as State;
     const raw = takeSnap(patch as Partial<SnapMsg>);
     const clean = sanitizeHostSnap({
@@ -467,7 +529,20 @@ export function App() {
   }
 
   function act(action: Action) {
+    if (roomId && wsLiveRef.current && wsRef.current?.live()) {
+      wsRef.current.send({ t: "action", action });
+      return;
+    }
     if (roomId && !isHostRef.current) {
+      if (action.type !== "path" && action.type !== "quit") {
+        setState((s) => {
+          if (!s) return s;
+          const next = apply(s, action);
+          cuePlay(s, next, action, youId);
+          stateRef.current = next;
+          return next;
+        });
+      }
       netRef.current?.send({ t: "action", action });
       void writeRoom(roomId, {
         pending: [{ from: youId, action }],
@@ -485,51 +560,156 @@ export function App() {
   }
 
   function rollThen(action: Action) {
-    if (diceSpin != null || !me) return;
-    // Guests need the same dice FX as the host — they used to skip straight to a silent action.
+    if (revealing || !me) return;
     sfx("dice");
-    setHeld({ cash: me.cash, moves: me.moves });
-    let n = 0;
-    const spin = window.setInterval(() => {
-      setDiceSpin([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
-      n += 1;
-      if (n >= 12) {
-        window.clearInterval(spin);
-        setDiceSpin(null);
-        act(action);
-      }
-    }, 70);
+    act(action);
   }
 
-  useEffect(() => {
-    if (walking || diceSpin) return;
-    const t = window.setTimeout(() => setHeld(null), 140);
-    return () => window.clearTimeout(t);
-  }, [walking, diceSpin]);
+  function showMoneyTip(title: string, detail?: string, tone: "info" | "warn" | "gain" = "info", silent = false) {
+    window.clearTimeout(tipTimer.current);
+    tipSeq.current += 1;
+    setMoneyTip({ id: tipSeq.current, title, detail, tone });
+    if (!silent) sfx(tone === "warn" ? "warning" : "hint");
+    tipTimer.current = window.setTimeout(() => setMoneyTip(null), 5000);
+  }
 
   const tillWho = useRef<string | null>(null);
+  const seenUpkeepRef = useRef<string>("");
+  const seenPayRef = useRef<string>("");
+  const seenCardRef = useRef<string>("");
+  const seenOutcomeRef = useRef<State | null>(null);
+  const prevTurnCueRef = useRef<string>("");
   useEffect(() => {
-    if (!me || walking || diceSpin) return;
-    if (tillWho.current !== me.id) {
-      tillWho.current = me.id;
-      tillPrev.current = { cash: me.cash, moves: me.moves };
+    if (!view || revealing || view.phase !== "card" || !view.pendingCard) return;
+    const cardSig = `${view.rollTick}:${view.turn}:${view.pendingCard}`;
+    if (seenCardRef.current === cardSig) return;
+    seenCardRef.current = cardSig;
+    sfx("chanceCard");
+  }, [view?.phase, view?.pendingCard, view?.rollTick, view?.turn, revealing]);
+
+  useEffect(() => {
+    if (screen !== "play" || !view || !viewMe || revealing) {
+      if (screen !== "play" || !state) prevTurnCueRef.current = "";
+      return;
+    }
+    const active = actor(view);
+    const phaseReady = view.phase === "path" || view.phase === "jail";
+    if (!active || active.id !== viewMe.id || !phaseReady) return;
+    const sig = `${view.round}:${view.turn}:${view.phase}`;
+    if (prevTurnCueRef.current === sig) return;
+    const hadPrev = prevTurnCueRef.current !== "";
+    prevTurnCueRef.current = sig;
+    if (hadPrev || view.round > 1 || view.turn > 0) sfx("turnStart");
+  }, [screen, view, viewMe, revealing, state]);
+
+  useEffect(() => {
+    if (screen !== "play" || !view) {
+      seenOutcomeRef.current = view ?? null;
+      return;
+    }
+    if (revealing) return;
+    const prev = seenOutcomeRef.current;
+    seenOutcomeRef.current = view;
+    if (!prev || prev === view) return;
+    if (view.players.some((p) => p.out && !prev.players.find((x) => x.id === p.id)?.out)) sfx("death");
+    if (prev.rollTick !== view.rollTick && view.rollTick > 0) {
+      const fullMine = openedFullStack(prev, view, viewMe?.id);
+      const fullAny = !fullMine && openedFullStack(prev, view);
+      if (fullMine) sfx("fullStack");
+      else if (fullAny) sfx("fullStack", 0.96, 0.7);
+    }
+  }, [screen, view, revealing, viewMe?.id]);
+
+  useEffect(() => {
+    if (!viewMe || revealing) return;
+    if (tillWho.current !== viewMe.id) {
+      tillWho.current = viewMe.id;
+      tillPrev.current = { cash: viewMe.cash, moves: viewMe.moves };
       return;
     }
     const prev = tillPrev.current;
-    tillPrev.current = { cash: me.cash, moves: me.moves };
+    tillPrev.current = { cash: viewMe.cash, moves: viewMe.moves };
     if (!prev) return;
-    const dc = me.cash - prev.cash;
-    const dm = me.moves - prev.moves;
-    if (dc > 0 && payShare(state?.lastPay, me.id) == null) setTillGain(dc);
+    const dc = viewMe.cash - prev.cash;
+    const dm = viewMe.moves - prev.moves;
+    if (dc > 0 && payShare(view?.lastPay, viewMe.id) == null) setTillGain(dc);
     else if (dc <= 0) setTillGain(null);
     if (dm > 0) setMoveGain(dm);
     else if (dm < 0) setMoveGain(0);
+
+    const latestLog = view?.log[view.log.length - 1] ?? "";
+    const upkeepLine = [...(view?.log ?? [])].reverse().slice(0, 4).find((l) => l.includes("upkeep"));
+    const paySig = view?.lastPay ? `${view.rollTick}:${view.turn}:${view.lastPay.from}:${view.lastPay.to}:${view.lastPay.amount}:${latestLog}` : "";
+    if (upkeepLine && upkeepLine !== seenUpkeepRef.current) {
+      seenUpkeepRef.current = upkeepLine;
+      if (upkeepLine.includes(viewMe.name)) {
+        sfx("payBank");
+        const m = upkeepLine.match(/paid \$(\d+) upkeep for (.+)\.?$/i);
+        showMoneyTip(
+          m ? `Upkeep -$${m[1]}` : "Brand upkeep paid",
+          m ? `Active upkeep for ${m[2].replace(/\.$/, "")}` : undefined,
+          "info",
+          true,
+        );
+      }
+    } else if (view?.lastPay && paySig && paySig !== seenPayRef.current) {
+      seenPayRef.current = paySig;
+      const to = view.players.find((p) => p.id === view.lastPay?.to);
+      const from = view.players.find((p) => p.id === view.lastPay?.from);
+      const via = view.lastPay.via ? view.players.find((p) => p.id === view.lastPay?.via) : null;
+      if (view.lastPay.from === viewMe.id) {
+        sfx("payRent");
+        if (via && view.lastPay.viaAmount) {
+          const kept = view.lastPay.amount - view.lastPay.viaAmount;
+          showMoneyTip(
+            `Paid $${view.lastPay.amount}`,
+            `$${kept} to ${to?.name || "owner"} · $${view.lastPay.viaAmount} to ${via.name}`,
+            "info",
+            true,
+          );
+        } else {
+          showMoneyTip(`Paid $${view.lastPay.amount} to ${to?.name || "owner"}`, undefined, "info", true);
+        }
+      } else if (view.lastPay.to === viewMe.id || view.lastPay.via === viewMe.id) {
+        sfx("received");
+        const got = payShare(view.lastPay, viewMe.id) ?? view.lastPay.amount;
+        showMoneyTip(
+          view.lastPay.via === viewMe.id ? `Split share +$${got}` : `Received +$${got}`,
+          from ? `Paid by ${from.name}` : undefined,
+          "gain",
+          true,
+        );
+      } else {
+        sfx("payRent", 0.96, 0.56);
+        showMoneyTip(
+          `${from?.name || "Player"} paid $${view.lastPay.amount}`,
+          to ? `Rent paid to ${to.name}` : undefined,
+          "info",
+          true,
+        );
+      }
+    } else if (dc < 0 && !view?.lastPay?.from && view?.phase !== "land" && view?.phase !== "store" && view?.phase !== "casino" && view?.phase !== "vault" && view?.casinoResult == null && view?.vaultResult == null) {
+      if (latestLog.includes(viewMe.name) && (latestLog.toLowerCase().includes("fine") || latestLog.toLowerCase().includes("tax") || latestLog.toLowerCase().includes("fee") || latestLog.toLowerCase().includes("bill"))) {
+        sfx("payBank");
+      }
+    } else if (latestLog.includes("could not repay a bank note") && latestLog.includes(viewMe.name)) {
+      showMoneyTip("Debt settled by bank", "Your cheapest brand was seized to cover the note.", "warn");
+    } else if (latestLog.includes("takes a bank note") && latestLog.includes(viewMe.name)) {
+      showMoneyTip("Bank note +$" + NOTE_PAY, `Auto-repays $${NOTE_PAY + 60} on your next lap past GO.`, "info", true);
+    } else if (view?.phase === "rent" && view.rentDue && viewMine) {
+      showMoneyTip(
+        `Short on cash ($${view.rentDue.amount} due)`,
+        view.mode === "moves" ? "Take a bank note, pay with a move, or surrender." : "Take a bank note or surrender.",
+        "warn",
+      );
+    }
+
     const t = window.setTimeout(() => {
       setTillGain(null);
       setMoveGain(0);
     }, 2200);
     return () => window.clearTimeout(t);
-  }, [me?.cash, me?.moves, walking, diceSpin, state?.lastPay, me?.id]);
+  }, [viewMe?.cash, viewMe?.moves, revealing, view?.lastPay, view?.log[view?.log.length - 1], view?.phase, view?.rentDue, view?.rollTick, view?.turn, viewMe?.id, viewMe?.name, view?.mode, viewMine]);
 
   function restart(withBots: boolean) {
     const { name, avatar } = selfLook(discord.user, profile);
@@ -558,6 +738,13 @@ export function App() {
     setTableId(id);
     roomSeq.current = 1;
     appliedSeq.current = 1;
+    const wsCreated = await ensureWsRoom(id);
+    if (wsCreated?.code) setLobbyCode(String(wsCreated.code));
+    if (wsCreated) {
+      setScreen("lobby");
+      setState(null);
+      return;
+    }
     const saved = await writeRoom(id, {
       asHost: true,
       claimHost: youId,
@@ -598,7 +785,7 @@ export function App() {
   }
 
   async function joinByCode(raw: string) {
-    const room = await readRoomByCode(raw);
+    const room = (await readWsRoom({ code: raw })) || (await readRoomByCode(raw));
     if (!room?.id) return false;
     applyRoom(room);
     const { name, avatar } = selfLook(discord.user, profile);
@@ -618,7 +805,7 @@ export function App() {
 
   async function joinLive() {
     if (!discord.instanceId) return false;
-    const room = await readRoom(discord.instanceId);
+    const room = (await readWsRoom({ id: discord.instanceId })) || (await readRoom(discord.instanceId));
     if (!room?.hostId) return false;
     applyRoom(room);
     const { name, avatar } = selfLook(discord.user, profile);
@@ -647,8 +834,19 @@ export function App() {
     setFate(null);
     setWalk({});
     setTrading(false);
+    setCasinoHold(null);
+    setVaultHold(null);
+    setDiceDrop(null);
+    setDiceSettledTick(0);
+    prevRollTickRef.current = 0;
+    lastGoLapRef.current = 0;
+    window.clearTimeout(casinoTimerRef.current);
+    window.clearTimeout(vaultTimerRef.current);
     appliedSeq.current = 0;
     hostSeatRef.current = null;
+    wsRef.current?.close();
+    wsRef.current = null;
+    setWsMode("idle");
     netRef.current?.close();
     netRef.current = null;
     setLinkRole("solo");
@@ -663,6 +861,13 @@ export function App() {
   function leaveTable() {
     const id = roomId;
     const host = isHostRef.current;
+    if (id && wsLiveRef.current && wsRef.current?.live()) {
+      wsRef.current.send(host && screenRef.current !== "play" ? { t: "close" } : { t: "leave", id: youId });
+      wsRef.current.close();
+      wsRef.current = null;
+      resetLocalTable();
+      return;
+    }
     if (id) {
       if (host) {
         netRef.current?.broadcast({ t: "closed" });
@@ -706,6 +911,10 @@ export function App() {
     if (!person) return;
     setSpectators((s) => s.filter((p) => p.id !== pick));
     setJoined((j) => [...j, person]);
+    if (roomId && wsLiveRef.current && wsRef.current?.live()) {
+      wsRef.current.send({ t: "hello", person });
+      return;
+    }
     if (roomId && netRef.current?.live() && !isHostRef.current) {
       netRef.current.send({ t: "hello", person });
       return;
@@ -760,6 +969,10 @@ export function App() {
     const person = { ...cur, ...patch };
     window.clearTimeout(lookTimer.current);
     lookTimer.current = window.setTimeout(() => {
+      if (wsLiveRef.current && wsRef.current?.live()) {
+        wsRef.current.send({ t: "looks", person });
+        return;
+      }
       if (netRef.current?.live()) {
         if (isHostRef.current) publishHost();
         else netRef.current.send({ t: "looks", person });
@@ -777,6 +990,14 @@ export function App() {
   function commitPlay(people: SeatPerson[]) {
     setWalk({});
     setTrading(false);
+    setCasinoHold(null);
+    setVaultHold(null);
+    setDiceDrop(null);
+    setDiceSettledTick(0);
+    prevRollTickRef.current = 0;
+    lastGoLapRef.current = 0;
+    window.clearTimeout(casinoTimerRef.current);
+    window.clearTimeout(vaultTimerRef.current);
     const seed = Date.now() % 100000;
     const next = createGame(painted(people), { mode: pickedMode, seed, world: pickWorld(seed) });
     stateRef.current = next;
@@ -795,7 +1016,7 @@ export function App() {
   }
 
   function beginDive(people: SeatPerson[]) {
-    if (people.length < 3 || people.length > MAX_PLAYERS) return;
+    if (people.length < MIN_PLAYERS || people.length > MAX_PLAYERS) return;
     if (dive !== "idle") return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduce) {
@@ -803,80 +1024,118 @@ export function App() {
       return;
     }
     clearDiveWaits();
+    sfx("enter");
     setDive("cover");
     diveWait.current.push(
       window.setTimeout(() => {
         commitPlay(people);
         setDive("open");
-        diveWait.current.push(window.setTimeout(() => setDive("idle"), 620));
+        diveWait.current.push(window.setTimeout(() => setDive("idle"), 720));
       }, 520),
     );
   }
 
   function startTable(people = joined) {
     if (roomId && !isHostRef.current) return;
+    if (roomId && wsLiveRef.current && wsRef.current?.live()) {
+      sfx("enter");
+      wsRef.current.send({ t: "start", mode: pickedMode, people: painted(people) });
+      return;
+    }
     void seatsFromRoom(people).then((seats) => {
       setJoined(seats);
       beginDive(seats);
     });
   }
 
-  function seatBots() {
-    const { name, avatar } = selfLook(discord.user, profile);
+  function seatBots(addLimit = MAX_PLAYERS) {
+    const { name, avatar } = selfLook(discord.user, profile, true);
     const pool = guestPool(name, avatar, true).map((p, i) =>
       i === 0 ? { ...p, id: youId } : p,
     );
     const humans = joined.filter((p) => !p.bot);
-    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
+    const you: SeatPerson = { id: youId, name: publicSeatName(name), avatar, ...savedLooks() };
     const bots = pool.filter((p) => p.bot);
-    const next = humans.some((p) => p.id === youId) ? [...humans] : [you, ...humans];
+    const base = humans.some((p) => p.id === youId) ? [...joined] : [you, ...joined];
+    const next = [...base];
+    let added = 0;
     for (const b of bots) {
-      if (next.length >= 4) break;
-      if (!next.some((p) => p.id === b.id)) next.push(b);
+      if (next.length >= MAX_PLAYERS || added >= addLimit) break;
+      if (!next.some((p) => p.id === b.id)) {
+        next.push(b);
+        added += 1;
+      }
     }
+    botMutAtRef.current = Date.now();
     const ids = new Set(next.map((p) => p.id));
     setJoined(next);
     setSpectators((s) => s.filter((p) => !ids.has(p.id)));
+    joinedRef.current = next;
+    if (roomId && wsLiveRef.current && wsRef.current?.live()) {
+      wsRef.current.send({ t: "lobby", joined: next, spectators: spectatorsRef.current.filter((p) => !ids.has(p.id)) });
+      return;
+    }
+    // Push immediately so the host poll cannot wipe bots before the debounce.
+    if (roomId && isHostRef.current) publishHost({ joined: next, spectators: spectatorsRef.current.filter((p) => !ids.has(p.id)) });
   }
 
   function kickSeat(id: string) {
     const person = joined.find((p) => p.id === id);
     if (!person || !isHostRef.current) return;
-    if (!person.bot && person.id === youId) return;
     if (!person.bot) return;
-    setJoined((j) => j.filter((p) => p.id !== id));
-    if (roomId) void writeRoom(roomId, { drop: [id] });
-  }
-
-  function clearBots() {
-    const ids = joined.filter((p) => p.bot).map((p) => p.id);
-    if (!ids.length) return;
-    setJoined((j) => j.filter((p) => !p.bot));
-    if (roomId) void writeRoom(roomId, { drop: ids });
-  }
-
-  function playWithBots() {
-    const { name, avatar } = selfLook(discord.user, profile);
-    const pool = guestPool(name, avatar, true).filter((p) => p.bot);
-    const humans = joined.filter((p) => !p.bot);
-    const you: SeatPerson = { id: youId, name, avatar, ...savedLooks() };
-    const table = humans.some((p) => p.id === youId) ? [...humans] : [you, ...humans];
-    for (const bot of pool) {
-      if (table.length >= MAX_PLAYERS) break;
-      if (table.length >= 4 && table.filter((p) => !p.bot).length >= 3) break;
-      if (!table.some((p) => p.id === bot.id)) table.push(bot);
+    botMutAtRef.current = Date.now();
+    const next = joined.filter((p) => p.id !== id);
+    setJoined(next);
+    joinedRef.current = next;
+    if (roomId && wsLiveRef.current && wsRef.current?.live()) {
+      wsRef.current.send({ t: "lobby", joined: next });
+      return;
     }
-    while (table.length < 3) {
-      const bot = pool.find((p) => !table.some((x) => x.id === p.id));
-      if (!bot) break;
-      table.push(bot);
+    if (roomId) {
+      void writeRoom(roomId, { drop: [id] });
+      publishHost({ joined: next });
     }
-    setJoined(table);
-    setSpectators((s) => s.filter((p) => !table.some((x) => x.id === p.id)));
-    startTable(table);
   }
 
   useEffect(() => () => clearDiveWaits(), []);
+
+  useEffect(() => {
+    if (!roomId) return;
+    const bail = () => {
+      if (isHostRef.current) {
+        void writeRoom(
+          roomId,
+          {
+            asHost: true,
+            hostId: hostIdRef.current || youIdRef.current,
+            wasHost: hostSeatRef.current || seatId,
+            screen: "menu",
+            state: null,
+            closed: true,
+            joined: [],
+            spectators: [],
+            ack: [],
+          },
+          { keepalive: true },
+        );
+      } else {
+        void writeRoom(
+          roomId,
+          {
+            leave: youIdRef.current,
+            drop: [youIdRef.current, seatId].filter((v, i, all) => all.indexOf(v) === i),
+          },
+          { keepalive: true },
+        );
+      }
+    };
+    window.addEventListener("pagehide", bail);
+    window.addEventListener("beforeunload", bail);
+    return () => {
+      window.removeEventListener("pagehide", bail);
+      window.removeEventListener("beforeunload", bail);
+    };
+  }, [roomId, seatId]);
 
   useEffect(() => {
     const look = selfLook(discord.user, profile);
@@ -902,6 +1161,10 @@ export function App() {
     const look = selfLook(discord.user, profile);
     if (!look.name || look.name === "You") return;
     const person = { id: discord.user.id, name: look.name, avatar: look.avatar, ...savedLooks() };
+    if (wsLiveRef.current && wsRef.current?.live()) {
+      wsRef.current.send({ t: "hello", person, leaveId: seatId });
+      return;
+    }
     void writeRoom(roomId, {
       leave: seatId,
       sit: person,
@@ -924,19 +1187,43 @@ export function App() {
     }
     let stop = false;
     const tick = async () => {
-      const room = await readRoom(discord.instanceId!);
-      if (stop || !room?.hostId || String(room.hostId) === youId) {
+      const room = (await readWsRoom({ id: discord.instanceId! })) || (await readRoom(discord.instanceId!));
+      const hostGone =
+        !!room?.hostId &&
+        /^\d{8,}$/.test(String(room.hostId)) &&
+        discord.people.length > 0 &&
+        !discord.people.some((p) => p.id === String(room.hostId));
+      if (hostGone && room && !room.closed) {
+        void writeRoom(discord.instanceId!, {
+          asHost: true,
+          hostId: String(room.hostId),
+          screen: "menu",
+          state: null,
+          closed: true,
+          joined: [],
+          spectators: [],
+          ack: [],
+        });
+      }
+      const dead =
+        !room ||
+        room.closed ||
+        !room.hostId ||
+        hostGone ||
+        room.screen === "menu" ||
+        (Array.isArray(room.joined) && room.joined.length === 0);
+      if (stop || dead || String(room.hostId) === youId || String(room.hostId) === seatId) {
         if (!stop) setLiveTable(null);
         return;
       }
       setLiveTable({
         hostId: String(room.hostId),
-        hostName: String(room.hostName || "Host"),
+        hostName: publicSeatName(String(room.hostName || "Host"), "Host"),
         code: String(room.code || ""),
       });
     };
     void tick();
-    const t = window.setInterval(() => void tick(), 1200);
+    const t = window.setInterval(() => void tick(), 900);
     return () => {
       stop = true;
       window.clearInterval(t);
@@ -972,7 +1259,22 @@ export function App() {
       const live = discord.people.find((p) => p.id === hostId);
       return live?.name || cur;
     });
-  }, [discord.people, youId, hostId]);
+    if (roomId && roomId === discord.instanceId && !isHost && wsMode === "fallback" && hostId && /^\d{8,}$/.test(hostId)) {
+      if (!discord.people.some((p) => p.id === hostId)) {
+        void writeRoom(roomId, {
+          asHost: true,
+          hostId,
+          screen: "menu",
+          state: null,
+          closed: true,
+          joined: [],
+          spectators: [],
+          ack: [],
+        });
+        resetLocalTable();
+      }
+    }
+  }, [discord.people, discord.instanceId, youId, hostId, roomId, isHost]);
 
   useEffect(() => {
     if (!isHost || !discord.people.length) return;
@@ -1069,6 +1371,58 @@ export function App() {
 
   useEffect(() => {
     if (!roomId) {
+      wsRef.current?.close();
+      wsRef.current = null;
+      setWsMode("idle");
+      return;
+    }
+    if (!wsAvailable()) {
+      setWsMode("fallback");
+      return;
+    }
+    setWsMode("trying");
+    const handle = connectRoomSocket({
+      roomId,
+      playerId: youIdRef.current,
+      seatId,
+      onOpen: () => {
+        setWsMode("live");
+        setLinkStatus("linked");
+        setLinkPath("direct");
+        setLinkWarn(null);
+        const look = selfLook(discord.user, profile, true);
+        const person: SeatPerson = {
+          id: youIdRef.current,
+          name: publicSeatName(look.name, "Player"),
+          avatar: look.avatar,
+          ...savedLooks(),
+        };
+        handle.send({
+          t: "hello",
+          person,
+          claimHost: isHostRef.current,
+          mode: modeRef.current,
+        });
+      },
+      onMsg: (msg) => {
+        if (msg.t === "closed") {
+          resetLocalTable();
+          return;
+        }
+        if (msg.t === "snap") applySnapRef.current(msg);
+      },
+      onPing: (ms) => setLinkPing(ms),
+      onFallback: () => setWsMode("fallback"),
+    });
+    wsRef.current = handle;
+    return () => {
+      handle.close();
+      if (wsRef.current === handle) wsRef.current = null;
+    };
+  }, [roomId, seatId]);
+
+  useEffect(() => {
+    if (!roomId || wsMode !== "fallback") {
       netRef.current?.close();
       netRef.current = null;
       setLinkRole("solo");
@@ -1173,7 +1527,7 @@ export function App() {
 
   const lastHostPush = useRef("");
   useEffect(() => {
-    if (!roomId || !isHost) return;
+    if (!roomId || !isHost || wsMode !== "fallback") return;
     const stamp = [
       screen,
       pickedMode,
@@ -1187,45 +1541,52 @@ export function App() {
     pushTimer.current = window.setTimeout(() => {
       lastHostPush.current = stamp;
       publishHost();
-    }, 350);
+    }, 180);
     return () => window.clearTimeout(pushTimer.current);
   }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state]);
 
   // Guests poll the shared room — Discord docs: instanceId + server state, not WebRTC.
   useEffect(() => {
-    if (!roomId || isHost) return;
+    if (!roomId || isHost || wsMode !== "fallback") return;
     let stop = false;
+    let busy = false;
     const tick = async () => {
-      const room = await readRoom(roomId);
-      if (stop || !room) return;
-      if (room.closed) {
-        resetLocalTable();
-        return;
+      if (busy || stop) return;
+      busy = true;
+      try {
+        const room = await readRoom(roomId);
+        if (stop || !room) return;
+        if (room.closed) {
+          resetLocalTable();
+          return;
+        }
+        const shouldPlay = guestShouldApply(
+          room as { seq?: number; screen?: string; state?: unknown },
+          appliedSeq.current,
+          screenRef.current,
+          !!stateRef.current,
+        );
+        const roomJoined = Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : [];
+        const seatsChanged = roomJoined.length > 0 && seatKey(roomJoined) !== seatKey(joinedRef.current);
+        if (!shouldPlay && !seatsChanged) return;
+        applySnapRef.current({
+          t: "snap",
+          seq: Number(room.seq || appliedSeq.current),
+          screen: (room.screen as SnapMsg["screen"]) || screenRef.current || "lobby",
+          mode: (room.mode as Mode) || "moves",
+          hostId: String(room.hostId || ""),
+          hostName: publicSeatName(String(room.hostName || ""), "Host"),
+          code: String(room.code || ""),
+          joined: roomJoined,
+          spectators: Array.isArray(room.spectators) ? (room.spectators as SeatPerson[]) : [],
+          state: shouldPlay ? ((room.state as State) || null) : stateRef.current,
+        });
+      } finally {
+        busy = false;
       }
-      const shouldPlay = guestShouldApply(
-        room as { seq?: number; screen?: string; state?: unknown },
-        appliedSeq.current,
-        screenRef.current,
-        !!stateRef.current,
-      );
-      const roomJoined = Array.isArray(room.joined) ? (room.joined as SeatPerson[]) : [];
-      const seatsChanged = roomJoined.length > 0 && seatKey(roomJoined) !== seatKey(joinedRef.current);
-      if (!shouldPlay && !seatsChanged) return;
-      applySnapRef.current({
-        t: "snap",
-        seq: Number(room.seq || appliedSeq.current),
-        screen: (room.screen as SnapMsg["screen"]) || screenRef.current || "lobby",
-        mode: (room.mode as Mode) || "moves",
-        hostId: String(room.hostId || ""),
-        hostName: publicSeatName(String(room.hostName || ""), "Host"),
-        code: String(room.code || ""),
-        joined: roomJoined,
-        spectators: Array.isArray(room.spectators) ? (room.spectators as SeatPerson[]) : [],
-        state: shouldPlay ? ((room.state as State) || null) : stateRef.current,
-      });
     };
     void tick();
-    const t = window.setInterval(() => void tick(), 350);
+    const t = window.setInterval(() => void tick(), 180);
     return () => {
       stop = true;
       window.clearInterval(t);
@@ -1234,43 +1595,56 @@ export function App() {
 
   // Host pulls guest sits + pending moves from the room (Discord has no WebRTC).
   useEffect(() => {
-    if (!roomId || !isHost) return;
+    if (!roomId || !isHost || wsMode !== "fallback") return;
     let stop = false;
+    let busy = false;
     const tick = async () => {
-      const room = await readRoom(roomId);
-      if (stop || !room) return;
-      if (Array.isArray(room.joined) && screenRef.current !== "play") {
-        const incoming = room.joined as SeatPerson[];
-        setJoined((cur) => {
-          const mine = cur.find((p) => p.id === youIdRef.current);
-          const next = keepMineLooks(incoming, mine, youIdRef.current);
-          return seatKey(cur) === seatKey(next) ? cur : next;
-        });
-        if (Array.isArray(room.spectators)) setSpectators(room.spectators as SeatPerson[]);
-        if (room.hostId) setHostId(String(room.hostId));
-        if (room.hostName) setTableHostName(publicSeatName(String(room.hostName), "Host"));
-        if (room.code) setLobbyCode(String(room.code));
-      }
-      const pending = Array.isArray(room.pending) ? room.pending : [];
-      if (!pending.length) return;
-      const acks: string[] = [];
-      for (const item of pending) {
-        if (!item || typeof item !== "object") continue;
-        const row = item as { nid?: string; from?: string; action?: Action };
-        if (!row.action || !row.from) continue;
-        const key = String(row.nid || `${row.from}:${JSON.stringify(row.action)}`);
-        if (seenPending.current.has(key)) {
-          if (row.nid) acks.push(String(row.nid));
-          continue;
+      if (busy || stop) return;
+      busy = true;
+      try {
+        const room = await readRoom(roomId);
+        if (stop || !room) return;
+        if (Array.isArray(room.joined) && screenRef.current !== "play") {
+          const incoming = room.joined as SeatPerson[];
+          setJoined((cur) => {
+            const mine = cur.find((p) => p.id === youIdRef.current);
+            let next = keepMineLooks(incoming, mine, youIdRef.current);
+            // Stale polls must not revert bots the host just added or removed locally.
+            if (Date.now() - botMutAtRef.current < 1500) {
+              const localBots = cur.filter((p) => p.bot);
+              const humansOnly = next.filter((p) => !p.bot);
+              next = [...humansOnly, ...localBots].slice(0, MAX_PLAYERS);
+            }
+            return seatKey(cur) === seatKey(next) ? cur : next;
+          });
+          if (Array.isArray(room.spectators)) setSpectators(room.spectators as SeatPerson[]);
+          if (room.hostId) setHostId(String(room.hostId));
+          if (room.hostName) setTableHostName(publicSeatName(String(room.hostName), "Host"));
+          if (room.code) setLobbyCode(String(room.code));
         }
-        seenPending.current.add(key);
-        hostMsgRef.current(String(row.from), { t: "action", action: row.action });
-        if (row.nid) acks.push(String(row.nid));
+        const pending = Array.isArray(room.pending) ? room.pending : [];
+        if (!pending.length) return;
+        const acks: string[] = [];
+        for (const item of pending) {
+          if (!item || typeof item !== "object") continue;
+          const row = item as { nid?: string; from?: string; action?: Action };
+          if (!row.action || !row.from) continue;
+          const key = String(row.nid || `${row.from}:${JSON.stringify(row.action)}`);
+          if (seenPending.current.has(key)) {
+            if (row.nid) acks.push(String(row.nid));
+            continue;
+          }
+          seenPending.current.add(key);
+          hostMsgRef.current(String(row.from), { t: "action", action: row.action });
+          if (row.nid) acks.push(String(row.nid));
+        }
+        if (acks.length) void writeRoom(roomId, { ack: acks });
+      } finally {
+        busy = false;
       }
-      if (acks.length) void writeRoom(roomId, { ack: acks });
     };
     void tick();
-    const t = window.setInterval(() => void tick(), 350);
+    const t = window.setInterval(() => void tick(), 180);
     return () => {
       stop = true;
       window.clearInterval(t);
@@ -1278,17 +1652,60 @@ export function App() {
   }, [roomId, isHost]);
 
   const primary = useMemo(
-    () => (state ? buttonsFor(state, mine, !!diceSpin || walking) : []),
-    [state, mine, diceSpin, walking],
+    () => (view ? buttonsFor(view, viewMine, revealing) : []),
+    [view, viewMine, revealing],
   );
-  const card = state && !held && !walking && state.phase === "card" ? state.pendingCard : null;
-  const centerDie = diceSpin ?? state?.lastRoll;
-  const rolling = diceSpin != null;
-  const shownCash = held?.cash ?? me?.cash ?? 0;
-  const shownMoves = held?.moves ?? me?.moves ?? 0;
-  const inDeal = !!(state && me && state.offer && (state.offer.from === me.id || state.offer.to === me.id));
+  const card = view && !revealing && view.phase === "card" ? view.pendingCard : null;
+  const centerDie = state?.lastRoll;
+  const rolling = diceHolding;
+  const shownCash = casinoHold?.holding ? casinoHold.preCash : vaultHold?.holding ? vaultHold.preCash : (viewMe?.cash ?? me?.cash ?? 0);
+  const shownMoves = vaultHold?.holding ? vaultHold.preMoves : (viewMe?.moves ?? me?.moves ?? 0);
+  const inDeal = !!(view && viewMe && view.offer && (view.offer.from === viewMe.id || view.offer.to === viewMe.id));
   const stallOpen = trading || inDeal;
-  const choiceLock = !!(state && (state.phase === "land" || state.phase === "store" || state.phase === "home" || state.phase === "card" || state.phase === "path" || state.phase === "rent"));
+  const casinoShowing = !!state && !!me && ((state.phase === "casino" && mine && !walking && !diceHolding) || (casinoHold != null && !!state.casinoResult && state.casinoResult.outcome !== "skip"));
+  const vaultShowing = !!state && !!me && ((state.phase === "vault" && mine && !walking && !diceHolding) || (vaultHold != null && !!state.vaultResult));
+
+  useEffect(() => {
+    if (!state) {
+      prevRollTickRef.current = 0;
+      setDiceDrop(null);
+      setDiceSettledTick(0);
+      return;
+    }
+    if (state.rollTick > 0 && state.rollTick !== prevRollTickRef.current && state.lastRoll) {
+      prevRollTickRef.current = state.rollTick;
+      const last = state.log[state.log.length - 1] ?? "";
+      setDiceDrop({ tick: state.rollTick, roll: state.lastRoll, jail: last.includes("Jail") });
+    }
+  }, [state?.rollTick, state?.lastRoll]);
+
+  useEffect(() => {
+    if (!diceDrop || state?.rollTick !== diceSettledTick) return;
+    const t = window.setTimeout(() => setDiceDrop(null), 420);
+    return () => window.clearTimeout(t);
+  }, [diceDrop, diceSettledTick, state?.rollTick]);
+
+  useEffect(() => {
+    const prev = prevScreenRef.current;
+    prevScreenRef.current = screen;
+    if (prev !== "play" && screen === "play") {
+      sfx("gameStart");
+      if (dive === "idle" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        clearDiveWaits();
+        setDive("open");
+        diveWait.current.push(window.setTimeout(() => setDive("idle"), 720));
+      }
+    }
+  }, [screen]);
+
+  useEffect(() => {
+    if (!view || !viewMe || !viewMine || revealing) return;
+    if (view.phase !== "home") return;
+    if (lastGoLapRef.current === viewMe.lapKey) return;
+    lastGoLapRef.current = viewMe.lapKey;
+    sfx("fullCircle");
+  }, [view, viewMe, viewMine, revealing]);
+  const choiceLock = !!(view && (view.phase === "land" || view.phase === "store" || view.phase === "home" || view.phase === "card" || view.phase === "path" || view.phase === "jail" || view.phase === "rent" || view.phase === "vault" || view.phase === "casino"));
   const pregame = screen !== "play" || !state || !me;
   const showTest = isDevHost(discord.user, profile);
   useEffect(() => {
@@ -1342,19 +1759,44 @@ export function App() {
   }, [seatHover]);
 
   useEffect(() => {
-    if (!state || screen !== "play") {
-      seenPlay.current = state;
+    if (!view || screen !== "play") {
+      seenPlay.current = view;
       if (screen !== "play") setFate(null);
       return;
     }
-    const hit = readFate(seenPlay.current, state);
-    seenPlay.current = state;
+    if (revealing) return;
+    const hit = readFate(seenPlay.current, view);
+    seenPlay.current = view;
     if (!hit) return;
     setFate(hit);
     if (hit.kind !== "out") return;
     const t = window.setTimeout(() => setFate((cur) => (cur?.kind === "out" ? null : cur)), 3400);
     return () => window.clearTimeout(t);
-  }, [state, screen]);
+  }, [view, screen, revealing]);
+
+  const sortedCashPlayers = useMemo(() => {
+    if (!view) return [];
+    return [...view.players.filter((p) => !p.out)].sort((a, b) => b.cash - a.cash);
+  }, [view]);
+
+  useEffect(() => {
+    if (!sortedCashPlayers.length) return;
+    const nextRanks: Record<string, number> = {};
+    const deltas: Record<string, "up" | "down"> = {};
+    sortedCashPlayers.forEach((p, idx) => {
+      nextRanks[p.id] = idx;
+      const prev = prevRanksRef.current[p.id];
+      if (prev != null && prev !== idx) {
+        deltas[p.id] = idx < prev ? "up" : "down";
+      }
+    });
+    prevRanksRef.current = nextRanks;
+    if (Object.keys(deltas).length) {
+      setRankDelta(deltas);
+      const t = window.setTimeout(() => setRankDelta({}), 1400);
+      return () => window.clearTimeout(t);
+    }
+  }, [sortedCashPlayers]);
 
   return (
     <div className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""} ${pocket && !booting ? "is-pocket" : ""}`}>
@@ -1365,6 +1807,45 @@ export function App() {
       ) : null}
       <header className="top">
         <div className="brand">DreamPoly</div>
+        {!pregame && viewMe ? (
+          <div className="hud-switch" role="group" aria-label="Panel layout">
+            <button
+              type="button"
+              className={`hud-btn${showRoster ? " on" : ""}`}
+              aria-pressed={showRoster}
+              title={showRoster ? "Hide Players list (Cash stays visible)" : "Show Players list"}
+              onClick={() => { sfx("click"); setShowRoster((v) => !v); }}
+            >
+              <HudIcon kind="players" />
+              <span>Players</span>
+            </button>
+            <button
+              type="button"
+              className={`hud-btn hud-feed${showFeed ? " on" : ""}`}
+              aria-pressed={showFeed}
+              title={showFeed ? "Hide Activity & Progress" : "Show Activity & Progress"}
+              onClick={() => { sfx("click"); setShowFeed((v) => !v); }}
+            >
+              <HudIcon kind="activity" />
+              <span>Activity</span>
+            </button>
+            <button
+              type="button"
+              className={`hud-btn hud-focus${!showRoster && !showFeed ? " on" : ""}`}
+              aria-pressed={!showRoster && !showFeed}
+              title={!showRoster && !showFeed ? "Show Players & Activity" : "Focus Mode (keep Cash visible, hide Players & Activity)"}
+              onClick={() => {
+                sfx("click");
+                const allHidden = !showRoster && !showFeed;
+                setShowRoster(allHidden);
+                setShowFeed(allHidden);
+              }}
+            >
+              <HudIcon kind="focus" />
+              <span>{!showRoster && !showFeed ? "Show all" : "Focus"}</span>
+            </button>
+          </div>
+        ) : <span />}
         <div className="top-tools">
           <ThemeDesk theme={theme} onTheme={setTheme} />
           <AudioMix mix={mix} onMix={setMix} />
@@ -1419,10 +1900,8 @@ export function App() {
             onMode={(next) => setPickedMode(next)}
             onLeave={leaveTable}
             onSit={() => joinSeat(youId)}
-            onSeatBots={seatBots}
-            onClearBots={clearBots}
+            onAddBot={() => seatBots(1)}
             onKick={kickSeat}
-            onPlayBots={playWithBots}
             onLooks={applyLooks}
             people={discord.people}
             link={{
@@ -1448,29 +1927,24 @@ export function App() {
           />
         )
       ) : (
-        <div className="play">
-      {linkRole !== "solo" ? (
-        <TableLinkStrip
-          role={linkRole}
-          status={linkStatus}
-          ping={linkPing}
-          linked={linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length}
-          warn={linkWarn}
-          {...linkCopy(linkRole, linkStatus, linkPing, linkPeers.filter((p) => p.status === "linked" || p.status === "weak").length, linkPath)}
-        />
-      ) : null}
-      <div className="roster">
-        {state.players.map((p) => (
+        <div className={`play${!showRoster ? " is-roster-hidden" : ""}${!showFeed ? " is-feed-hidden" : ""}`}>
+      <div className={`roster${!showRoster ? " is-compact" : ""}`}>
+        {showRoster ? (
+        <div className="seat-list">
+        {(view ?? state).players.map((p) => (
           <div
             key={p.id}
-            className={`seat ${who?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id ? "peek" : ""}`}
+            className={`seat ${viewWho?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id ? "peek" : ""}`}
             style={{ "--player": p.color } as CSSProperties}
             onMouseEnter={() => setSeatHover(p.id)}
             onMouseLeave={() => setSeatHover(null)}
           >
             <Portrait player={p} size={26} />
             <b>{p.name}</b>
-            <span>{p.out ? "Out" : state.mode === "moves" ? `${p.moves}m` : `$${p.cash}`}</span>
+            <span>
+              {p.out ? "Out" : (view ?? state).mode === "moves" ? `${p.moves}m` : `$${p.cash}`}
+              {!p.out && p.jailTurns > 0 ? <em className="seat-jail">Jail</em> : null}
+            </span>
             {p.id === hostId ? (
               <em className="seat-link is-host">host</em>
             ) : p.bot ? null : (
@@ -1482,17 +1956,19 @@ export function App() {
             )}
           </div>
         ))}
-        <div className={`wallet ${(payShare(state.lastPay, me?.id) != null || tillGain != null) && !walking ? "is-paid" : ""}`}>
+        </div>
+        ) : null}
+        <div className={`wallet ${(payShare(view?.lastPay, viewMe?.id) != null || tillGain != null) && !revealing ? "is-paid" : ""}`}>
           <div className="till-head">
             <PixelBill />
-            <small>Cash</small>
+            <small>CASH</small>
           </div>
           <div className="till-readout">
             <b>${shownCash}</b>
-            {(payShare(state.lastPay, me?.id) ?? tillGain) != null && !walking ? (
-              <em className="till-plus" key={`${state.rollTick}-got-${payShare(state.lastPay, me?.id) ?? tillGain}`}>+${payShare(state.lastPay, me?.id) ?? tillGain}</em>
+            {(payShare(view?.lastPay, viewMe?.id) ?? tillGain) != null && !revealing ? (
+              <em className="till-plus" key={`${view?.rollTick}-got-${payShare(view?.lastPay, viewMe?.id) ?? tillGain}`}>+${payShare(view?.lastPay, viewMe?.id) ?? tillGain}</em>
             ) : null}
-            {(payShare(state.lastPay, me?.id) ?? tillGain) != null && !walking ? (
+            {(payShare(view?.lastPay, viewMe?.id) ?? tillGain) != null && !revealing ? (
               <span className="till-fly" aria-hidden>
                 <i style={{ "--i": 0 } as CSSProperties}><PixelBill /></i>
                 <i style={{ "--i": 1 } as CSSProperties}><PixelBill /></i>
@@ -1501,32 +1977,30 @@ export function App() {
             ) : null}
           </div>
           {state.mode === "moves" ? (
-            <span className={`till-fuel${moveGain ? " is-up" : ""}`} key={`moves-${shownMoves}`}>
-              {shownMoves} moves{moveGain ? <em>+{moveGain}</em> : null}
+            <span className={`till-fuel${moveGain && !revealing ? " is-up" : ""}`} key={`moves-${shownMoves}`}>
+              {shownMoves} moves{moveGain && !revealing ? <em>+{moveGain}</em> : null}
             </span>
           ) : (
             <span className="till-fuel">Classic table</span>
           )}
-          {state.mode === "moves" && me && me.moves <= 4 && !me.out ? (
-            <div className="till-warn">
-              <PixelCaution />
-              <span>Low moves. Pass GO for +1, or buy one for ${fuelPrice(me)}.</span>
-            </div>
-          ) : null}
           <ul>
-            {state.players.filter((p) => !p.out).map((p) => (
-              <li
-                key={p.id}
-                className={payShare(state.lastPay, p.id) != null && !walking ? "is-got" : ""}
-                style={{ "--player": p.color } as CSSProperties}
-                onMouseEnter={() => setSeatHover(p.id)}
-                onMouseLeave={() => setSeatHover(null)}
-              >
-                <i />
-                <span>{p.name}</span>
-                <em>${p.cash}</em>
-              </li>
-            ))}
+            {sortedCashPlayers.map((p, idx) => {
+              const delta = rankDelta[p.id];
+              return (
+                <li
+                  key={p.id}
+                  className={`${payShare(view?.lastPay, p.id) != null && !revealing ? "is-got" : ""} ${delta === "up" ? "is-rank-up" : delta === "down" ? "is-rank-down" : ""}`}
+                  style={{ "--player": p.color } as CSSProperties}
+                  onMouseEnter={() => setSeatHover(p.id)}
+                  onMouseLeave={() => setSeatHover(null)}
+                >
+                  <b className="rank-num">{idx + 1}</b>
+                  <i />
+                  <span>{p.name}</span>
+                  <em>${p.cash}</em>
+                </li>
+              );
+            })}
           </ul>
           <button type="button" className="help-go" title="How this table works" onClick={() => { sfx("click"); setHelpOpen(true); }}>
             ?
@@ -1546,7 +2020,8 @@ export function App() {
             }
           }}
         >
-          ◀
+          <span>◀</span>
+          <span className="close-copy">{sheet === "more" ? "Board" : "Leave"}</span>
         </button>
       </div>
 
@@ -1565,9 +2040,9 @@ export function App() {
           }}
           onContextMenu={(e) => e.preventDefault()}
         >
-          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${walking ? "on-move" : ""} ${stallOpen ? "trading" : ""} ${hideDesk ? "is-inspect" : ""} ${!mine && !walking && !stallOpen ? "idle" : "live"}`}>
+          <div className={`center ${card ? "dealing" : ""} ${rolling ? "rolling" : ""} ${diceDrop && !stallOpen && !casinoShowing && !vaultShowing ? "is-dice-drop" : ""} ${walking ? "on-move" : ""} ${stallOpen || casinoShowing || vaultShowing ? "trading" : ""} ${hideDesk ? "is-inspect" : ""} ${!mine && !walking && !stallOpen && !casinoShowing && !vaultShowing ? "idle" : "live"}`}>
             <div
-              className={`table-core ${stallOpen ? "is-market" : ""} ${choiceLock ? "is-choice" : ""} ${brokeShake ? "is-shaking" : ""}`}
+              className={`table-core ${stallOpen ? "is-market" : ""} ${casinoShowing ? "is-market is-casino" : ""} ${vaultShowing ? "is-market is-vault" : ""} ${choiceLock ? "is-choice" : ""} ${brokeShake ? "is-shaking" : ""}`}
               data-fx="desk"
               onAnimationEnd={(e) => {
                 if (e.target === e.currentTarget) setBrokeShake(0);
@@ -1595,6 +2070,43 @@ export function App() {
                     setTrading(false);
                   }}
                 />
+              ) : vaultShowing ? (
+                <VaultDesk
+                  cash={shownCash}
+                  moves={shownMoves}
+                  mode={state.mode}
+                  result={vaultHold ? state.vaultResult ?? null : null}
+                  onPick={(pick) => {
+                    setVaultHold({ preCash: me.cash, preMoves: me.moves, holding: true });
+                    act({ type: "vault", pick });
+                  }}
+                  onReveal={() => {
+                    setVaultHold((cur) => (cur ? { ...cur, holding: false } : null));
+                  }}
+                  onDone={() => {
+                    setVaultHold(null);
+                  }}
+                />
+              ) : casinoShowing ? (
+                <CasinoDesk
+                  cash={shownCash}
+                  result={casinoHold ? state.casinoResult ?? null : null}
+                  onSpin={(bet) => {
+                    if (bet <= 0) {
+                      setCasinoHold(null);
+                      act({ type: "casino", bet: 0 });
+                      return;
+                    }
+                    setCasinoHold({ preCash: me.cash, holding: true });
+                    act({ type: "casino", bet });
+                  }}
+                  onReveal={() => {
+                    setCasinoHold((cur) => (cur ? { ...cur, holding: false } : null));
+                  }}
+                  onDone={() => {
+                    setCasinoHold(null);
+                  }}
+                />
               ) : (
                 <>
               <header className="desk-head">
@@ -1614,29 +2126,45 @@ export function App() {
               </header>
               {card ? (
                 <article className="chance" key={card}>
-                  <span>Casino</span>
+                  <span>Chance</span>
                   <b>{CARD_LABEL[card]}</b>
                 </article>
-              ) : mine || walking || rolling ? (
+              ) : (viewMine || viewWho?.id === viewMe?.id) || revealing ? (
                 <div className="desk-stage">
-                  {rolling || walking || state.phase === "path" || (choiceLock && state.phase !== "card" && state.phase !== "home") ? (
-                    <div className={`dice-row${choiceLock && !rolling ? " is-mini" : ""}${!rolling && !walking ? " is-land" : ""}`} key={rolling ? "spin" : state.rollTick}>
-                      <PixelDie n={centerDie?.[0] ?? 6} spinning={rolling} />
-                      <PixelDie n={centerDie?.[1] ?? 5} spinning={rolling} />
+                  {!diceDrop && (walking || (view ?? state).phase === "path" || (view ?? state).phase === "jail" || (choiceLock && (view ?? state).phase !== "card" && (view ?? state).phase !== "home" && (view ?? state).phase !== "vault" && (view ?? state).phase !== "casino")) ? (
+                    <div className={`dice-row${choiceLock ? " is-mini" : ""}${!revealing ? " is-land" : ""}`} key={state.rollTick}>
+                      <PixelDie n={centerDie?.[0] ?? 6} />
+                      <PixelDie n={centerDie?.[1] ?? 5} />
                     </div>
                   ) : null}
-                  {state.lastPay && mine && state.lastPay.to !== me.id && state.phase === "extra" && !walking && !held ? (
-                    <div className="pay-chip" key={`${state.rollTick}-pay`}>
-                      -${state.lastPay.amount}
-                      {state.lastPay.viaAmount ? (
+                  {!revealing && (view ?? state).casinoResult && (view ?? state).casinoResult?.outcome !== "skip" && (view ?? state).phase === "extra" ? (
+                    <div className={`casino-result is-${(view ?? state).casinoResult!.outcome}`}>
+                      <span className="casino-reels-mini">
+                        {(view ?? state).casinoResult!.reels.map((r, i) => (
+                          <PixelCasinoSymbol id={r} key={i} />
+                        ))}
+                      </span>
+                      <b>
+                        {(view ?? state).casinoResult!.outcome === "jackpot"
+                          ? `JACKPOT +$${(view ?? state).casinoResult!.payout}`
+                          : (view ?? state).casinoResult!.outcome === "pair"
+                            ? `PAIR +$${(view ?? state).casinoResult!.payout}`
+                            : `LOST $${(view ?? state).casinoResult!.bet}`}
+                      </b>
+                    </div>
+                  ) : null}
+                  {!revealing && (view ?? state).lastPay && viewMine && (view ?? state).lastPay?.to !== viewMe?.id && (view ?? state).phase === "extra" ? (
+                    <div className="pay-chip" key={`${(view ?? state).rollTick}-pay`}>
+                      -${(view ?? state).lastPay!.amount}
+                      {(view ?? state).lastPay!.viaAmount ? (
                         <em>
-                          {state.players.find((p) => p.id === state.lastPay?.via)?.name} stack ${state.lastPay.viaAmount}
+                          {(view ?? state).players.find((p) => p.id === (view ?? state).lastPay?.via)?.name} stack ${(view ?? state).lastPay!.viaAmount}
                         </em>
                       ) : null}
                     </div>
                   ) : null}
                   {(() => {
-                    const copy = deskCopy(state, walking);
+                    const copy = deskCopy(view ?? state, revealing);
                     if (!copy.title && !copy.amount) return null;
                     return (
                       <div className={`desk-prompt${copy.kicker ? "" : " is-quiet"}`}>
@@ -1650,14 +2178,13 @@ export function App() {
               ) : (
                 <div className="idle-mark">
                   <div className="logo">DreamPoly</div>
-                  <div className="logo-sub">{who ? `${who.name} is playing` : "Table open"}</div>
+                  <div className="logo-sub">{viewWho ? `${viewWho.name} is playing` : "Table open"}</div>
                 </div>
               )}
-              {mine && state.phase === "extra" && !walking && !diceSpin ? (
+              {viewMine && (view ?? state).phase === "extra" && !revealing ? (
                 <div className="desk-tools">
-                  <button type="button" className="desk-chip" onMouseEnter={sfxPlayHover} onClick={() => setTrading(true)}>
+                  <button type="button" className="desk-chip" onMouseEnter={sfxPlayHover} onClick={() => { sfx("click"); setTrading(true); }}>
                     Trade
-                    <em>{me.freeTrade ? "free" : `$${tradeFee(state, me)}`}</em>
                   </button>
                   {state.mode === "moves" && me.moves < MOVE_CAP ? (
                     <button
@@ -1682,7 +2209,7 @@ export function App() {
                       <button
                         key={b.label + (b.price || "")}
                         className={b.ghost ? "ghost" : b.broke ? "warn" : b.warn ? "warn" : "go"}
-                        disabled={(!mine && b.needsYou) || !!diceSpin || walking}
+                        disabled={(!mine && b.needsYou) || diceHolding || walking}
                         onClick={() => {
                           if (b.block) {
                             sfx("warning");
@@ -1717,91 +2244,195 @@ export function App() {
               )}
             </div>
           </div>
-          {TRACK.map((space) => (
+          {TRACK.map((space, tileIdx) => (
             <Tile
               key={space.id}
               space={space}
-              state={state}
+              tileIdx={tileIdx}
+              state={view ?? state}
               walk={walk}
               you={me.id}
               grouped={inGroup(space.id, openGroup)}
               held={
-                (!!fortunePeek && tileOwner(space.id, state) === fortunePeek) ||
-                (!!compareId && (tileOwner(space.id, state) === compareId || tileOwner(space.id, state) === me.id))
+                (!!fortunePeek && tileOwner(space.id, view ?? state) === fortunePeek) ||
+                (!!compareId && (tileOwner(space.id, view ?? state) === compareId || tileOwner(space.id, view ?? state) === me.id))
               }
               live
               onHover={setHoverId}
               onOpen={() => {
+                const shown = view ?? state;
                 if (testOn && showTest) {
                   cheatTile(space.id);
                   return;
                 }
-                if (space.id === "market" && mine && state.phase === "extra" && !walking && !diceSpin) {
-                  setCompareId(null);
-                  setOpenGroup(null);
-                  setGroupOwners(false);
-                  setTrading(true);
-                  return;
-                }
                 const g = groupOf(space.id);
-                const owned = !!tileOwner(space.id, state);
+                const owned = !!tileOwner(space.id, shown);
                 setCompareId(null);
                 if (!g) return;
                 if (g === "market") {
+                  const closing = openGroup === "market";
+                  sfx(closing ? "back" : "peek");
                   setGroupOwners(false);
-                  setOpenGroup((cur) => (cur === "market" ? null : "market"));
+                  setOpenGroup(closing ? null : "market");
                   return;
                 }
                 if (openGroup === g && groupOwners === owned) {
+                  sfx("back");
                   setOpenGroup(null);
                   setGroupOwners(false);
                   return;
                 }
+                const isSetStack = g !== "rest" && g !== "home" && g !== "dream" && g !== "chance" && g !== "chest";
+                sfx(isSetStack ? "fullStack" : "peek", 1, isSetStack ? 0.88 : 1);
                 setGroupOwners(owned);
                 setOpenGroup(g);
               }}
               onOwnerPeek={() => {
-                const who = tileOwner(space.id, state);
-                if (!who) return;
+                const whoPeek = tileOwner(space.id, view ?? state);
+                if (!whoPeek) return;
                 setOpenGroup(null);
                 setGroupOwners(false);
-                if (compareId !== who) sfx("owner");
-                setCompareId(compareId === who ? null : who);
+                if (compareId !== whoPeek) sfx("owner");
+                setCompareId(compareId === whoPeek ? null : whoPeek);
               }}
             />
           ))}
           {stallOpen ? null : compareId ? (
             <CompareCard
-              state={state}
-              you={me}
-              them={state.players.find((p) => p.id === compareId)!}
+              state={view ?? state}
+              you={viewMe ?? me}
+              them={(view ?? state).players.find((p) => p.id === compareId)!}
             />
           ) : openGroup === "market" ? (
             <MarketCard
-              state={state}
-              you={me}
-              mine={mine}
+              state={view ?? state}
+              you={viewMe ?? me}
+              mine={viewMine}
               onTrade={() => setTrading(true)}
             />
-          ) : openGroup === "rest" || openGroup === "home" || openGroup === "dream" ? (
-            <CornerCard id={openGroup} mode={state.mode} />
+          ) : openGroup === "rest" || openGroup === "home" || openGroup === "dream" || openGroup === "chance" || openGroup === "chest" ? (
+            <CornerCard id={openGroup} mode={(view ?? state).mode} />
           ) : openGroup ? (
-            <GroupCard group={openGroup} state={state} owners={groupOwners} />
+            <GroupCard group={openGroup} state={view ?? state} owners={groupOwners} />
           ) : hoverOwner ? (
             <OwnerFloat
               id={hoverId}
-              state={state}
-              player={state.players.find((p) => p.id === hoverOwner)!}
+              state={view ?? state}
+              player={(view ?? state).players.find((p) => p.id === hoverOwner)!}
             />
           ) : bankHover ? (
-            <TileFloat id={hoverId} state={state} />
+            <TileFloat id={hoverId} state={view ?? state} />
           ) : cornerHover ? (
-            <CornerFloat id={hoverId} mode={state.mode} />
+            <CornerFloat id={hoverId} mode={(view ?? state).mode} />
           ) : null}
-          <Pawns state={state} walk={walk} setWalk={setWalk} pay={walking ? null : state.lastPay} />
-          <BoardFx boardRef={boardRef} walking={walking} state={state} />
+          <Pawns
+            state={state}
+            settled={view ?? state}
+            walk={walk}
+            setWalk={setWalk}
+            pay={revealing ? null : state.lastPay}
+            peekIds={fortunePeek ? [fortunePeek] : compareId ? [me.id, compareId] : []}
+            holdMove={diceHolding}
+          />
+          {diceDrop && !stallOpen && !casinoShowing && !vaultShowing ? (
+            <BoardDice3D
+              key={diceDrop.tick}
+              roll={diceDrop.roll}
+              rollKey={diceDrop.tick}
+              doublesLabel={diceDrop.jail ? "JAIL BREAK!" : "DOUBLES!"}
+              onSettled={(tick) => setDiceSettledTick(tick)}
+            />
+          ) : null}
+          <div className="board-alerts" aria-live="polite">
+            {(view ?? state).mode === "moves" && viewMe && !viewMe.out && viewMe.moves <= 4 ? (
+              <div className="dock-hint is-warn is-pinned" key="low-moves">
+                <span className="dock-hint-icon" aria-hidden><PixelCaution /></span>
+                <div className="dock-hint-copy">
+                  <b>Low moves ({viewMe.moves} left)</b>
+                  <small>Pass GO for +2 moves or buy 1 in More (${fuelPrice(viewMe)}).</small>
+                </div>
+              </div>
+            ) : null}
+            {moneyTip ? (
+              <div className={`dock-hint is-${moneyTip.tone || "info"}`} key={moneyTip.id} role="status">
+                <span className="dock-hint-icon" aria-hidden>
+                  {moneyTip.tone === "warn" ? <PixelCaution /> : <PixelBill />}
+                </span>
+                <div className="dock-hint-copy">
+                  <b>{moneyTip.title}</b>
+                  {moneyTip.detail ? <small>{moneyTip.detail}</small> : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <BoardFx boardRef={boardRef} walking={revealing} state={view ?? state} />
         </div>
       </div>
+      {showFeed ? (
+      <aside className="rail-feed" aria-label="Table activity">
+        <div className="feed-card">
+          <div className="feed-head">
+            <span className="feed-head-label">
+              <i className="feed-live-dot" aria-hidden />
+              <small>Live</small>
+            </span>
+            <b>Activity</b>
+          </div>
+          <ul className="feed-list">
+            {[...(view ?? state).log].reverse().slice(0, 12).map((line, i) => {
+              const p = parseLog(line);
+              const beat = logBeat(p.body);
+              return (
+                <li key={`${i}-${line}`} className={`is-${beat}${i === 0 ? " is-new" : ""}`}>
+                  <div className="feed-item-top">
+                    <small>{p.when || "Table"}</small>
+                    <span className="feed-beat">{beat}</span>
+                  </div>
+                  <span>{p.body}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+        <div className="feed-card">
+          <div className="feed-head">
+            <small>Progress</small>
+            <b>Sets</b>
+          </div>
+          <div className="feed-sets">
+            {setsFor(view ?? state).map((s) => {
+              const shown = view ?? state;
+              const cos = companiesIn(s.id, shown.world);
+              const ownedCount = cos.filter((c) => !!shown.companies[c.id]?.owner).length;
+              const complete = cos.length > 0 && ownedCount === cos.length && cos.every((c) => shown.companies[c.id]?.owner === shown.companies[cos[0].id]?.owner);
+              const pct = cos.length ? Math.round((ownedCount / cos.length) * 100) : 0;
+              return (
+                <div className={`feed-set-row${complete ? " is-complete" : ""}`} key={s.id} style={{ "--set": s.color } as CSSProperties}>
+                  <i className="feed-set-dot" />
+                  <span>{s.label}</span>
+                  <div className="feed-pips">
+                    {cos.map((c) => {
+                      const own = shown.players.find((pl) => pl.id === shown.companies[c.id]?.owner);
+                      return (
+                        <em
+                          key={c.id}
+                          title={`${c.name}${own ? ` · ${own.name}` : ""}`}
+                          style={own ? { background: own.color, borderColor: own.color } : undefined}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="feed-set-bar" aria-hidden>
+                    <i style={{ width: `${pct}%` }} />
+                  </div>
+                  <em className="feed-set-count">{complete ? "FULL" : `${ownedCount}/${cos.length}`}</em>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </aside>
+      ) : null}
       </div>
       )}
 
@@ -1809,18 +2440,6 @@ export function App() {
         <div className="sheet is-stall" onClick={() => { sfx("back"); setHelpOpen(false); }}>
           <article className="how-card" onClick={(e) => e.stopPropagation()}>
             <HowToPlay mode={state.mode} world={state.world} onClose={() => { sfx("enter"); setHelpOpen(false); }} />
-          </article>
-        </div>
-      ) : null}
-      {noteWhy ? (
-        <div className="sheet is-stall" onClick={() => { sfx("back"); setNoteWhy(null); }}>
-          <article className="note-why" onClick={(e) => e.stopPropagation()}>
-            <small>Bank</small>
-            <b>Can&apos;t take a note</b>
-            <p>{noteWhy}</p>
-            <button type="button" className="stall-act fuel" onClick={() => { sfx("click"); setNoteWhy(null); }}>
-              <b>Got it</b>
-            </button>
           </article>
         </div>
       ) : null}
@@ -1871,32 +2490,51 @@ export function App() {
                 me={me}
                 mine={mine}
                 onAct={(action) => act(action)}
+                onAskNote={() => {
+                  if (localStorage.getItem(NOTE_GUIDE_KEY) === "seen") {
+                    act({ type: "note" });
+                    return;
+                  }
+                  sfx("hint");
+                  setNoteGuide(true);
+                }}
                 onNoteBlock={(why) => { sfx("warning"); setNoteWhy(why); }}
                 onTrade={() => {
                   setSheet(null);
                   setTrading(true);
                 }}
                 onLog={() => { sfx("click"); setSheet("log"); }}
-                onLeave={() => { sfx("warning"); setLeaveWarn(true); }}
               />
             )}
-            {sheet === "log" && state && (
-              <>
-                <header className="stall-head">
-                  <p className="start-kicker">Table</p>
-                  <h2>Ledger</h2>
-                </header>
-                <ul className="ledger">
-                  {[...state.log].reverse().map((line, i) => (
-                    <LedgerRow key={`${line}-${i}`} line={line} />
-                  ))}
-                </ul>
-                <button type="button" className="stall-act log" onClick={() => { sfx("back"); setSheet("more"); }}>
-                  <b>More</b>
-                  <span>Back to the stall</span>
-                </button>
-              </>
-            )}
+            {sheet === "log" && (view ?? state) && (() => {
+              const logState = view ?? state!;
+              const logMe = viewMe ?? me;
+              const myLogs = logMe
+                ? [...logState.log].reverse().filter((line) => {
+                    const p = parseLog(line);
+                    return p.who === logMe.name || p.body.includes(logMe.name);
+                  })
+                : [];
+              return (
+                <>
+                  <header className="stall-head">
+                    <p className="start-kicker">Personal</p>
+                    <h2>Your Ledger</h2>
+                  </header>
+                  <ul className="ledger">
+                    {myLogs.length ? (
+                      myLogs.map((line, i) => <LedgerRow key={`${line}-${i}`} line={line} />)
+                    ) : (
+                      <li className="ledger-empty">No actions recorded for you yet.</li>
+                    )}
+                  </ul>
+                  <button type="button" className="stall-act log" onClick={() => { sfx("back"); setSheet("more"); }}>
+                    <StallIcon kind="log" />
+                    <b>Back to More</b>
+                  </button>
+                </>
+              );
+            })()}
             {sheet === "test" && showTest && (
               <>
                 <h2>Test tools</h2>
@@ -1946,6 +2584,49 @@ export function App() {
           </article>
         </div>
       )}
+      {noteGuide ? (
+        <div className="sheet is-stall is-top-alert" onClick={() => { sfx("back"); setNoteGuide(false); }}>
+          <article className="note-why is-guide" onClick={(e) => e.stopPropagation()}>
+            <small>Bank Note Rules</small>
+            <b>Borrow +${NOTE_PAY} Now</b>
+            <ul className="note-guide-list">
+              <li><b>Instant cash:</b> Adds <b>+${NOTE_PAY}</b> immediately (max {NOTE_MAX} per game, 1 per lap).</li>
+              <li><b>Auto-repay on GO:</b> Deducts <b>${NOTE_REPAY}</b> (${NOTE_PAY} + ${NOTE_REPAY - NOTE_PAY} fee) next time you pass or land on GO.</li>
+              <li><b>Short at GO?</b> If cash is under ${NOTE_REPAY}, the bank takes your cheapest brand instead.</li>
+            </ul>
+            <div className="note-guide-acts">
+              <button
+                type="button"
+                className="stall-act note"
+                onClick={() => {
+                  localStorage.setItem(NOTE_GUIDE_KEY, "seen");
+                  setNoteGuide(false);
+                  act({ type: "note" });
+                }}
+              >
+                <StallIcon kind="note" />
+                <b>Take +${NOTE_PAY}</b>
+                <span>Repays ${NOTE_REPAY} at GO</span>
+              </button>
+              <button type="button" className="stall-act log" onClick={() => { sfx("back"); setNoteGuide(false); }}>
+                <b>Cancel</b>
+              </button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+      {noteWhy ? (
+        <div className="sheet is-stall is-top-alert" onClick={() => { sfx("back"); setNoteWhy(null); }}>
+          <article className="note-why" onClick={(e) => e.stopPropagation()}>
+            <small>Bank</small>
+            <b>Can&apos;t take a note</b>
+            <p>{noteWhy}</p>
+            <button type="button" className="stall-act fuel" onClick={() => { sfx("click"); setNoteWhy(null); }}>
+              <b>Got it</b>
+            </button>
+          </article>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1987,7 +2668,7 @@ function ThemeDesk({ theme, onTheme }: { theme: ThemeId; onTheme: (id: ThemeId) 
                   onMouseEnter={sfxHover}
                   onClick={() => {
                     if (theme !== item.id) {
-                      sfx("paint");
+                      sfx("click");
                       onTheme(item.id);
                     }
                     setOpen(false);
@@ -2211,24 +2892,84 @@ function WaveOffIcon() {
   );
 }
 
+function HudIcon({ kind }: { kind: "players" | "activity" | "focus" }) {
+  const p = { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.1, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true as const };
+  if (kind === "players") {
+    return (
+      <svg {...p}>
+        <circle cx="9" cy="8" r="3.2" />
+        <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" />
+        <circle cx="17" cy="9.5" r="2.4" />
+        <path d="M16.5 14.5c2.2.4 4 1.9 4 4.5" />
+      </svg>
+    );
+  }
+  if (kind === "activity") {
+    return (
+      <svg {...p}>
+        <path d="M3 12h4l2.5-6 4 12 2.5-6h5" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...p}>
+      <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+    </svg>
+  );
+}
+
+function StallIcon({ kind }: { kind: "fuel" | "note" | "deal" | "log" }) {
+  const p = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true as const };
+  if (kind === "fuel") {
+    return (
+      <svg {...p}>
+        <path d="M5 17 11 11 5 5" />
+        <path d="M13 17 19 11 13 5" />
+      </svg>
+    );
+  }
+  if (kind === "note") {
+    return (
+      <svg {...p}>
+        <rect x="3" y="6" width="18" height="12" rx="2" />
+        <circle cx="12" cy="12" r="2.5" />
+        <path d="M6.5 9.5v5M17.5 9.5v5" />
+      </svg>
+    );
+  }
+  if (kind === "deal") {
+    return (
+      <svg {...p}>
+        <path d="M4 9h14l-3.5-3.5M20 15H6l3.5 3.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...p}>
+      <rect x="5" y="3.5" width="14" height="17" rx="2" />
+      <path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4.5" />
+    </svg>
+  );
+}
+
 function MoreStall({
   state,
   me,
   mine,
   onAct,
+  onAskNote,
   onNoteBlock,
   onTrade,
   onLog,
-  onLeave,
 }: {
   state: State;
   me: Player;
   mine: boolean;
   onAct: (action: Action) => void;
+  onAskNote: () => void;
   onNoteBlock: (why: string) => void;
   onTrade: () => void;
   onLog: () => void;
-  onLeave: () => void;
 }) {
   const extra = mine && state.phase === "extra";
   const owned = brands(state).filter((c) => state.companies[c.id].owner === me.id);
@@ -2242,83 +2983,121 @@ function MoreStall({
       </header>
       <div className="stall-grid">
         {state.mode === "moves" ? (
-          <button className="stall-act fuel" disabled={!extra} onClick={() => onAct({ type: "fuel" })}>
-            <small>Moves</small>
-            <b>Buy a move</b>
-            <span>${fuelPrice(me)}</span>
+          <button className="stall-act is-card fuel" disabled={!extra || me.moves >= MOVE_CAP} onClick={() => onAct({ type: "fuel" })} title="Buy +1 move this turn">
+            <span className="stall-ico"><StallIcon kind="fuel" /></span>
+            <b>Buy move</b>
+            <em>${fuelPrice(me)}</em>
           </button>
         ) : null}
         <button
-          className={`stall-act note${noteBlock(state, me) ? " is-held" : ""}`}
+          className={`stall-act is-card note${noteBlock(state, me) ? " is-held" : ""}`}
+          title={`Borrow +$${NOTE_PAY} now · auto-repays $${NOTE_REPAY} at GO`}
           onClick={() => {
             const why = noteBlock(state, me);
             if (why) onNoteBlock(why);
-            else onAct({ type: "note" });
+            else onAskNote();
           }}
         >
-            <small>Bank</small>
-            <b>Bank note</b>
-            <span>+${NOTE_PAY} · {me.notesTaken}/{NOTE_MAX} · 1 per lap</span>
+          <span className="stall-ico"><StallIcon kind="note" /></span>
+          <b>Bank note</b>
+          <em>+${NOTE_PAY} · {me.notesTaken}/{NOTE_MAX}</em>
         </button>
-        <button className="stall-act deal" disabled={!extra} onMouseEnter={sfxPlayHover} onClick={onTrade}>
-          <small>Market</small>
-          <b>{me.freeTrade ? "Trade free" : `Trade $${tradeFee(state, me)}`}</b>
-          <span>Swap deeds</span>
+        <button className="stall-act is-card deal" disabled={!extra} onMouseEnter={sfxPlayHover} onClick={onTrade} title="Propose a deal with another player">
+          <span className="stall-ico"><StallIcon kind="deal" /></span>
+          <b>Trade</b>
+          <em>Players</em>
         </button>
-        {licenses.map((kind) => (
-          <button
-            key={kind}
-            className="stall-act license"
-            disabled={!extra || me.cash < 180}
-            onClick={() => onAct({ type: "license", kind })}
-          >
-            <small>Stack</small>
-            <b>License {setOf(kind, state.world).label}</b>
-            <span>$180</span>
-          </button>
-        ))}
-        <button className="stall-act log" onClick={onLog}>
-          <small>Table</small>
-          <b>Recent</b>
-          <span>Log</span>
+        <button className="stall-act is-card log" onClick={onLog} title="View your personal turn history">
+          <span className="stall-ico"><StallIcon kind="log" /></span>
+          <b>Ledger</b>
+          <em>Your log</em>
         </button>
       </div>
-      <h3 className="stall-deeds-title">Your brands</h3>
+      {licenses.length ? (
+        <div className="stall-licenses">
+          {licenses.map((kind) => (
+            <button
+              key={kind}
+              className="stall-act license"
+              disabled={!extra || me.cash < 180}
+              onClick={() => onAct({ type: "license", kind })}
+            >
+              <small>Stack license</small>
+              <b>License {setOf(kind, state.world).label}</b>
+              <span>$180 · waive 1/3 rent split</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div className="stall-deeds-head">
+        <h3 className="stall-deeds-title">Your brands</h3>
+        <span className="stall-deeds-count">
+          {owned.length + stores.length} owned
+          {state.mode === "moves" && owned.length + stores.length > 0
+            ? ` · $${(owned.length + stores.length) * UPKEEP_PER}/turn`
+            : ""}
+        </span>
+      </div>
       {owned.length || stores.length ? (
-        <div className="stall-deeds">
+        <div className="brand-deck">
           {setsFor(state).map((set) => {
             const companies = owned.filter((c) => c.set === set.id);
             if (!companies.length) return null;
             const full = companies.length === 3;
             return (
               <section
-                className={`stall-slip${full ? " is-full" : ""}`}
+                className={`deck-group${full ? " is-full" : ""}`}
                 key={set.id}
                 style={{ "--set": set.color } as CSSProperties}
               >
-                <header>
-                  <span>{set.label}</span>
-                  <em>{companies.length}/3</em>
+                <header className="deck-group-head">
+                  <span className="deck-set-name">
+                    <i />
+                    {set.label}
+                  </span>
+                  <em>{full ? "Full set · Can build" : `${companies.length}/3`}</em>
                 </header>
-                <div className="stall-slip-row">
+                <div className="deck-cards">
                   {companies.map((c) => {
                     const own = state.companies[c.id];
-                    const canBuild = extra && full && own.level < 2;
+                    const buildCost = Math.max(20, Math.floor(c.price / 2) - (hasSet(state, me.id, "social") ? 20 : 0));
+                    const canBuild = extra && full && own.level < 2 && me.cash >= buildCost;
+                    const sellVal = Math.floor(c.price / 2);
                     return (
-                      <div className="stall-chip" key={c.id}>
-                        <BrandLogo id={logoOf(c)} label={c.name} />
-                        <div className="stall-chip-copy">
-                          <b>{c.name}</b>
-                          <small>${Math.floor(c.price / 2)}</small>
+                      <div className={`deck-card${own.level > 0 ? ` lv-${own.level}` : ""}`} key={c.id} title={c.name}>
+                        <div className="deck-card-top">
+                          <span className="deck-logo" title={c.name}>
+                            <BrandLogo id={logoOf(c)} label={c.name} />
+                          </span>
+                          <div className="deck-meta">
+                            {own.level === 2 ? (
+                              <span className="tier-badge is-hotel"><PixelHotel /> Hotel · ${c.rent[2]}</span>
+                            ) : own.level === 1 ? (
+                              <span className="tier-badge is-house"><PixelHouse /> House · ${c.rent[1]}</span>
+                            ) : (
+                              <span className="tier-badge">Rent ${c.rent[0]}</span>
+                            )}
+                          </div>
                         </div>
-                        <div className="stall-chip-acts">
-                          {canBuild ? (
-                            <button className="deed-act" onClick={() => onAct({ type: "build", companyId: c.id })}>
-                              {own.level === 1 ? "Hotel" : "House"}
+                        <div className="deck-acts">
+                          {full && own.level < 2 ? (
+                            <button
+                              type="button"
+                              className="deed-act is-build"
+                              disabled={!canBuild}
+                              onClick={() => onAct({ type: "build", companyId: c.id })}
+                            >
+                              {own.level === 1 ? <PixelHotel /> : <PixelHouse />}
+                              <span>{own.level === 1 ? `+ Hotel $${buildCost}` : `+ House $${buildCost}`}</span>
                             </button>
                           ) : null}
-                          <button className="deed-act sell" disabled={!extra} onClick={() => onAct({ type: "sell", companyId: c.id })}>
-                            Sell
+                          <button
+                            type="button"
+                            className="deed-act sell"
+                            disabled={!extra}
+                            onClick={() => onAct({ type: "sell", companyId: c.id })}
+                          >
+                            Sell ${sellVal}
                           </button>
                         </div>
                       </div>
@@ -2329,22 +3108,33 @@ function MoreStall({
             );
           })}
           {stores.length ? (
-            <section className="stall-slip is-store">
-              <header>
-                <span>Stores</span>
+            <section className="deck-group is-store">
+              <header className="deck-group-head">
+                <span className="deck-set-name">
+                  <i />
+                  Stores
+                </span>
                 <em>{stores.length}/4</em>
               </header>
-              <div className="stall-slip-row">
+              <div className="deck-cards">
                 {stores.map((s) => (
-                  <div className="stall-chip" key={s.id}>
-                    <BrandLogo id={logoOf(s)} label={s.name} />
-                    <div className="stall-chip-copy">
-                      <b>{s.name}</b>
-                      <small>$75</small>
+                  <div className="deck-card" key={s.id} title={s.name}>
+                    <div className="deck-card-top">
+                      <span className="deck-logo" title={s.name}>
+                        <BrandLogo id={logoOf(s)} label={s.name} />
+                      </span>
+                      <div className="deck-meta">
+                        <span className="tier-badge">Store · Rent ${storeRent(state, me.id)}</span>
+                      </div>
                     </div>
-                    <div className="stall-chip-acts">
-                      <button className="deed-act sell" disabled={!extra} onClick={() => onAct({ type: "sell", companyId: s.id })}>
-                        Sell
+                    <div className="deck-acts">
+                      <button
+                        type="button"
+                        className="deed-act sell"
+                        disabled={!extra}
+                        onClick={() => onAct({ type: "sell", companyId: s.id })}
+                      >
+                        Sell $75
                       </button>
                     </div>
                   </div>
@@ -2356,9 +3146,6 @@ function MoreStall({
       ) : (
         <p className="stall-empty">No deeds yet.</p>
       )}
-      <button type="button" className="leave-link" onClick={onLeave}>
-        Leave table
-      </button>
     </>
   );
 }
@@ -2409,7 +3196,7 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
           {moves ? (
             <>
               <p>
-                Everyone starts with <b>{START_MOVES} moves</b> and <b>${START_CASH}</b>. You are out if you hit{" "}
+                Everyone starts with <b>{START_MOVES} moves</b> and <b>${START_CASH}</b>. Classic tables start with <b>${CLASSIC_START_CASH}</b>. You are out if you hit{" "}
                 <b>0 moves</b>. Last player still on the board wins.
               </p>
               <p>
@@ -2419,7 +3206,7 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
           ) : (
             <>
               <p>
-                Everyone starts with <b>${START_CASH}</b>. There is no move meter. If you cannot pay, the bank sells
+                Everyone starts with <b>${CLASSIC_START_CASH}</b>. There is no move meter. If you cannot pay, the bank sells
                 your cheapest brands at half price, then takes you out.
               </p>
               <p>
@@ -2451,12 +3238,12 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
               <figcaption>Store · $150 stall. Rent grows with how many stalls they hold.</figcaption>
             </figure>
             <figure>
-              <HowTile kind="corner" name="GO" price={moves ? "$200 or +1" : "$200"} />
+              <HowTile kind="corner" name="GO" price={moves ? `$${GO_PAY} or +2` : `$${CLASSIC_GO_PAY}`} />
               <figcaption>GO · pass or land, you always pick. Never both.</figcaption>
             </figure>
             <figure>
-              <HowTile kind="corner" name="Market" price={`Trade $${TRADE_FEE}`} />
-              <figcaption>Market · land here and this turn’s trade is free.</figcaption>
+              <HowTile kind="corner" name="Vault" price="Crack 1 of 3" />
+              <figcaption>Vault · pick 1 of 3 safes for Gold, Moves, Shield, or Jail Pass.</figcaption>
             </figure>
           </div>
         </section>
@@ -2478,19 +3265,19 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
             <li>
               {moves ? (
                 <>
-                  <b>GO</b> — when you pass or land here you always choose <b>$200</b> or <b>+1 move</b>. Never automatic.
+                  <b>GO</b> — when you pass or land here you always choose <b>${GO_PAY}</b> or <b>+2 moves</b>. Never automatic.
                 </>
               ) : (
                 <>
-                  <b>GO</b> — collect <b>$200</b>.
+                  <b>GO</b> — collect <b>${CLASSIC_GO_PAY}</b>.
                 </>
               )}
             </li>
             <li>
-              <b>Casino</b> — draw a card. Follow it, then continue.
+              <b>Casino</b> — spin the 3-reel slots with $50–$200 for 1.8× pairs or 3× triple payouts.
             </li>
             <li>
-              <b>Jail</b> — you are only visiting. Nothing to pay, no extra move.
+              <b>Jail</b> — pay <b>${JAIL_FINE}</b> fine, use a <b>Get Out of Jail Free</b> card, or try rolling doubles (3 turns, boosted odds — each turn still spends 1 move).
             </li>
           </ul>
           <p>Then you get extras (build, fuel, trade) and hit <b>End turn</b>.</p>
@@ -2501,12 +3288,12 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
             <small>04 · Fuel</small>
             <h3>Moves and money</h3>
             <p>
-              Each turn spends <b>1 move</b> first, then <b>$12 upkeep</b> for every brand and store you own. Cash is
-              tight on purpose. Cap is <b>{MOVE_CAP}</b> moves.
+              Each turn spends <b>1 move</b> at turn start, and charges <b>${UPKEEP_PER} upkeep</b> per active brand and
+              store you own when ending your turn. Cash is tight on purpose. Cap is <b>{MOVE_CAP}</b> moves.
             </p>
             <ul className="how-stack">
               <li>
-                Pass GO (a full lap): choose <b>$200</b> or <b>+1 move</b> — never both, never automatic.
+                Pass GO (a full lap): choose <b>${GO_PAY}</b> or <b>+2 moves</b> — never both, never automatic.
               </li>
               <li>
                 Buy a move in More: <b>$100</b>, then $200, then $300. Once per turn.
@@ -2522,7 +3309,8 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
             <small>04 · Bank</small>
             <h3>Cash only</h3>
             <p>
-              Turns do not spend moves and there is no upkeep. Pass GO for <b>$200</b>. Pay rent when you land on an
+              Turns do not spend moves and there is no upkeep. Pass GO for <b>${CLASSIC_GO_PAY}</b>.
+              Chance, Surprise, and Casino tiles draw a random card. Pay rent when you land on an
               owned brand. If you cannot pay, brands sell at half until you cover it — or you go bankrupt.
             </p>
           </section>
@@ -2536,7 +3324,7 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
           </p>
           <ul className="how-stack">
             <li>
-              <b>Bank note</b> — take <b>${NOTE_PAY}</b>. One note per lap around the board, and at most <b>{NOTE_MAX}</b> in a game. You may owe it back later. The desk and More use the same rule.
+              <b>Bank note</b> — borrow <b>+${NOTE_PAY}</b> now. Next time you pass or land on GO it auto-repays <b>${NOTE_REPAY}</b> (or takes your cheapest brand if short). Max 1 per lap and {NOTE_MAX} per game.
             </li>
             {moves ? (
               <li>
@@ -2581,8 +3369,7 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
             must <b>accept</b> or <b>decline</b>. Only you two see the stall.
           </p>
           <p>
-            Fee is <b>${TRADE_FEE}</b> unless you landed on Market this turn, or you own the whole <b>Watch</b> set. You
-            cannot trade someone down to 0 moves.
+            Trading is always <b>free ($0 fee)</b>! Land on <b>Vault</b> to crack 1 of 3 safes for Gold, Moves, Shield, or a Jail Pass — and you cannot trade someone down to 0 moves.
           </p>
         </section>
 
@@ -2702,45 +3489,112 @@ function FateBanner({ fate, onDismiss, onLeave }: { fate: Fate; onDismiss: () =>
   );
 }
 
+function openedFullStack(prev: State, next: State, targetId?: string) {
+  const who = targetId ? next.players.filter((p) => p.id === targetId) : next.players;
+  return who.some((p) =>
+    setsFor(next).some((s) => hasSet(next, p.id, s.id) && !hasSet(prev, p.id, s.id)),
+  );
+}
+
 function cuePlay(prev: State, next: State, action: Action, youId?: string) {
   const you = youId || prev.players[0]?.id;
   const mine = !!you && actor(prev)?.id === you;
-  if (action.type === "path") sfx("dice");
-  if (action.type === "build") sfx("upgrade");
-  if (action.type === "fuel" || action.type === "license" || (action.type === "store" && action.pick === "buy") || (action.type === "land" && action.pick === "buy")) {
-    sfx("pay");
+  // Never fire outcome audio at roll time; settled/walk transition hooks play landing results after dice & walk complete.
+  if (action.type === "path" || (action.type === "jail" && action.pick === "roll")) {
+    if (!mine) sfx("dice");
+    return;
+  }
+  const fullMine = openedFullStack(prev, next, you);
+  const fullAny = !fullMine && openedFullStack(prev, next);
+  const myOffer = !!prev.offer && (prev.offer.to === you || prev.offer.from === you);
+  const tradeAccepted = action.type === "offer" && action.pick === "accept" && myOffer;
+  const tradeFailed = action.type === "offer" && action.pick === "decline" && myOffer;
+  if (fullMine && !tradeAccepted) sfx("fullStack");
+  else if (fullMine && tradeAccepted) window.setTimeout(() => sfx("fullStack"), 220);
+  else if (fullAny) sfx("fullStack", 0.96, 0.7);
+  if (action.type === "build" && mine) sfx("upgrade");
+  if ((action.type === "store" || action.type === "land") && action.pick === "buy") {
+    if (mine && !fullMine) sfx("buy");
+    else if (!mine) sfx("someoneBought", 1, 0.85);
+  } else if ((action.type === "store" || action.type === "land") && mine && action.pick === "skip") {
+    sfx("click");
+  }
+  if (action.type === "fuel") {
+    if (mine) sfx("gainMove");
+  } else if (action.type === "license") {
+    if (mine) sfx("payBank");
+  }
+  if (action.type === "home" && mine) {
+    if (action.pick === "move") sfx("gainMove");
+    else sfx("received");
+  }
+  if (action.type === "jail" && mine) {
+    if (action.pick === "pay") sfx("payBank");
+    else if (action.pick === "card") sfx("noteUsed");
+  }
+  if (action.type === "casino" && action.bet <= 0 && mine) {
+    sfx("back");
   }
   if (action.type === "end" && mine) sfx("confirm");
-  if (action.type === "note" || action.type === "home" || action.type === "sell") sfx("received");
-  if (action.type === "rent" && action.pick === "surrender") sfx("death");
-  if (action.type === "rent" && action.pick !== "surrender") sfx("pay");
-  if (action.type === "offer" && action.pick === "accept" && prev.offer?.to === you) sfx("confirm");
-  if (action.type === "offer" && action.pick === "decline") sfx("back");
+  if (action.type === "note" && mine) sfx("noteUsed");
+  if (action.type === "sell" && mine) sfx("received");
+  if (action.type === "rent" && action.pick === "surrender" && mine) sfx("death");
+  if (action.type === "rent" && action.pick === "note" && mine) sfx("noteUsed");
+  if (action.type === "rent" && action.pick === "move" && mine) sfx("payBank");
+  if (tradeAccepted) sfx("tradeOk");
+  if (tradeFailed) sfx("tradeFail");
   if (action.type === "trade" && mine) sfx("enter");
-  if (!samePay(prev.lastPay, next.lastPay) && next.lastPay && you) {
-    if (next.lastPay.to === you || next.lastPay.via === you) sfx("received");
-    else if (actor(prev)?.id === you) sfx("pay");
-  }
-  if (next.players.some((p) => p.out && !prev.players.find((x) => x.id === p.id)?.out)) sfx("death");
 }
 
 /** Guests only see snaps — recreate the cues the host already heard when applying them. */
 function cueFromSnap(prev: State, next: State, youId: string) {
-  // Skip dice if this client already spun locally for their own roll.
-  if (prev.rollTick !== next.rollTick && next.lastRoll && actor(prev)?.id !== youId) sfx("dice");
-  if (!samePay(prev.lastPay, next.lastPay) && next.lastPay) {
-    if (next.lastPay.to === youId || next.lastPay.via === youId) sfx("received");
-    else sfx("pay");
+  const rollOrMove = prev.rollTick !== next.rollTick || next.players.some((p, i) => !p.out && prev.players[i]?.stand !== p.stand);
+  if (rollOrMove) {
+    if (prev.rollTick !== next.rollTick && next.lastRoll && actor(prev)?.id !== youId) sfx("dice");
+    return;
   }
-  const prevOwn = Object.entries(prev.companies).filter(([, o]) => o.owner).length;
-  const nextOwn = Object.entries(next.companies).filter(([, o]) => o.owner).length;
-  if (nextOwn > prevOwn) sfx("pay");
-  if (nextOwn < prevOwn) sfx("received");
-  if (next.players.some((p) => p.out && !prev.players.find((x) => x.id === p.id)?.out)) sfx("death");
-  if (next.log[0] && next.log[0] !== prev.log[0]) {
-    const line = next.log[0].toLowerCase();
-    if (line.includes("bank note") || line.includes("repays") || line.includes("took")) sfx("received");
-    if (line.includes("hotel") || line.includes("house") || line.includes("upgrade")) sfx("upgrade");
+  const fullMine = openedFullStack(prev, next, youId);
+  const fullAny = !fullMine && openedFullStack(prev, next);
+  const deedChanged = (id: string) => {
+    const store = shops(next).find((s) => s.id === id);
+    return store ? next.stores[store.id] !== prev.stores[store.id] : next.companies[id]?.owner !== prev.companies[id]?.owner;
+  };
+  const offerEnded = !!prev.offer && !next.offer && (prev.offer.from === youId || prev.offer.to === youId);
+  const offerTransferred =
+    offerEnded &&
+    prev.offer != null &&
+    (prev.offer.giveCompanies.some(deedChanged) ||
+      prev.offer.getCompanies.some(deedChanged) ||
+      prev.offer.giveCash > 0 && next.players.find((p) => p.id === prev.offer?.from)?.cash !== prev.players.find((p) => p.id === prev.offer?.from)?.cash ||
+      prev.offer.getCash > 0 && next.players.find((p) => p.id === prev.offer?.to)?.cash !== prev.players.find((p) => p.id === prev.offer?.to)?.cash ||
+      prev.offer.giveMove ||
+      prev.offer.getMove && next.players.find((p) => p.id === prev.offer?.from)?.moves !== prev.players.find((p) => p.id === prev.offer?.from)?.moves);
+  if (offerEnded) sfx(offerTransferred ? "tradeOk" : "tradeFail");
+  if (fullMine && !offerEnded) sfx("fullStack");
+  else if (fullMine && offerTransferred) window.setTimeout(() => sfx("fullStack"), 220);
+  else if (fullAny) sfx("fullStack", 0.96, 0.7);
+  const prevTotalCo = Object.values(prev.companies).filter((o) => !!o.owner).length;
+  const nextTotalCo = Object.values(next.companies).filter((o) => !!o.owner).length;
+  const prevTotalSt = Object.values(prev.stores).filter((o) => !!o).length;
+  const nextTotalSt = Object.values(next.stores).filter((o) => !!o).length;
+  const prevOwn = Object.values(prev.companies).filter((o) => o.owner === youId).length;
+  const nextOwn = Object.values(next.companies).filter((o) => o.owner === youId).length;
+  const prevStores = Object.values(prev.stores).filter((o) => o === youId).length;
+  const nextStores = Object.values(next.stores).filter((o) => o === youId).length;
+  if ((nextOwn > prevOwn || nextStores > prevStores) && !fullMine && !offerTransferred) sfx("buy");
+  else if ((nextTotalCo > prevTotalCo || nextTotalSt > prevTotalSt) && !offerTransferred) sfx("someoneBought", 1, 0.85);
+  if ((nextOwn < prevOwn || nextStores < prevStores) && !offerTransferred) sfx("received");
+  const mePrev = prev.players.find((p) => p.id === youId);
+  const meNext = next.players.find((p) => p.id === youId);
+  if (mePrev && meNext && meNext.moves > mePrev.moves && !offerTransferred) sfx("gainMove");
+  if (mePrev && meNext && meNext.moves < mePrev.moves && prev.phase === "rent") sfx("payBank");
+  const prevLast = prev.log[prev.log.length - 1];
+  const nextLast = next.log[next.log.length - 1];
+  if (nextLast && nextLast !== prevLast) {
+    const line = nextLast.toLowerCase();
+    if (line.includes("bank note")) sfx("noteUsed");
+    if (line.includes("repays")) sfx("received");
+    if ((line.includes("hotel") || line.includes("house") || line.includes("upgrade")) && line.includes((meNext?.name || "").toLowerCase())) sfx("upgrade");
   }
 }
 
@@ -2749,9 +3603,9 @@ function parseLog(line: string) {
   if (stamped) {
     const who = stamped[2];
     const when = who === "Table" ? `Round ${stamped[1]}` : `Round ${stamped[1]} · ${who}'s turn`;
-    return { when, body: stamped[3] };
+    return { who, when, body: stamped[3] };
   }
-  return { when: null as string | null, body: line };
+  return { who: null as string | null, when: null as string | null, body: line };
 }
 
 function logBeat(line: string): "roll" | "pay" | "buy" | "build" | "sell" | "go" | "note" | "out" | "trade" | "card" | "move" | "info" {
@@ -2764,7 +3618,7 @@ function logBeat(line: string): "roll" | "pay" | "buy" | "build" | "sell" | "go"
   if (l.includes("buys")) return "buy";
   if (l.includes("bank note") || l.includes("repays")) return "note";
   if (l.includes("market") || l.includes("trade") || l.includes("deal")) return "trade";
-  if (l.includes("casino") || l.includes("card")) return "card";
+  if (l.includes("casino") || l.includes("card") || l.includes("vault") || l.includes("jail")) return "card";
   if (l.includes("passed go") || l.includes("takes $200") || l.includes("instead of $200") || l.includes("leaves go") || l.includes("lands on go")) return "go";
   if (l.includes("+1 move") || l.includes("buys a move") || l.includes("takes a move")) return "move";
   return "info";
@@ -2792,95 +3646,417 @@ function LedgerRow({ line }: { line: string }) {
 }
 
 function LedgerIcon({ kind }: { kind: ReturnType<typeof logBeat> }) {
-  const s = { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": true as const };
+  const s = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true as const };
   if (kind === "roll") {
     return (
       <svg {...s}>
-        <rect x="2" y="2" width="12" height="12" rx="2" fill="currentColor" />
-        <circle cx="6" cy="6" r="1.2" fill="#1a1208" />
-        <circle cx="10" cy="10" r="1.2" fill="#1a1208" />
-        <circle cx="10" cy="6" r="1.2" fill="#1a1208" />
+        <rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.2" />
+        <circle cx="5.6" cy="5.6" r="1.1" fill="currentColor" stroke="none" />
+        <circle cx="10.4" cy="5.6" r="1.1" fill="currentColor" stroke="none" />
+        <circle cx="10.4" cy="10.4" r="1.1" fill="currentColor" stroke="none" />
+        <circle cx="5.6" cy="10.4" r="1.1" fill="currentColor" stroke="none" />
       </svg>
     );
   }
   if (kind === "pay") {
     return (
       <svg {...s}>
-        <rect x="1" y="4" width="14" height="8" rx="1" fill="currentColor" />
-        <rect x="3" y="6" width="4" height="4" fill="#1a1208" />
+        <rect x="1.8" y="4.2" width="12.4" height="7.6" rx="1.4" />
+        <circle cx="8" cy="8" r="1.8" />
       </svg>
     );
   }
   if (kind === "buy" || kind === "build") {
     return (
       <svg {...s}>
-        <path fill="currentColor" d="M2 13V7l6-4 6 4v6H9V9H7v4H2z" />
+        <path d="M2.5 7.5 8 2.8l5.5 4.7V13.5H9.8v-3.4H6.2v3.4H2.5V7.5z" />
       </svg>
     );
   }
   if (kind === "sell") {
     return (
       <svg {...s}>
-        <path fill="currentColor" d="M3 4h10v2H8.5v7H6.5V6H3V4z" />
+        <path d="M3 8.5 8.5 3h4.5v4.5L7.5 13 3 8.5z" />
+        <circle cx="10.2" cy="5.8" r="1" fill="currentColor" stroke="none" />
       </svg>
     );
   }
   if (kind === "go") {
     return (
       <svg {...s}>
-        <path fill="currentColor" d="M3 8 8 3l5 5-1.5 1.5L9 7v6H7V7L4.5 9.5 3 8z" />
+        <path d="M3 8.2 8 3l5 5.2M8 3.6V13.2" />
       </svg>
     );
   }
   if (kind === "note") {
     return (
       <svg {...s}>
-        <rect x="3" y="2" width="10" height="12" fill="currentColor" />
-        <rect x="5" y="5" width="6" height="1.5" fill="#1a1208" />
-        <rect x="5" y="8" width="6" height="1.5" fill="#1a1208" />
+        <rect x="3" y="2.2" width="10" height="11.6" rx="1.2" />
+        <path d="M5.5 6h5M5.5 8.8h5M5.5 11.4h3" />
       </svg>
     );
   }
   if (kind === "out") {
     return (
       <svg {...s}>
-        <path fill="currentColor" d="M8 2 13 5v6L8 14 3 11V5l5-3zm0 3.2L5.4 6.6v3.8L8 11.8l2.6-1.4V6.6L8 5.2z" />
+        <path d="M4 4l8 8M12 4l-8 8" />
       </svg>
     );
   }
   if (kind === "trade") {
     return (
       <svg {...s}>
-        <path fill="currentColor" d="M3 6h7V4l4 3.5L10 11V9H3V6zm10 4H6v2l-4-3.5L6 5v2h7v3z" />
+        <path d="M2.5 6h9.5l-2.5-2.5M13.5 10H4l2.5 2.5" />
       </svg>
     );
   }
   if (kind === "card") {
     return (
       <svg {...s}>
-        <rect x="4" y="2" width="8" height="12" rx="1" fill="currentColor" />
-        <circle cx="8" cy="8" r="1.6" fill="#1a1208" />
+        <rect x="3.5" y="2" width="9" height="12" rx="1.4" />
+        <path d="M6.8 6.4a1.4 1.4 0 0 1 2.5.8c0 .9-1.2 1.1-1.3 1.9M8 11.4v.2" />
       </svg>
     );
   }
   if (kind === "move") {
     return (
       <svg {...s}>
-        <path fill="currentColor" d="M2 8h9V5l4 4-4 4V10H2V8z" />
+        <path d="M2.8 11.5 6.8 8 2.8 4.5M8.8 11.5 12.8 8 8.8 4.5" />
       </svg>
     );
   }
   return (
     <svg {...s}>
-      <rect x="6" y="6" width="4" height="4" fill="currentColor" />
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 7v4M8 5v.2" />
     </svg>
+  );
+}
+
+function CasinoDesk({
+  cash,
+  result,
+  onSpin,
+  onReveal,
+  onDone,
+}: {
+  cash: number;
+  result: State["casinoResult"] | null;
+  onSpin: (bet: number) => void;
+  onReveal: () => void;
+  onDone: () => void;
+}) {
+  const [bet, setBet] = useState(cash >= 100 ? 100 : cash >= 50 ? 50 : 0);
+  const [reels, setReels] = useState<[number, number, number]>([4, 3, 2]);
+  const [locked, setLocked] = useState<[boolean, boolean, boolean]>([false, false, false]);
+  const [spinning, setSpinning] = useState(false);
+  const [settled, setSettled] = useState(false);
+  const lockedRef = useRef<[boolean, boolean, boolean]>([false, false, false]);
+  const revealFired = useRef(false);
+  const onRevealRef = useRef(onReveal);
+  const onDoneRef = useRef(onDone);
+  onRevealRef.current = onReveal;
+  onDoneRef.current = onDone;
+
+  useEffect(() => {
+    if (!result || result.outcome === "skip") return;
+    setSpinning(true);
+    setSettled(false);
+    lockedRef.current = [false, false, false];
+    setLocked([false, false, false]);
+    revealFired.current = false;
+    let spinStep = 0;
+    const spinId = window.setInterval(() => {
+      spinStep += 1;
+      sfx("tileHover", 0.94 + (spinStep % 6) * 0.04);
+      const lk = lockedRef.current;
+      setReels((cur) => [
+        lk[0] ? result.reels[0] : (cur[0] + 1) % 5,
+        lk[1] ? result.reels[1] : (cur[1] + 2) % 5,
+        lk[2] ? result.reels[2] : (cur[2] + 3) % 5,
+      ]);
+    }, 85);
+    const t0 = window.setTimeout(() => {
+      sfx("click");
+      lockedRef.current = [true, false, false];
+      setLocked([true, false, false]);
+      setReels((cur) => [result.reels[0], cur[1], cur[2]]);
+    }, 480);
+    const t1 = window.setTimeout(() => {
+      sfx("click");
+      lockedRef.current = [true, true, false];
+      setLocked([true, true, false]);
+      setReels((cur) => [result.reels[0], result.reels[1], cur[2]]);
+    }, 820);
+    const t2 = window.setTimeout(() => {
+      window.clearInterval(spinId);
+      sfx("click");
+      lockedRef.current = [true, true, true];
+      setLocked([true, true, true]);
+      setReels(result.reels);
+      setSpinning(false);
+      setSettled(true);
+      if (!revealFired.current) {
+        revealFired.current = true;
+        onRevealRef.current();
+        if (result.outcome === "jackpot") {
+          sfx("upgrade");
+          window.setTimeout(() => sfx("received"), 140);
+        } else if (result.outcome === "pair") {
+          sfx("received");
+        } else {
+          sfx("payBank");
+        }
+      }
+    }, 1180);
+    const t3 = window.setTimeout(() => {
+      onDoneRef.current();
+    }, 2850);
+    return () => {
+      window.clearInterval(spinId);
+      window.clearTimeout(t0);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.clearTimeout(t3);
+    };
+  }, [result]);
+
+  function spinNow() {
+    if (spinning || settled || bet <= 0 || cash < bet) return;
+    sfx("click");
+    onSpin(bet);
+  }
+
+  const matched =
+    settled && result
+      ? result.reels.map((r, i) => result.reels.filter((x, j) => x === r && j !== i).length > 0)
+      : [false, false, false];
+  const stateClass = settled && result ? ` is-${result.outcome}` : "";
+  const busy = spinning || settled;
+
+  return (
+    <div className={`trade-desk casino-desk${spinning ? " is-spinning" : ""}${stateClass}`}>
+      <div className="trade-banner casino-banner">
+        <b>Casino</b>
+        <em>Cash ${cash}</em>
+      </div>
+      <div className="casino-stage">
+        <div className="casino-cabinet">
+          <div className="casino-marquee" aria-hidden>
+            <i />
+            <span>{settled && result ? (result.outcome === "jackpot" ? "Triple Jackpot!" : result.outcome === "pair" ? "Lucky Pair!" : "House Wins") : spinning ? "Spinning Reels" : "High Roller Slots"}</span>
+            <i />
+          </div>
+          <div className="casino-reels" aria-hidden>
+            {reels.map((sym, idx) => (
+              <span
+                className={`casino-reel${spinning && !locked[idx] ? " is-blur" : ""}${locked[idx] ? " is-locked" : ""}${matched[idx] ? " is-match" : ""}`}
+                key={idx}
+              >
+                <PixelCasinoSymbol id={sym} />
+              </span>
+            ))}
+          </div>
+          {settled && result ? (
+            <div className={`casino-outcome is-${result.outcome}`}>
+              {result.outcome === "jackpot"
+                ? `JACKPOT +$${result.payout}`
+                : result.outcome === "pair"
+                  ? `PAIR WIN +$${result.payout}`
+                  : `NO MATCH -$${result.bet}`}
+            </div>
+          ) : (
+            <div className="casino-payouts">
+              <div className="payout-pill">
+                <small>Triple Match</small>
+                <b>3.0×</b>
+              </div>
+              <div className="payout-pill">
+                <small>Any Pair</small>
+                <b>1.8×</b>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="casino-wager-box">
+          <small>{settled ? `Stake $${result?.bet ?? bet}` : "Choose stake"}</small>
+          <div className="casino-stakes">
+            {[50, 100, 200].map((amt) => (
+              <button
+                key={amt}
+                type="button"
+                className={`casino-chip${(settled && result ? result.bet === amt : bet === amt) ? " on" : ""}`}
+                disabled={busy || cash < amt}
+                onClick={() => { sfx("click"); setBet(amt); }}
+              >
+                ${amt}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="trade-bar casino-bar">
+        <p className="deal-ok">
+          {settled && result
+            ? result.outcome === "jackpot"
+              ? `Triple hit! Collected +$${result.payout}.`
+              : result.outcome === "pair"
+                ? `Matched a pair! Collected +$${result.payout}.`
+                : `No pair this spin (-$${result.bet}).`
+            : spinning
+              ? "Locking reels…"
+              : bet > 0 && cash >= bet
+                ? `Win $${Math.round(bet * 1.8)} on a pair or $${bet * 3} on a triple.`
+                : "Not enough cash to place a bet."}
+        </p>
+        <div className="trade-actions">
+          {settled ? (
+            <button type="button" className="casino-spin-btn" onClick={() => { sfx("confirm"); onDone(); }}>
+              Continue
+            </button>
+          ) : (
+            <>
+              <button type="button" className="casino-spin-btn" disabled={busy || bet <= 0 || cash < bet} onClick={spinNow}>
+                {spinning ? "Spinning…" : `Spin $${bet}`}
+              </button>
+              <button type="button" className="ghost" disabled={busy} onClick={() => onSpin(0)}>
+                Walk away
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VaultDesk({
+  cash,
+  moves,
+  mode,
+  result,
+  onPick,
+  onReveal,
+  onDone,
+}: {
+  cash: number;
+  moves: number;
+  mode: Mode;
+  result: VaultResult | null;
+  onPick: (pick: 0 | 1 | 2) => void;
+  onReveal: () => void;
+  onDone: () => void;
+}) {
+  const [cracking, setCracking] = useState<0 | 1 | 2 | null>(null);
+  const [settled, setSettled] = useState(false);
+  const onRevealRef = useRef(onReveal);
+  const onDoneRef = useRef(onDone);
+  onRevealRef.current = onReveal;
+  onDoneRef.current = onDone;
+
+  useEffect(() => {
+    if (!result) {
+      setCracking(null);
+      setSettled(false);
+      return;
+    }
+    setCracking(result.picked);
+    const t0 = window.setTimeout(() => sfx("click"), 240);
+    const t1 = window.setTimeout(() => sfx("click"), 520);
+    const t2 = window.setTimeout(() => {
+      setCracking(null);
+      setSettled(true);
+      onRevealRef.current();
+      const prize = result.safes[result.picked];
+      if (prize.kind === "move") sfx("gainMove");
+      else if (prize.kind === "cash") sfx("received");
+      else sfx("upgrade");
+    }, 840);
+    const t3 = window.setTimeout(() => onDoneRef.current(), 2550);
+    return () => {
+      window.clearTimeout(t0);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.clearTimeout(t3);
+    };
+  }, [result]);
+
+  const busy = cracking != null || settled;
+  const pickedPrize = result && settled ? result.safes[result.picked] : null;
+
+  return (
+    <div className="trade-desk vault-desk">
+      <div className="trade-banner vault-banner">
+        <b>Vault</b>
+        <em>{mode === "moves" ? `${moves}m · $${cash}` : `$${cash}`}</em>
+      </div>
+      <div className="vault-stage">
+        <div className="vault-kicker">
+          {pickedPrize
+            ? `Safe #${result!.picked + 1} cracked — claimed ${pickedPrize.label}!`
+            : cracking != null
+              ? `Spinning tumbler #${cracking + 1}…`
+              : "Pick 1 of 3 armored safes"}
+        </div>
+        <div className="vault-doors">
+          {[0, 1, 2].map((i) => {
+            const idx = i as 0 | 1 | 2;
+            const isPicked = settled && result?.picked === idx;
+            const safe = settled && result ? result.safes[idx] : null;
+            return (
+              <button
+                key={idx}
+                type="button"
+                disabled={busy}
+                className={`vault-door${cracking === idx ? " is-cracking" : ""}${isPicked ? " is-picked" : ""}${settled && !isPicked ? " is-unpicked" : ""}`}
+                onClick={() => {
+                  if (busy) return;
+                  sfx("click");
+                  onPick(idx);
+                }}
+              >
+                <PixelSafe open={settled} picked={isPicked} />
+                <b>{isPicked ? `Picked #${idx + 1}` : `Safe #${idx + 1}`}</b>
+                <span>{safe ? safe.label : cracking === idx ? "Unlocking…" : "Tap to crack"}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="trade-bar casino-bar">
+        <p className="deal-ok">
+          {pickedPrize
+            ? `Collected ${pickedPrize.label}.`
+            : "Contains Gold (+$220), +2 Moves, Rent Shield, or a Jail Pass."}
+        </p>
+        <div className="trade-actions">
+          {settled ? (
+            <button type="button" className="casino-spin-btn" onClick={() => { sfx("confirm"); onDone(); }}>
+              Continue
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
 function deskCopy(state: State, walking: boolean): { kicker: string; title: string; amount?: string } {
   if (walking) return { kicker: "Board", title: "Moving" };
-  if (state.phase === "home") return { kicker: "", title: "Cash or a move", amount: "$200" };
+  if (state.phase === "home") {
+    const go = state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY;
+    return { kicker: "", title: "Cash or a move", amount: `$${go}` };
+  }
   if (state.phase === "path") return { kicker: "", title: "" };
+  if (state.phase === "jail") {
+    const p = actor(state);
+    const left = p?.jailTurns ?? 1;
+    return {
+      kicker: "Locked in Jail",
+      title: `${left} attempt${left === 1 ? "" : "s"} left`,
+      amount: (p?.jailFreeCards ?? 0) > 0 ? "Pass ready · or $50" : "Doubles (45%) or $50",
+    };
+  }
   if (state.phase === "land" && state.land) {
     const co = brands(state).find((c) => c.id === state.land);
     return { kicker: "Unowned", title: co?.name ?? "Brand", amount: co ? `$${co.price}` : undefined };
@@ -2889,7 +4065,13 @@ function deskCopy(state: State, walking: boolean): { kicker: string; title: stri
     const stand = standsFor(state).find((s) => s.id === state.land) || standsFor(state).find((s) => s.store);
     return { kicker: "Store", title: stand?.label ?? "Store", amount: "$150" };
   }
-  if (state.phase === "card") return { kicker: "Casino", title: describePhase(state) };
+  if (state.phase === "vault") {
+    return { kicker: "Vault", title: "Pick a safe to crack" };
+  }
+  if (state.phase === "casino") {
+    return { kicker: "Casino", title: "Place a bet or walk" };
+  }
+  if (state.phase === "card") return { kicker: "Chance", title: describePhase(state) };
   if (state.phase === "rent" && state.rentDue) {
     const who = state.players.find((p) => p.id === state.rentDue?.to);
     return { kicker: "Rent due", title: who?.name ?? "Owner", amount: `$${state.rentDue.amount}` };
@@ -2897,15 +4079,10 @@ function deskCopy(state: State, walking: boolean): { kicker: string; title: stri
   if (state.phase === "extra") {
     const p = actor(state);
     const id = p ? TRACK[p.stand]?.id : "";
-    if (id === "rest") {
-      return {
-        kicker: "Rest",
-        title: "Jail",
-        amount: "Visiting",
-      };
+    if (id === "rest" && p && p.jailTurns > 0) {
+      return { kicker: "Jail", title: "Behind bars", amount: `${p.jailTurns} turns` };
     }
-    const name = brands(state).find((c) => c.id === id)?.name || standsFor(state).find((s) => s.id === id)?.label || id;
-    return { kicker: "", title: name };
+    return { kicker: "", title: "" };
   }
   return { kicker: "", title: describePhase(state) };
 }
@@ -2919,14 +4096,28 @@ function buttonsFor(
   if (busy) return [];
   if (!mine) return [];
   if (state.phase === "home") {
+    const go = state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY;
     if (state.mode !== "moves") {
-      return [{ label: "Take cash", price: "$200", action: { type: "home", pick: "cash" }, needsYou: true }];
+      return [{ label: "Take cash", price: `$${go}`, action: { type: "home", pick: "cash" }, needsYou: true }];
     }
     const out: { label: string; price?: string; action: Action; ghost?: boolean; needsYou: boolean }[] = [
-      { label: "Take cash", price: "$200", action: { type: "home", pick: "cash" }, needsYou: true },
+      { label: "Take cash", price: `$${go}`, action: { type: "home", pick: "cash" }, needsYou: true },
     ];
-    if ((actor(state)?.moves ?? 0) < MOVE_CAP) {
-      out.push({ label: "Take a move", price: "+1", action: { type: "home", pick: "move" }, ghost: true, needsYou: true });
+    const gain = Math.min(2, MOVE_CAP - (actor(state)?.moves ?? 0));
+    if (gain > 0) {
+      out.push({ label: "Take a move", price: `+${gain}`, action: { type: "home", pick: "move" }, ghost: true, needsYou: true });
+    }
+    return out;
+  }
+  if (state.phase === "jail") {
+    const p = actor(state);
+    const broke = !p || p.cash < JAIL_FINE;
+    const out: { label: string; price?: string; action: Action; ghost?: boolean; broke?: boolean; needsYou: boolean; roll?: boolean }[] = [
+      { label: "Pay fine", price: `$${JAIL_FINE}`, action: { type: "jail", pick: "pay" }, broke, needsYou: true },
+      { label: "Roll doubles", price: `${p?.jailTurns ?? 1} left`, action: { type: "jail", pick: "roll" }, ghost: !broke, needsYou: true, roll: true },
+    ];
+    if ((p?.jailFreeCards ?? 0) > 0) {
+      out.splice(1, 0, { label: "Jail pass", price: `${p?.jailFreeCards} held`, action: { type: "jail", pick: "card" }, needsYou: true });
     }
     return out;
   }
@@ -2982,10 +4173,24 @@ function buttonsFor(
 
 const SPECIAL: Record<string, { title: string; kicker: string }> = {
   home: { title: "GO", kicker: "Cash or a move" },
-  market: { title: "Market", kicker: "Free trade" },
-  dream: { title: "Casino", kicker: "Draw a card" },
-  rest: { title: "Jail", kicker: "Rest here" },
+  market: { title: "Vault", kicker: "Crack a safe" },
+  dream: { title: "Casino", kicker: "Spin & win" },
+  chance1: { title: "Chance", kicker: "Draw a card" },
+  chance2: { title: "Chance", kicker: "Draw a card" },
+  chance3: { title: "Chance", kicker: "Draw a card" },
+  chance4: { title: "Chance", kicker: "Draw a card" },
+  chest1: { title: "Mystery", kicker: "Mystery Box" },
+  chest2: { title: "Mystery", kicker: "Mystery Box" },
+  chest3: { title: "Mystery", kicker: "Mystery Box" },
+  chest4: { title: "Mystery", kicker: "Mystery Box" },
+  rest: { title: "Jail", kicker: "3 turns · $50" },
 };
+
+function eventKind(id: string): "chance" | "chest" | null {
+  if (id.startsWith("chance")) return "chance";
+  if (id.startsWith("chest")) return "chest";
+  return null;
+}
 
 type BoardPlayer = { id: string; name: string; avatar: string | null; color: string; look?: "pawn" | "icon"; frame?: string; skin?: string };
 
@@ -2999,15 +4204,17 @@ function isDeedSpace(id: string) {
   return !!STANDS.find((s) => s.id === id)?.store;
 }
 
-function groupOf(id: string): SetId | "store" | "market" | "rest" | "home" | "dream" | null {
+function groupOf(id: string): SetId | "store" | "market" | "rest" | "home" | "dream" | "chance" | "chest" | null {
   const co = COMPANIES.find((c) => c.id === id);
   if (co) return co.set;
   if (STORES.some((s) => s.id === id)) return "store";
+  const ev = eventKind(id);
+  if (ev) return ev;
   if (id === "market" || id === "rest" || id === "home" || id === "dream") return id;
   return null;
 }
 
-function inGroup(id: string, group: SetId | "store" | "market" | "rest" | "home" | "dream" | null) {
+function inGroup(id: string, group: SetId | "store" | "market" | "rest" | "home" | "dream" | "chance" | "chest" | null) {
   if (!group) return false;
   return groupOf(id) === group;
 }
@@ -3022,6 +4229,7 @@ function tileOwner(id: string, state: State) {
 
 function Tile({
   space,
+  tileIdx,
   state,
   walk,
   you,
@@ -3033,6 +4241,7 @@ function Tile({
   onOwnerPeek,
 }: {
   space: (typeof TRACK)[number];
+  tileIdx: number;
   state: State;
   walk: Record<string, number>;
   you: string;
@@ -3051,12 +4260,14 @@ function Tile({
   const facts = spaceFacts(space, state);
 
   const bind: TileBind = {
-    onMouseEnter: () => onHover(space.id),
+    onMouseEnter: () => {
+      sfxTileHover(tileIdx);
+      onHover(space.id);
+    },
     onMouseLeave: () => onHover(null),
     onClick: live
       ? (e: { stopPropagation: () => void }) => {
           e.stopPropagation();
-          sfx("click");
           onOpen();
         }
       : undefined,
@@ -3085,6 +4296,25 @@ function Tile({
         set={co.set}
         bind={bind}
       />
+    );
+  }
+
+  const ev = eventKind(space.id);
+  if (ev) {
+    const mystery = ev === "chest";
+    return (
+      <div
+        className={`tile event event-${ev} ${space.side} ${hot ? "hot" : ""} ${grouped ? "grouped" : ""} ${live ? "is-live" : ""}`}
+        data-tile={space.id}
+        style={{ gridColumn: space.col, gridRow: space.row }}
+        {...bind}
+      >
+        <CornerArt id={ev} />
+        <span className="event-copy">
+          <b>{mystery ? "Mystery" : "Chance"}</b>
+          <em>{mystery ? "Box" : "Card"}</em>
+        </span>
+      </div>
     );
   }
 
@@ -3185,10 +4415,10 @@ function popStyle(space: (typeof TRACK)[number]) {
 
 function popMods(space: (typeof TRACK)[number]) {
   const bits: string[] = [space.side];
-  if ((space.side === "left" || space.side === "right") && space.row >= 7) bits.push("nudge-up");
+  if ((space.side === "left" || space.side === "right") && space.row >= GRID_N - 2) bits.push("nudge-up");
   if ((space.side === "left" || space.side === "right") && space.row <= 3) bits.push("nudge-down");
   if ((space.side === "bottom" || space.side === "top") && space.col <= 3) bits.push("nudge-east");
-  if ((space.side === "bottom" || space.side === "top") && space.col >= 7) bits.push("nudge-west");
+  if ((space.side === "bottom" || space.side === "top") && space.col >= GRID_N - 2) bits.push("nudge-west");
   return bits.join(" ");
 }
 
@@ -3209,23 +4439,49 @@ function OwnerFloat({
   const space = TRACK.find((t) => t.id === id);
   if (!space) return null;
   const bits = fortuneBits(state, player.id);
-  const logos = [
-    ...bits.bySet.flatMap((row) => row.companies.map((c) => ({ id: logoOf(c), name: c.name }))),
-    ...bits.stores.map((s) => ({ id: logoOf(s), name: s.name })),
-  ];
+  const total = bits.bySet.reduce((n, r) => n + r.companies.length, 0) + bits.stores.length;
   return (
-    <div className={`float-card inspect owner-float ${popMods(space)}`} style={popStyle(space)}>
+    <div className={`float-card inspect owner-float ${popMods(space)}`} style={{ ...popStyle(space), ["--player" as string]: player.color } as CSSProperties}>
       <div className="float-copy">
-        <small>{player.name}</small>
-        <em className="float-cash">${player.cash}</em>
-        {logos.length ? (
-          <div className="owner-marks">
-            {logos.map((m) => (
-              <BrandLogo key={m.id} id={m.id} label={m.name} />
+        <div className="owner-head">
+          <i className="owner-dot" />
+          <small>{player.name}</small>
+        </div>
+        {total > 0 ? (
+          <div className="owner-groups">
+            {bits.bySet.map((row) => (
+              <div className="owner-group-row" key={row.set.id} style={{ "--set": row.set.color } as CSSProperties}>
+                <span className="owner-set-tag">
+                  <i />
+                  {row.set.label}
+                </span>
+                <div className="owner-marks">
+                  {row.companies.map((c) => (
+                    <span className="owner-chip" key={c.id} title={c.name}>
+                      <BrandLogo id={logoOf(c)} label={c.name} />
+                    </span>
+                  ))}
+                </div>
+              </div>
             ))}
+            {bits.stores.length ? (
+              <div className="owner-group-row" style={{ "--set": "#64748b" } as CSSProperties}>
+                <span className="owner-set-tag">
+                  <i />
+                  Stores
+                </span>
+                <div className="owner-marks">
+                  {bits.stores.map((s) => (
+                    <span className="owner-chip" key={s.id} title={s.name}>
+                      <BrandLogo id={logoOf(s)} label={s.name} />
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
-          <span className="float-up">No companies yet</span>
+          <span className="float-up">No properties yet</span>
         )}
       </div>
     </div>
@@ -3279,12 +4535,20 @@ function CornerFloat({
   if (!id) return null;
   const space = TRACK.find((t) => t.id === id);
   if (!space) return null;
+  const go = mode === "classic" ? CLASSIC_GO_PAY : GO_PAY;
+  const ev = eventKind(id);
   const copy =
     id === "rest"
-      ? { kicker: "Jail", cash: "Visit", note: "Nothing to pay. You keep walking next turn." }
+      ? { kicker: "Jail", cash: "$50 or Doubles", note: "Pay $50 fine, use a Jail Pass, or roll doubles within 3 turns (boosted 45% odds)." }
       : id === "home"
-        ? { kicker: "GO", cash: "$200", note: mode === "moves" ? "Pass or land — pick cash or a move." : "Collect $200." }
-        : { kicker: "Casino", cash: "Card", note: "Draw one card, then extras." };
+        ? { kicker: "GO", cash: `$${go}`, note: mode === "moves" ? "Pass or land — pick cash or +2 moves." : `Collect $${go}.` }
+        : id === "market"
+          ? { kicker: "Vault", cash: "3 Safes", note: "Crack 1 of 3 safes for +$220 Gold, +2 Moves, Rent Shield, or a Jail Pass." }
+          : ev === "chance"
+            ? { kicker: "Chance", cash: "Card", note: "Draw a Chance card for cash, movement, or surprises." }
+            : ev === "chest"
+              ? { kicker: "Mystery Box", cash: "Box", note: "Crack a Mystery Box for unexpected events or warps." }
+              : { kicker: "Casino", cash: "Slots", note: "Bet $50–$200 for up to 3× payout, or walk away." };
   return (
     <div className={`float-card inspect ${popMods(space)} is-bank`} style={popStyle(space)}>
       <div className="float-copy">
@@ -3296,27 +4560,40 @@ function CornerFloat({
   );
 }
 
-function CornerCard({ id, mode }: { id: "rest" | "home" | "dream"; mode: Mode }) {
+function CornerCard({ id, mode }: { id: "rest" | "home" | "dream" | "chance" | "chest"; mode: Mode }) {
+  const go = mode === "classic" ? CLASSIC_GO_PAY : GO_PAY;
   const copy =
     id === "rest"
       ? {
           kicker: "Corner",
           title: "Jail",
-          dep: "Just visiting. No rent, no extra move, no skip. Next turn you roll as usual.",
+          dep: "Locked up! Escape by paying a $50 fine, using a Get Out of Jail Free pass, or rolling doubles within 3 turns (45% odds, 1 move spent per attempt).",
         }
       : id === "home"
         ? {
             kicker: "Corner",
             title: "GO",
             dep: mode === "moves"
-              ? "When you pass or land here you always choose $200 or +1 move. Never both, never automatic."
-              : "Collect $200 when you pass or land here.",
+              ? `When you pass or land here you always choose $${go} or +2 moves. Never both, never automatic.`
+              : `Collect $${go} when you pass or land here.`,
           }
-        : {
-            kicker: "Corner",
-            title: "Casino",
-            dep: "Draw one card and follow it. Then you get extras like any other landing.",
-          };
+        : id === "chest"
+          ? {
+              kicker: "Event",
+              title: "Mystery Box",
+              dep: "Open a Mystery Box and see what awaits! Cards that warp you across the board trigger immediately.",
+            }
+          : id === "dream"
+          ? {
+              kicker: "Corner",
+              title: "Casino",
+              dep: "Spin the 3-reel machine ($50, $100, or $200). Pair wins 1.8× and triple wins 3×!",
+            }
+          : {
+              kicker: "Event",
+              title: "Chance",
+              dep: "Draw one card and follow it. Cards that warp you across the board activate that landing immediately!",
+            };
   return (
     <div className="group-card is-set" onClick={(e) => e.stopPropagation()}>
       <small>{copy.kicker}</small>
@@ -3328,7 +4605,6 @@ function CornerCard({ id, mode }: { id: "rest" | "home" | "dream"; mode: Mode })
 
 function MarketCard({
   state,
-  you,
   mine,
   onTrade,
 }: {
@@ -3337,17 +4613,16 @@ function MarketCard({
   mine: boolean;
   onTrade: () => void;
 }) {
-  const fee = tradeFee(state, you);
   const open = mine && state.phase === "extra";
   return (
     <div className="group-card market-card" onClick={(e) => e.stopPropagation()} onMouseEnter={sfxPlayHover}>
       <small>Corner</small>
-      <b>Market</b>
+      <b>Vault</b>
       <p className="dep">
-        Swap companies, cash, or a move. After you land you can trade from anywhere. Land here and this turn’s trade is free. Anywhere else it costs ${fee || TRADE_FEE} unless you own Watch.
+        Land here to crack 1 of 3 safes for Gold, +2 Moves, a Rent Shield, or a Jail Pass. Trading is always free ($0 fee) after you roll!
       </p>
       <button className="go" disabled={!open} onMouseEnter={sfxPlayHover} onClick={onTrade}>
-        {open ? (you.freeTrade ? "Open a free trade" : `Trade $${fee}`) : "Trade after you land"}
+        {open ? "Open free trade" : "Trade after you land"}
       </button>
     </div>
   );
@@ -3366,7 +4641,9 @@ function GroupCard({ group, state, owners }: { group: SetId | "store"; state: St
               const owner = state.players.find((p) => p.id === state.stores[s.id]);
               return (
                 <li key={s.id}>
-                  <BrandLogo id={logoOf(s)} label={s.name} />
+                  <span className="mark-badge">
+                    <BrandLogo id={logoOf(s)} label={s.name} />
+                  </span>
                   <span className="set-name">{s.name}</span>
                   {owner ? (
                     <span className="set-who" style={{ "--player": owner.color } as CSSProperties}>
@@ -3400,7 +4677,9 @@ function GroupCard({ group, state, owners }: { group: SetId | "store"; state: St
         <ul className="set-rows is-store">
           {shops(state).map((s) => (
             <li key={s.id}>
-              <BrandLogo id={logoOf(s)} label={s.name} />
+              <span className="mark-badge">
+                <BrandLogo id={logoOf(s)} label={s.name} />
+              </span>
               <span className="set-name">{s.name}</span>
               <em>$150</em>
               <em>$25</em>
@@ -3427,7 +4706,9 @@ function GroupCard({ group, state, owners }: { group: SetId | "store"; state: St
             const owner = state.players.find((p) => p.id === state.companies[c.id].owner);
             return (
               <li key={c.id}>
-                <BrandLogo id={logoOf(c)} label={c.name} />
+                <span className="mark-badge">
+                  <BrandLogo id={logoOf(c)} label={c.name} />
+                </span>
                 <span className="set-name">{c.name}</span>
                 {owner ? (
                   <span className="set-who" style={{ "--player": owner.color } as CSSProperties}>
@@ -3471,7 +4752,9 @@ function GroupCard({ group, state, owners }: { group: SetId | "store"; state: St
           const up = upgradeCost(c.price);
           return (
             <li key={c.id}>
-              <BrandLogo id={logoOf(c)} label={c.name} />
+              <span className="mark-badge">
+                <BrandLogo id={logoOf(c)} label={c.name} />
+              </span>
               <span className="set-name">{c.name}</span>
               <em>${c.price}</em>
               <em>${c.rent[0]}</em>
@@ -3525,7 +4808,9 @@ function logosOf(ids: { id: string; name: string }[]) {
   return (
     <div className="compare-marks">
       {ids.map((m) => (
-        <BrandLogo key={m.id} id={m.id} label={m.name} />
+        <span className="mark-badge" key={m.id} title={m.name}>
+          <BrandLogo id={m.id} label={m.name} />
+        </span>
       ))}
     </div>
   );
@@ -3780,6 +5065,8 @@ type RentShot = {
   label?: string;
   kind: FxKind;
   bills: number;
+  arc?: number;
+  delay?: number;
 };
 type TilePing = { key: string; x: number; y: number; w: number; h: number; kind: "buy" | "build" };
 
@@ -3787,7 +5074,7 @@ function fxStamp(s: State) {
   return [
     playStamp(s),
     s.players.map((p) => `${p.notesTaken}:${p.sparks}`).join("|"),
-    s.lastPay ? `${s.lastPay.from}:${s.lastPay.to}:${s.lastPay.amount}` : "",
+    s.lastPay ? `${s.lastPay.from}:${s.lastPay.to}:${s.lastPay.amount}:${s.lastPay.via || ""}:${s.lastPay.viaAmount || 0}` : "",
     Object.entries(s.companies).map(([id, o]) => `${id}:${o.owner}:${o.level}`).join(","),
     Object.values(s.stores).join(","),
   ].join("/");
@@ -3802,7 +5089,7 @@ function collectFx(prev: State, next: State): FxEvent[] {
     if (pay.via && pay.viaAmount) out.push({ kind: "stack", from: "pawn", fromId: pay.from, toId: pay.via, amount: pay.viaAmount });
   }
   const paid = new Set([next.lastPay?.from, next.lastPay?.to, next.lastPay?.via].filter(Boolean) as string[]);
-  const fresh = next.log[0] || "";
+  const fresh = next.log[next.log.length - 1] || "";
   for (const p of next.players) {
     const o = prev.players.find((x) => x.id === p.id);
     if (!o || p.out) continue;
@@ -3853,6 +5140,7 @@ function BoardFx({
 }) {
   const prev = useRef<State | null>(null);
   const pending = useRef<FxEvent[]>([]);
+  const clearTimer = useRef(0);
   const [shots, setShots] = useState<RentShot[]>([]);
   const [pings, setPings] = useState<TilePing[]>([]);
   const stamp = fxStamp(state);
@@ -3867,13 +5155,15 @@ function BoardFx({
 
   useEffect(() => {
     if (walking) return;
+    const batch = pending.current;
+    if (!batch.length) return;
     const wait = window.setTimeout(() => {
-      const batch = pending.current;
-      if (!batch.length) return;
+      const todo = pending.current;
+      if (!todo.length) return;
       pending.current = [];
       const board = boardRef.current;
       if (!board) {
-        pending.current = batch.concat(pending.current);
+        pending.current = todo.concat(pending.current);
         return;
       }
       const box = board.getBoundingClientRect();
@@ -3887,7 +5177,7 @@ function BoardFx({
         if (ev.fromId) return fxPoint(board, box, `[data-pawn="${ev.fromId}"]`);
         return null;
       };
-      batch.forEach((ev, i) => {
+      todo.forEach((ev, i) => {
         if (ev.kind === "buy" || ev.kind === "build") {
           const tile = ev.tile ? fxPoint(board, box, `[data-tile="${ev.tile}"]`, 0.5) : null;
           if (tile) nextPings.push({ key: `${stamp}:${ev.kind}:${ev.tile}:${i}`, x: tile.x, y: tile.y, w: tile.w, h: tile.h, kind: ev.kind });
@@ -3903,22 +5193,34 @@ function BoardFx({
           x: pop ? dest.x : from.x,
           y: pop ? dest.y : from.y,
           dx: pop ? 0 : dest.x - from.x,
-          dy: pop ? -36 : dest.y - from.y,
+          dy: pop ? -42 : dest.y - from.y,
           amount: ev.amount,
-          label: ev.kind === "move" ? `+${ev.amount}` : ev.kind === "spark" ? "✦" : ev.amount != null ? `$${ev.amount}` : undefined,
+          label:
+            ev.kind === "move"
+              ? `+${ev.amount}`
+              : ev.kind === "spark"
+                ? "✦"
+                : ev.kind === "stack" && ev.amount != null
+                  ? `+$${ev.amount}`
+                  : ev.amount != null
+                    ? `$${ev.amount}`
+                    : undefined,
           kind: ev.kind,
           bills: ev.kind === "spark" ? 0 : ev.kind === "move" ? 0 : ev.kind === "stack" ? 3 : 4,
+          arc: ev.kind === "stack" ? -74 : -48,
+          delay: ev.kind === "stack" ? 0.16 : 0,
         });
       });
-      if (nextShots.length) setShots(nextShots);
-      if (nextPings.length) setPings(nextPings);
+      if (nextShots.length) setShots((cur) => [...cur, ...nextShots]);
+      if (nextPings.length) setPings((cur) => [...cur, ...nextPings]);
       if (nextShots.length || nextPings.length) {
-        window.setTimeout(() => {
+        window.clearTimeout(clearTimer.current);
+        clearTimer.current = window.setTimeout(() => {
           setShots([]);
           setPings([]);
-        }, 2500);
+        }, 2100);
       }
-    }, STEP_MS + 40);
+    }, STEP_MS + 30);
     return () => window.clearTimeout(wait);
   }, [boardRef, walking, stamp]);
 
@@ -3935,7 +5237,13 @@ function BoardFx({
             width: ping.w,
             height: ping.h,
           }}
-        />
+        >
+          <span className="fx-sheen" />
+          <i className="ping-star s0"><PixelSparkle /></i>
+          <i className="ping-star s1"><PixelSparkle /></i>
+          <i className="ping-star s2"><PixelSparkle /></i>
+          <i className="ping-star s3"><PixelSparkle /></i>
+        </span>
       ))}
       {shots.map((shot) => (
         <div
@@ -3947,13 +5255,19 @@ function BoardFx({
               top: shot.y,
               "--dx": `${shot.dx}px`,
               "--dy": `${shot.dy}px`,
+              "--arc": `${shot.arc ?? -48}px`,
+              "--delay": `${shot.delay ?? 0}s`,
             } as CSSProperties
           }
         >
           {Array.from({ length: shot.bills }, (_, i) => (
-            <i key={i} style={{ "--i": i } as CSSProperties}>
-              <PixelBill />
-            </i>
+            <span className="fx-x" key={i} style={{ "--i": i } as CSSProperties}>
+              <span className="fx-y">
+                <i className="fx-arc">
+                  {i % 2 === 1 ? <PixelCoin /> : <PixelBill />}
+                </i>
+              </span>
+            </span>
           ))}
           {shot.kind === "spark" ? (
             <>
@@ -3962,7 +5276,13 @@ function BoardFx({
               <i className="fx-spark" style={{ "--i": 2 } as CSSProperties} />
             </>
           ) : null}
-          {shot.label ? <b className="rent-shot-amt">{shot.label}</b> : null}
+          {shot.label ? (
+            <span className="fx-x fx-label-x">
+              <span className="fx-y">
+                <b className="rent-shot-amt">{shot.label}</b>
+              </span>
+            </span>
+          ) : null}
         </div>
       ))}
     </div>
@@ -3971,22 +5291,34 @@ function BoardFx({
 
 function Pawns({
   state,
+  settled,
   walk,
   setWalk,
   pay,
+  peekIds = [],
+  holdMove = false,
 }: {
   state: State;
+  settled?: State;
   walk: Record<string, number>;
   setWalk: (next: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)) => void;
   pay: State["lastPay"];
+  peekIds?: string[];
+  holdMove?: boolean;
 }) {
-  const here = actor(state);
+  const revealed = settled ?? state;
+  const here = actor(revealed);
   const shown = useRef<Record<string, number>>({});
   const span = useRef<Record<string, number>>({});
-  const live = state.players.filter((p) => !p.out);
+  const live = state.players.filter((p) => {
+    if (!p.out) return true;
+    const rev = revealed.players.find((x) => x.id === p.id);
+    return rev != null && !rev.out;
+  });
   const destKey = live.map((p) => `${p.id}:${p.stand}`).join("|");
 
   useEffect(() => {
+    if (holdMove) return;
     setWalk((prev) => {
       const next = { ...prev };
       let changed = false;
@@ -4000,10 +5332,10 @@ function Pawns({
       }
       return changed ? next : prev;
     });
-  }, [destKey, setWalk]);
+  }, [destKey, holdMove, setWalk]);
 
   useEffect(() => {
-    if (!Object.keys(walk).length) return;
+    if (holdMove || !Object.keys(walk).length) return;
     const t = window.setTimeout(() => {
       let rate = 1;
       for (const id of Object.keys(walk)) {
@@ -4043,11 +5375,11 @@ function Pawns({
       });
     }, STEP_MS);
     return () => window.clearTimeout(t);
-  }, [walk, destKey, setWalk]);
+  }, [walk, destKey, holdMove, setWalk]);
 
   const groups = new Map<string, typeof live>();
   for (const p of live) {
-    const idx = walk[p.id] ?? shown.current[p.id] ?? p.stand;
+    const idx = holdMove ? (shown.current[p.id] ?? p.stand) : (walk[p.id] ?? shown.current[p.id] ?? p.stand);
     const id = TRACK_ORDER[idx];
     const list = groups.get(id) ?? [];
     list.push(p);
@@ -4060,13 +5392,15 @@ function Pawns({
     const box = cellBox(space.col, space.row);
     const base = lane(space);
     group.forEach((p, i) => {
+      const rev = revealed.players.find((x) => x.id === p.id) ?? p;
+      const inJail = rev.jailTurns > 0;
       const [ox, oy] = slotOffset(i, group.length, space.side);
       pawns.push(
         <span
           key={p.id}
-          className={`pawn ${p.look === "icon" ? "is-icon" : "is-char"} ${p.id === here?.id ? "acting" : ""} ${walk[p.id] != null ? "walking" : ""} ${pay && (pay.to === p.id || pay.via === p.id) ? "is-collect" : ""} ${pay?.from === p.id ? "is-paying" : ""}`}
+          className={`pawn ${p.look === "icon" ? "is-icon" : "is-char"} ${p.id === here?.id ? "acting" : ""} ${peekIds.includes(p.id) ? "is-peek-target" : ""} ${inJail ? "in-jail" : ""} ${walk[p.id] != null ? "walking" : ""} ${pay && (pay.to === p.id || pay.via === p.id) ? "is-collect" : ""} ${pay?.from === p.id ? "is-paying" : ""}`}
           data-pawn={p.id}
-          title={p.name}
+          title={inJail ? `${p.name} (In Jail)` : p.name}
           style={{
             left: `${(box.x + box.w * (base.cx + ox)) * 100}%`,
             top: `${(box.y + box.h * (base.cy + oy)) * 100}%`,
@@ -4075,7 +5409,8 @@ function Pawns({
             transitionTimingFunction: "cubic-bezier(.22,.8,.28,1)",
           }}
         >
-          <span className={`token-pad${walk[p.id] != null ? " hop-inner" : ""}`} key={`${p.id}-${walk[p.id] ?? p.stand}`}>
+          {inJail ? <em className="pawn-jail-tag">JAIL</em> : null}
+          <span className={`token-pad${walk[p.id] != null ? " hop-inner" : ""}`} key={`${p.id}-${walk[p.id] ?? shown.current[p.id] ?? p.stand}`}>
             <Portrait player={p} size={34} />
           </span>
         </span>,
@@ -4088,8 +5423,8 @@ function Pawns({
 function cellBox(col: number, row: number) {
   const along = (index: number) => {
     let start = 0;
-    for (let i = 1; i < index; i++) start += i === 1 || i === 9 ? CORNER : 1;
-    const size = index === 1 || index === 9 ? CORNER : 1;
+    for (let i = 1; i < index; i++) start += i === 1 || i === GRID_N ? CORNER : 1;
+    const size = index === 1 || index === GRID_N ? CORNER : 1;
     return { start: start / TRACK_SUM, size: size / TRACK_SUM };
   };
   const x = along(col);
@@ -4207,8 +5542,16 @@ function TradeDesk({
   const [giveMove, setGiveMove] = useState(false);
   const [getMove, setGetMove] = useState(false);
   const other = state.players.find((p) => p.id === to);
-  const yours = brands(state).filter((c) => state.companies[c.id].owner === you.id);
-  const theirs = brands(state).filter((c) => state.companies[c.id].owner === to);
+  const deedsFor = (ownerId: string) => [
+    ...brands(state)
+      .filter((c) => state.companies[c.id].owner === ownerId)
+      .map((c) => ({ id: c.id, name: c.name, logo: c.logo, tag: setOf(c.set, state.world).label })),
+    ...shops(state)
+      .filter((s) => state.stores[s.id] === ownerId)
+      .map((s) => ({ id: s.id, name: s.name, logo: s.logo, tag: "Store" })),
+  ];
+  const yours = deedsFor(you.id);
+  const theirs = deedsFor(to);
   const action: Extract<Action, { type: "trade" }> = {
     type: "trade",
     to,
@@ -4233,7 +5576,7 @@ function TradeDesk({
           <b>Market</b>
         </div>
         <p className="trade-empty">Nobody else is at the table.</p>
-        <button className="ghost" onClick={onClose}>Leave</button>
+        <button className="ghost" onClick={() => { sfx("click"); onClose(); }}>Leave</button>
       </div>
     );
   }
@@ -4252,6 +5595,7 @@ function TradeDesk({
             style={{ "--player": p.color } as CSSProperties}
             onMouseEnter={sfxPlayHover}
             onClick={() => {
+              sfx("click");
               setTo(p.id);
               setGet([]);
             }}
@@ -4271,7 +5615,6 @@ function TradeDesk({
           move={giveMove}
           onMove={setGiveMove}
           companies={yours}
-          world={state.world}
           picked={give}
           onToggle={(id) => toggle(give, id, setGive)}
         />
@@ -4286,7 +5629,6 @@ function TradeDesk({
           move={getMove}
           onMove={setGetMove}
           companies={theirs}
-          world={state.world}
           picked={get}
           onToggle={(id) => toggle(get, id, setGet)}
         />
@@ -4303,9 +5645,21 @@ function TradeDesk({
             <DealBits ids={get} cash={getCash} move={getMove} empty="Nothing yet" world={state.world} />
           </div>
         </div>
-        <p className={problem ? "deal-warn" : "deal-ok"}>{problem || "Tap companies, cash, or a move — then seal it."}</p>
+        <p className={problem ? "deal-warn" : "deal-ok"}>{problem || "Tap brands, stores, cash, or a move — then seal it."}</p>
         <div className="trade-actions">
-          <button className="go" disabled={!!problem} onMouseEnter={sfxPlayHover} onClick={() => onDeal(action)}>
+          <button
+            type="button"
+            className={`go${problem ? " is-blocked" : ""}`}
+            aria-disabled={!!problem}
+            onMouseEnter={sfxPlayHover}
+            onClick={() => {
+              if (problem) {
+                sfx("tradeFail");
+                return;
+              }
+              onDeal(action);
+            }}
+          >
             Seal deal
           </button>
           <button className="ghost" onMouseEnter={sfxPlayHover} onClick={onClose}>
@@ -4325,7 +5679,6 @@ function TradeCrate({
   move,
   onMove,
   companies,
-  world,
   picked,
   onToggle,
 }: {
@@ -4335,8 +5688,7 @@ function TradeCrate({
   onCash: (n: number) => void;
   move: boolean;
   onMove: (v: boolean) => void;
-  companies: ReturnType<typeof brands>;
-  world?: State["world"];
+  companies: { id: string; name: string; logo?: string; tag: string }[];
   picked: string[];
   onToggle: (id: string) => void;
 }) {
@@ -4358,7 +5710,7 @@ function TradeCrate({
           <button type="button" className="ghost" onClick={() => bumpCash(onCash, cash, 10)}>+</button>
           <button type="button" className="ghost" onClick={() => bumpCash(onCash, cash, 50)}>+50</button>
         </div>
-        <button type="button" className={`move-ticket ${move ? "on" : ""}`} onClick={() => onMove(!move)}>
+        <button type="button" className={`move-ticket ${move ? "on" : ""}`} onClick={() => { sfx("click"); onMove(!move); }}>
           {move ? "1 move in" : "Add a move"}
         </button>
       </div>
@@ -4378,7 +5730,7 @@ function TradeCrate({
               <BrandLogo id={logoOf(c)} label={c.name} />
             </span>
             <span>{shortName(c.name)}</span>
-            <em>{setOf(c.set, world).label}</em>
+            <em>{c.tag}</em>
           </button>
         ))}
         {!companies.length && <p className="stock-empty">Empty crate</p>}
@@ -4392,7 +5744,7 @@ function DealBits({ ids, cash, move, empty, world }: { ids: string[]; cash: numb
   return (
     <span className="slip-bits">
       {ids.map((id) => {
-        const c = companiesOf(world).find((x) => x.id === id);
+        const c = companiesOf(world).find((x) => x.id === id) ?? storesOf(world).find((x) => x.id === id);
         return c ? (
           <span key={id} className="slip-co">
             <BrandLogo id={logoOf(c)} label={c.name} />

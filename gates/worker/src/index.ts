@@ -50,10 +50,13 @@ function mergeSeat(prev: SeatPerson | undefined, next: SeatPerson): SeatPerson {
 
 function retagPlay(play: State, from: string, to: string, sit: SeatPerson): State {
   if (!from || !to || from === to) return play;
+  const prev = play.players.find((p) => p.id === from);
+  const nextName = isPlaceholderName(sit.name) ? prev?.name || sit.name : sit.name;
+  const renameLogs = !!prev?.name && !!nextName && prev.name !== nextName;
   return {
     ...play,
     players: play.players.map((p) =>
-      p.id === from ? { ...p, id: to, name: isPlaceholderName(sit.name) ? p.name : sit.name, avatar: sit.avatar || p.avatar } : p,
+      p.id === from ? { ...p, id: to, name: nextName, avatar: sit.avatar || p.avatar } : p,
     ),
     companies: Object.fromEntries(
       Object.entries(play.companies).map(([id, own]) => [id, own.owner === from ? { ...own, owner: to } : own]),
@@ -83,6 +86,9 @@ function retagPlay(play: State, from: string, to: string, sit: SeatPerson): Stat
         }
       : null,
     winnerIds: play.winnerIds.map((id) => (id === from ? to : id)),
+    log: renameLogs
+      ? play.log.map((line) => line.replace(`|${prev!.name}|`, `|${nextName}|`))
+      : play.log,
   };
 }
 

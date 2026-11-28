@@ -1,5 +1,5 @@
 import { playUntil, stepBot } from "./bot";
-import { COMPANIES, GO_PAY, STACK_CUT, START_MOVES, UPKEEP_PER } from "./data";
+import { CARDS, COMPANIES, GO_PAY, STACK_CUT, START_MOVES, UPKEEP_PER } from "./data";
 import { TRACK_LEN, TRACK_ORDER } from "./track";
 import { actor, apply, createGame, fuelPrice, type State } from "./game";
 
@@ -38,6 +38,10 @@ export function runScenarios(): ScenarioResult[] {
     symmetricalFortyTileBoard(),
     rngFairLandingDistribution(),
     storesCanBeTraded(),
+    doublesGrantFreeBonusRoll(),
+    casinoMultiSpinAndCashOut(),
+    buyMoveAllowedInPathPhase(),
+    allCardsResolveCleanly(),
   ];
 }
 
@@ -450,6 +454,106 @@ function storesCanBeTraded(): ScenarioResult {
     name: "Players and bots can trade stores",
     ok,
     detail: ok ? "Swapped App Store for Play Store via bot offer acceptance" : `app=${s.stores.app} play=${s.stores.play}`,
+  };
+}
+
+function doublesGrantFreeBonusRoll(): ScenarioResult {
+  let s = createGame(four(), { seed: 21 });
+  const movesBefore = s.players[0].moves;
+  s.forcedRoll = [1, 1];
+  s = apply(s, { type: "path", pick: "walk" });
+  if (s.phase === "land") s = apply(s, { type: "land", pick: "skip" });
+  const earnedBonus = s.phase === "extra" && !!s.bonusRoll && s.players[0].moves === movesBefore;
+  // Roll doubles a second time from extra (2 -> 8 applemusic) — must NOT spend a move currency
+  s.forcedRoll = [3, 3];
+  s = apply(s, { type: "path", pick: "walk" });
+  if (s.phase === "land") s = apply(s, { type: "land", pick: "skip" });
+  const secondFree = s.phase === "extra" && !!s.bonusRoll && s.players[0].moves === movesBefore && s.doublesStreak === 2;
+  // Third consecutive double sends straight to Jail
+  s.forcedRoll = [2, 2];
+  s = apply(s, { type: "path", pick: "walk" });
+  const jailedOnThird = s.players[0].jailTurns === 3 && !s.bonusRoll && TRACK_ORDER[s.players[0].stand] === "rest";
+  const ok = earnedBonus && secondFree && jailedOnThird;
+  return {
+    id: "doubles-free",
+    name: "Doubles grant a free bonus roll without spending a move (3 in a row = Jail)",
+    ok,
+    detail: ok ? "1st & 2nd doubles gave free rolls; 3rd sent to Jail" : `earned=${earnedBonus} second=${secondFree} jailed=${jailedOnThird}`,
+  };
+}
+
+function casinoMultiSpinAndCashOut(): ScenarioResult {
+  let s = createGame(four(), { seed: 33 });
+  s.players[0].stand = TRACK_ORDER.indexOf("dream");
+  s.phase = "casino";
+  s.casinoSpins = 0;
+  s = apply(s, { type: "casino", bet: 50 });
+  const stayedInCasino = s.phase === "casino" && s.casinoSpins === 1 && !!s.casinoResult;
+  s = apply(s, { type: "casino", bet: 50 });
+  const spunTwice = s.casinoSpins === 2;
+  s = apply(s, { type: "casino", bet: 0 });
+  const cashedOut = s.phase === "extra";
+  const ok = stayedInCasino && spunTwice && cashedOut;
+  return {
+    id: "casino-multi",
+    name: "Casino supports multiple spins and manual cash-out",
+    ok,
+    detail: ok ? `Spun ${s.casinoSpins} times and cashed out cleanly` : `stayed=${stayedInCasino} twice=${spunTwice} out=${cashedOut}`,
+  };
+}
+
+function buyMoveAllowedInPathPhase(): ScenarioResult {
+  let s = createGame(four(), { seed: 41 });
+  s.phase = "path";
+  s.players[0].moves = 0;
+  s.players[0].cash = 500;
+  s = apply(s, { type: "fuel" });
+  const ok = s.players[0].moves === 1 && s.players[0].cash === 400 && s.movesBoughtThisTurn;
+  return {
+    id: "fuel-path",
+    name: "Player can buy a move during path phase when at 0 moves",
+    ok,
+    detail: ok ? "Bought +1 move before rolling at $100" : `moves=${s.players[0].moves} cash=${s.players[0].cash}`,
+  };
+}
+
+function allCardsResolveCleanly(): ScenarioResult {
+  let allOk = true;
+  let bad = "";
+  for (const card of CARDS) {
+    let s = createGame(four(), { seed: 55 });
+    s.players[0].stand = TRACK_ORDER.indexOf("chance1");
+    s.players[0].leftHome = true;
+    s.phase = "card";
+    s.pendingCard = card;
+    const beforeMoves = s.players[0].moves;
+    s = apply(s, { type: "card" });
+    if (s.pendingCard !== null) {
+      allOk = false;
+      bad = `${card}: pendingCard not cleared`;
+      break;
+    }
+    if (card === "quiet" && s.players[0].moves !== beforeMoves + 1) {
+      allOk = false;
+      bad = `quiet did not add +1 move`;
+      break;
+    }
+  }
+  // Also verify Rent Insurance works in Classic mode!
+  let classic = createGame(four(), { seed: 61, mode: "classic" });
+  classic.players[0].stand = 1;
+  classic.players[0].insurance = true;
+  classic.companies.instagram = { owner: "nova", level: 0 };
+  const cashBefore = classic.players[0].cash;
+  classic.forcedRoll = [1, 1];
+  classic = apply(classic, { type: "path", pick: "walk" });
+  const classicInsOk = classic.players[0].cash === cashBefore && !classic.players[0].insurance;
+  const ok = allOk && classicInsOk;
+  return {
+    id: "all-cards",
+    name: "All 19 Chance/Mystery cards resolve cleanly & Insurance works in Classic",
+    ok,
+    detail: ok ? "All 19 cards & Classic Rent Insurance verified" : bad || "Classic Rent Insurance failed",
   };
 }
 

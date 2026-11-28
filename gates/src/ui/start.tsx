@@ -263,11 +263,12 @@ export function Lobby({
           <button
             type="button"
             className="wait-exit"
+            title="Leave lobby and return to main menu"
             onMouseEnter={sfxHover}
             onClick={() => { sfx("back"); onLeave(); }}
           >
             <LeaveIcon />
-            <span>Back</span>
+            <span>Leave lobby</span>
           </button>
           <div className="wait-title">
             <p className="wait-kicker">{mode === "moves" ? "DreamPoly" : "Classic"}</p>
@@ -664,8 +665,10 @@ function RailFace({ person, big, studio, frame }: { person: SeatPerson; big?: bo
 
 function LeaveIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-      <path fill="currentColor" d="M15.2 4.2 7 12l8.2 7.8 2.1-2.2L11.4 12l5.9-5.6z" />
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
     </svg>
   );
 }

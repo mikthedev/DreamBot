@@ -1916,3 +1916,201 @@ html[data-theme="classic"] .hud-btn.hud-focus.on {
   color: #fffaf0;
   border-color: #7f1510;
 }
+
+
+/* ---------- Classic & LCD overrides for Private Stall, Market People, Last-Move & Ledger Tabs ---------- */
+html[data-theme="classic"] .trade-people {
+  background: #efe6c9;
+  border-bottom-color: #1a120c;
+}
+html[data-theme="classic"] .offer-col {
+  background: #fbf7ee;
+  border-color: #1a120c;
+}
+html[data-theme="classic"] .offer-col-head {
+  background: color-mix(in srgb, var(--player) 22%, #efe6c9);
+  border-bottom-color: #1a120c;
+}
+html[data-theme="classic"] .offer-col-who small { color: #5c4636; }
+html[data-theme="classic"] .offer-col-who b { color: #1a120c; }
+html[data-theme="classic"] .offer-col-val {
+  background: #fffaf0;
+  color: #146c36;
+  border-color: #1a120c;
+}
+html[data-theme="classic"] .offer-deed {
+  background: #fffaf0;
+  border-color: #1a120c;
+}
+html[data-theme="classic"] .offer-deed-info b { color: #1a120c; }
+html[data-theme="classic"] .offer-deed-info span { color: #5c4636; }
+html[data-theme="classic"] .offer-deed-rent {
+  background: #efe6c9;
+  color: #92400e;
+  border-color: #1a120c;
+}
+html[data-theme="classic"] .offer-pill.is-cash {
+  background: #dcfce7;
+  color: #14532d;
+  border-color: #15803d;
+}
+html[data-theme="classic"] .offer-pill.is-move {
+  background: #ede9fe;
+  color: #4c1d95;
+  border-color: #6d28d9;
+}
+html[data-theme="classic"] .rail-bar,
+html[data-theme="classic"] .slim-tools-box,
+html[data-theme="classic"] .edge-tab,
+html[data-theme="classic"] .edge-icon-btn,
+html[data-theme="classic"] .nav-help,
+html[data-theme="classic"] .overlay-back {
+  background: #fffaf0;
+  color: #1a120c;
+  border: 2px solid #1a120c;
+  border-radius: 9px;
+  box-shadow: 0 3px 0 rgba(26, 18, 12, 0.2);
+}
+html[data-theme="classic"] .nav-exit,
+html[data-theme="classic"] .edge-exit,
+html[data-theme="classic"] .wait-exit {
+  background: #fff5f5;
+  color: #991b1b;
+  border: 2px solid #b42318;
+  border-radius: 9px;
+  box-shadow: 0 3px 0 rgba(127, 21, 16, 0.24);
+}
+html[data-theme="classic"] .nav-exit svg,
+html[data-theme="classic"] .edge-exit svg,
+html[data-theme="classic"] .wait-exit svg { color: #b42318; }
+html[data-theme="classic"] .nav-exit:hover:not(:disabled),
+html[data-theme="classic"] .edge-exit:hover:not(:disabled),
+html[data-theme="classic"] .wait-exit:hover:not(:disabled) {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #7f1510;
+}
+html[data-theme="classic"] .nav-exit:hover:not(:disabled) svg,
+html[data-theme="classic"] .edge-exit:hover:not(:disabled) svg,
+html[data-theme="classic"] .wait-exit:hover:not(:disabled) svg { color: #fffaf0; }
+html[data-theme="classic"] .nav-exit.is-return,
+html[data-theme="classic"] .edge-exit.is-return {
+  background: #fffaf0;
+  color: #1a120c;
+  border-color: #1a120c;
+}
+html[data-theme="classic"] .nav-exit.is-return svg,
+html[data-theme="classic"] .edge-exit.is-return svg { color: #146c36; }
+html[data-theme="classic"] .rail-brand {
+  color: #b42318;
+  text-shadow: none;
+}
+html[data-theme="classic"] .rail-collapse {
+  background: #efe6c9;
+  color: #1a120c;
+  border-color: #1a120c;
+  border-radius: 6px;
+}
+html[data-theme="classic"] .rail-collapse:hover:not(:disabled) {
+  background: #146c36;
+  color: #fffaf0;
+}
+html[data-theme="classic"] .edge-tab em { color: #b42318; }
+html[data-theme="classic"] .edge-wallet {
+  background: #fffaf0;
+  border: 2px solid #146c36;
+  border-radius: 9px;
+  box-shadow: 0 3px 0 rgba(26, 18, 12, 0.2);
+}
+html[data-theme="classic"] .edge-wallet b { color: #146c36; }
+html[data-theme="classic"] .edge-wallet em { color: #1d4ed8; }
+html[data-theme="classic"] .edge-wallet.is-low { border-color: #d97706; background: #fffbeb; }
+html[data-theme="classic"] .edge-wallet.is-low em { color: #b45309; }
+html[data-theme="classic"] .edge-wallet.is-crit { border-color: #b42318; background: #fef2f2; }
+html[data-theme="classic"] .edge-wallet.is-crit em { color: #b42318; }
+html[data-theme="classic"] .play-tools .mix-icon.is-focus-on {
+  background: #b42318;
+  color: #fffaf0;
+  border-color: #7f1510;
+}
+html[data-theme="classic"] .tile,
+html[data-theme="classic"] .tile.corner {
+  box-shadow: inset 0 0 0 1.5px #1a120c;
+}
+html[data-theme="classic"] .board {
+  border-width: 4px;
+}
+html[data-theme="lcd"] .rail-bar,
+html[data-theme="lcd"] .slim-tools-box,
+html[data-theme="lcd"] .edge-tab,
+html[data-theme="lcd"] .edge-icon-btn,
+html[data-theme="lcd"] .nav-help,
+html[data-theme="lcd"] .overlay-back {
+  background: #163528;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 2px 2px 0 #041008;
+}
+html[data-theme="lcd"] .nav-exit,
+html[data-theme="lcd"] .edge-exit,
+html[data-theme="lcd"] .wait-exit {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+  box-shadow: 2px 2px 0 #041008;
+}
+html[data-theme="lcd"] .nav-exit svg,
+html[data-theme="lcd"] .edge-exit svg,
+html[data-theme="lcd"] .wait-exit svg { color: #f4fff8; }
+html[data-theme="lcd"] .nav-exit:hover:not(:disabled),
+html[data-theme="lcd"] .edge-exit:hover:not(:disabled),
+html[data-theme="lcd"] .wait-exit:hover:not(:disabled) {
+  background: #d7ead4;
+  color: #041008;
+  border-color: #f4fff8;
+}
+html[data-theme="lcd"] .nav-exit:hover:not(:disabled) svg,
+html[data-theme="lcd"] .edge-exit:hover:not(:disabled) svg,
+html[data-theme="lcd"] .wait-exit:hover:not(:disabled) svg { color: #041008; }
+html[data-theme="lcd"] .rail-brand {
+  color: #f4fff8;
+  text-shadow: none;
+}
+html[data-theme="lcd"] .rail-collapse {
+  background: #0c2218;
+  color: #f4fff8;
+  border-color: #d7ead4;
+}
+html[data-theme="lcd"] .edge-wallet {
+  background: #0c2218;
+  border-color: #d7ead4;
+  box-shadow: 2px 2px 0 #041008;
+}
+html[data-theme="lcd"] .edge-wallet b,
+html[data-theme="lcd"] .edge-wallet em { color: #f4fff8; }
+html[data-theme="lcd"] .play-tools .mix-icon.is-focus-on {
+  background: #d7ead4;
+  color: #041008;
+  border-color: #f4fff8;
+}
+html[data-theme="classic"] .ledger-tabs button {
+  background: #efe6c9;
+  color: #5c4636;
+  border-color: #1a120c;
+}
+html[data-theme="classic"] .ledger-tabs button.on {
+  background: #1a120c;
+  color: #fffaf0;
+}
+html[data-theme="lcd"] .trade-people {
+  background: #0c2218;
+  border-bottom-color: #4a785c;
+}
+html[data-theme="lcd"] .offer-col {
+  background: #0c2218;
+  border-color: #4a785c;
+}
+html[data-theme="lcd"] .offer-deed {
+  background: #122e21;
+  border-color: #4a785c;
+}

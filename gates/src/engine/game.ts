@@ -31,6 +31,7 @@ import { passedGo, tileAt, TRACK_ORDER, wrapIndex } from "./track";
 export type Mode = "moves" | "classic";
 
 export const JAIL_FINE = 50;
+export const CASINO_MAX_SPINS = 5;
 
 export type VaultRewardKind = "cash" | "move" | "shield" | "jailfree";
 
@@ -87,7 +88,9 @@ export type CasinoResult = {
   bet: number;
   reels: [number, number, number];
   payout: number;
-  outcome: "jackpot" | "pair" | "loss" | "skip";
+  outcome: "mega" | "super" | "jackpot" | "pair" | "double_win" | "double_loss" | "loss" | "skip";
+  canDouble?: boolean;
+  tick?: number;
 };
 
 export type State = {
@@ -105,6 +108,10 @@ export type State = {
   deck: CardId[];
   pendingCard: CardId | null;
   casinoResult?: CasinoResult | null;
+  casinoSpins?: number;
+  casinoNet?: number;
+  casinoStreak?: number;
+  casinoTick?: number;
   vaultResult?: VaultResult | null;
   land: string | null;
   goLand: string | null;
@@ -114,6 +121,8 @@ export type State = {
   forcedRoll: [number, number] | null;
   lastRoll: [number, number] | null;
   rollTick: number;
+  bonusRoll?: boolean;
+  doublesStreak?: number;
   log: string[];
   winnerIds: string[];
   movesBoughtThisTurn: boolean;
@@ -128,7 +137,7 @@ export type Action =
   | { type: "land"; pick: "buy" | "skip" }
   | { type: "rent"; pick: "note" | "move" | "surrender" }
   | { type: "vault"; pick: 0 | 1 | 2 }
-  | { type: "casino"; bet: number }
+  | { type: "casino"; bet: number; double?: boolean }
   | { type: "fuel" }
   | { type: "build"; companyId: string }
   | { type: "sell"; companyId: string }
@@ -226,6 +235,10 @@ export function createGame(
     deck: shuffle([...CARDS], seed),
     pendingCard: null,
     casinoResult: null,
+    casinoSpins: 0,
+    casinoNet: 0,
+    casinoStreak: 0,
+    casinoTick: 0,
     vaultResult: null,
     land: null,
     goLand: null,
@@ -235,6 +248,8 @@ export function createGame(
     forcedRoll: null,
     lastRoll: null,
     rollTick: 0,
+    bonusRoll: false,
+    doublesStreak: 0,
     log: [`Table open — ${worldOf(world).label}.`],
     winnerIds: [],
     movesBoughtThisTurn: false,
@@ -256,7 +271,7 @@ export function actor(state: State): Player | undefined {
 function say(state: State, line: string) {
   const who = actor(state)?.name;
   const stamped = who ? `R${state.round}|${who}|${line}` : `R${state.round}|Table|${line}`;
-  state.log = [...state.log.slice(-40), stamped];
+  state.log = [...state.log.slice(-119), stamped];
 }
 
 function nextRng(state: State) {
@@ -399,9 +414,14 @@ function beginTurn(state: State) {
   }
   const p = actor(state)!;
   state.movesBoughtThisTurn = false;
+  state.bonusRoll = false;
+  state.doublesStreak = 0;
   state.land = null;
   state.lastPay = null;
   state.casinoResult = null;
+  state.casinoSpins = 0;
+  state.casinoNet = 0;
+  state.casinoStreak = 0;
   state.vaultResult = null;
   if (state.mode === "moves") {
     if (p.moves <= 0) {
@@ -437,11 +457,6 @@ function drawCard(state: State, p: Player) {
 }
 
 function payCash(state: State, from: Player, to: Player | null, printed: number, stackSplit: boolean, set?: SetId) {
-  if (state.mode === "moves" && from.insurance) {
-    from.insurance = false;
-    say(state, `${from.name} uses Insurance.`);
-    return;
-  }
   let due = printed;
   if (state.mode === "classic" && from.cash < due) {
     liquidate(state, from, due);
@@ -601,6 +616,8 @@ export function apply(prev: State, action: Action): State {
     resolveCard(state, p);
     state.pendingCard = null;
     if (card === "jail") {
+      state.bonusRoll = false;
+      state.doublesStreak = 0;
       state.land = "rest";
       restOnSpace(state, p);
       return state;
@@ -608,11 +625,15 @@ export function apply(prev: State, action: Action): State {
     if (p.stand !== prevStand) {
       const landedId = spaceId(p);
       state.land = landedId;
-      if (landedId === "home") {
+      const forwardJump = card === "detour" ? 4 : card === "nudge" ? 3 : 0;
+      if (landedId === "home" || (forwardJump > 0 && passedGo(prevStand, forwardJump) && p.leftHome)) {
         p.lapKey += 1;
-        state.goLand = "home";
+        state.goLand = landedId;
         state.phase = "home";
-        say(state, `${p.name} lands on GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY}${state.mode === "moves" ? " or +2 moves" : ""}.`);
+        say(
+          state,
+          `${p.name} ${landedId === "home" ? "lands on" : "passed"} GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY}${state.mode === "moves" ? " or +2 moves" : ""}.`,
+        );
         return state;
       }
       resolveLanding(state, p, landedId);
@@ -699,27 +720,66 @@ export function apply(prev: State, action: Action): State {
     return state;
   }
 
-  if (action.type === "path" && state.phase === "path") {
+  if (action.type === "fuel" && (state.phase === "path" || state.phase === "extra")) {
+    const price = fuelPrice(p);
+    if (state.mode === "moves" && !state.movesBoughtThisTurn && p.moves < MOVE_CAP && p.cash >= price) {
+      p.cash -= price;
+      p.moves += 1;
+      p.fuelBuys += 1;
+      state.movesBoughtThisTurn = true;
+      say(state, `${p.name} buys a move for $${price}.`);
+    }
+    return state;
+  }
+
+  if (action.type === "path" && (state.phase === "path" || (state.phase === "extra" && !!state.bonusRoll && p.jailTurns === 0))) {
+    if (state.phase === "extra") {
+      state.bonusRoll = false;
+      state.land = null;
+      state.lastPay = null;
+      state.casinoResult = null;
+      state.casinoSpins = 0;
+      state.casinoNet = 0;
+      state.casinoStreak = 0;
+      state.vaultResult = null;
+    }
     const a = state.forcedRoll?.[0] ?? d6(state);
     const b = state.forcedRoll?.[1] ?? d6(state);
     state.forcedRoll = null;
-    let steps = a + b;
-    if (p.nudge) {
-      steps = Math.min(12, steps + 1);
-      p.nudge = false;
-    }
+    const steps = a + b;
+    const isDoubles = a === b;
     state.lastRoll = [a, b];
     state.rollTick += 1;
+    if (isDoubles) {
+      state.doublesStreak = (state.doublesStreak || 0) + 1;
+      if (state.doublesStreak >= 3) {
+        p.stand = TRACK_ORDER.indexOf("rest");
+        p.jailTurns = 3;
+        state.bonusRoll = false;
+        state.doublesStreak = 0;
+        state.land = "rest";
+        say(state, `${p.name} rolled doubles ${a}+${b} (3 in a row!) — speeding straight to Jail!`);
+        restOnSpace(state, p);
+        return state;
+      }
+      state.bonusRoll = true;
+    } else {
+      state.bonusRoll = false;
+      state.doublesStreak = 0;
+    }
     const from = p.stand;
     p.stand = wrapIndex(from + steps);
     const id = spaceId(p);
     state.land = id;
-    say(state, `${p.name} rolled ${a}+${b} (${steps}) → ${labelOf(state, id)}.`);
+    say(
+      state,
+      `${p.name} rolled ${isDoubles ? "DOUBLES " : ""}${a}+${b} (${steps}) → ${labelOf(state, id)}${isDoubles ? " · Free bonus roll!" : ""}.`,
+    );
     if (passedGo(from, steps) && p.leftHome) {
       p.lapKey += 1;
       state.goLand = id;
       state.phase = "home";
-      say(state, `${p.name} passed GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY} or +2 moves.`);
+      say(state, `${p.name} passed GO — take $${state.mode === "classic" ? CLASSIC_GO_PAY : GO_PAY}${state.mode === "moves" ? " or +2 moves" : ""}.`);
       return state;
     }
     resolveLanding(state, p, id);
@@ -765,33 +825,106 @@ export function apply(prev: State, action: Action): State {
   }
 
   if (action.type === "casino" && state.phase === "casino") {
+    const spins = state.casinoSpins || 0;
+    if (action.double) {
+      const prev = state.casinoResult;
+      if (!prev || !prev.canDouble || prev.payout <= 0) return state;
+      const stake = prev.payout;
+      const win = nextRng(state) < 0.5;
+      const nextTick = (state.casinoTick || 0) + 1;
+      state.casinoTick = nextTick;
+      if (win) {
+        p.cash += stake;
+        state.casinoNet = (state.casinoNet || 0) + stake;
+        state.casinoStreak = (state.casinoStreak || 0) + 1;
+        state.casinoResult = {
+          bet: stake,
+          reels: prev.reels,
+          payout: stake * 2,
+          outcome: "double_win",
+          canDouble: false,
+          tick: nextTick,
+        };
+        say(state, `${p.name} DOUBLED UP in Casino! +$${stake} extra (total $${stake * 2})!`);
+      } else {
+        const lost = Math.min(stake, Math.max(0, p.cash));
+        p.cash -= lost;
+        state.casinoNet = (state.casinoNet || 0) - lost;
+        state.casinoStreak = 0;
+        state.casinoResult = {
+          bet: stake,
+          reels: prev.reels,
+          payout: 0,
+          outcome: "double_loss",
+          canDouble: false,
+          tick: nextTick,
+        };
+        say(state, `${p.name} gambled Double or Nothing and lost $${lost}.`);
+      }
+      if (spins >= CASINO_MAX_SPINS || p.cash < 50) {
+        restOnSpace(state, p);
+      }
+      return state;
+    }
+
     const bet = Math.max(0, Math.floor(action.bet));
-    if (bet === 0 || p.cash < bet) {
-      state.casinoResult = { bet: 0, reels: [0, 0, 0], payout: 0, outcome: "skip" };
-      say(state, `${p.name} steps out of the Casino.`);
+    if (bet === 0 || p.cash < bet || spins >= CASINO_MAX_SPINS) {
+      if (spins === 0) {
+        state.casinoResult = { bet: 0, reels: [0, 0, 0], payout: 0, outcome: "skip", canDouble: false };
+        say(state, `${p.name} steps out of the Casino.`);
+      } else {
+        const net = state.casinoNet || 0;
+        if (state.casinoResult) state.casinoResult = { ...state.casinoResult, canDouble: false };
+        say(
+          state,
+          `${p.name} cashes out of the Casino after ${spins} spin${spins === 1 ? "" : "s"} (${net >= 0 ? `+$${net}` : `-$${Math.abs(net)}`}).`,
+        );
+      }
       restOnSpace(state, p);
       return state;
     }
+
     p.cash -= bet;
+    const nextSpins = spins + 1;
+    const nextTick = (state.casinoTick || 0) + 1;
+    state.casinoSpins = nextSpins;
+    state.casinoTick = nextTick;
     const r0 = Math.floor(nextRng(state) * 5);
     const r1 = Math.floor(nextRng(state) * 5);
     const r2 = Math.floor(nextRng(state) * 5);
     let payout = 0;
-    let outcome: "jackpot" | "pair" | "loss" = "loss";
+    let outcome: CasinoResult["outcome"] = "loss";
     if (r0 === r1 && r1 === r2) {
-      payout = bet * 3;
-      outcome = "jackpot";
-      say(state, `${p.name} hits Casino JACKPOT! +$${payout}!`);
+      if (r0 === 4) {
+        payout = bet * 6;
+        outcome = "mega";
+        say(state, `${p.name} hits TRIPLE 7s MEGA JACKPOT! +$${payout}!`);
+      } else if (r0 === 3) {
+        payout = Math.round(bet * 4.5);
+        outcome = "super";
+        say(state, `${p.name} hits TRIPLE DIAMONDS! +$${payout}!`);
+      } else {
+        payout = bet * 3;
+        outcome = "jackpot";
+        say(state, `${p.name} hits Casino JACKPOT! +$${payout}!`);
+      }
     } else if (r0 === r1 || r1 === r2 || r0 === r2) {
-      payout = Math.round(bet * 1.8);
+      const pairSym = r0 === r1 ? r0 : r1 === r2 ? r1 : r0;
+      const mult = pairSym >= 3 ? 2 : 1.5;
+      payout = Math.round(bet * mult);
       outcome = "pair";
-      say(state, `${p.name} pairs up in Casino — wins $${payout}!`);
+      say(state, `${p.name} pairs up in Casino (${mult}×) — wins $${payout}!`);
     } else {
       say(state, `${p.name} spins $${bet} in Casino — no match.`);
     }
     p.cash += payout;
-    state.casinoResult = { bet, reels: [r0, r1, r2], payout, outcome };
-    restOnSpace(state, p);
+    state.casinoNet = (state.casinoNet || 0) + (payout - bet);
+    state.casinoStreak = payout > 0 ? (state.casinoStreak || 0) + 1 : 0;
+    const canDouble = payout > 0;
+    state.casinoResult = { bet, reels: [r0, r1, r2], payout, outcome, canDouble, tick: nextTick };
+    if (!canDouble && (nextSpins >= CASINO_MAX_SPINS || p.cash < 50)) {
+      restOnSpace(state, p);
+    }
     return state;
   }
 
@@ -810,17 +943,6 @@ export function apply(prev: State, action: Action): State {
   }
 
   if (state.phase === "extra") {
-    if (action.type === "fuel") {
-      const price = fuelPrice(p);
-      if (!state.movesBoughtThisTurn && p.moves < MOVE_CAP && p.cash >= price) {
-        p.cash -= price;
-        p.moves += 1;
-        p.fuelBuys += 1;
-        state.movesBoughtThisTurn = true;
-        say(state, `${p.name} buys a move for $${price}.`);
-      }
-      return state;
-    }
     if (action.type === "build") {
       const co = brands(state).find((c) => c.id === action.companyId);
       if (co && state.companies[co.id].owner === p.id && hasSet(state, p.id, co.set)) {
@@ -904,13 +1026,14 @@ export function apply(prev: State, action: Action): State {
 function resolveOffer(state: State, pick: "accept" | "decline") {
   const offer = state.offer;
   if (!offer) return;
-  if (pick === "decline") {
-    state.offer = null;
-    return;
-  }
   const from = player(state, offer.from);
   const to = player(state, offer.to);
-  if (from.out || to.out) {
+  if (pick === "decline") {
+    state.offer = null;
+    if (from && to) say(state, `${to.name} declined ${from.name}'s trade offer.`);
+    return;
+  }
+  if (!from || !to || from.out || to.out) {
     state.offer = null;
     return;
   }
@@ -945,6 +1068,7 @@ function resolveOffer(state: State, pick: "accept" | "decline") {
   for (const id of offer.giveCompanies) transferDeed(id, to.id);
   for (const id of offer.getCompanies) transferDeed(id, from.id);
   from.freeTrade = false;
+  say(state, `${from.name} & ${to.name} sealed a trade deal.`);
 }
 
 function takeBankNote(state: State, p: Player) {
@@ -1034,8 +1158,37 @@ function afterRent(state: State, p: Player) {
 function resolveCard(state: State, p: Player) {
   const card = state.pendingCard;
   if (!card) return;
-  if (card === "spare" || card === "swap" || card === "roof" || card === "blueprint" || card === "rezone") p.cash += card === "swap" ? 60 : 80;
-  if (card === "quiet") p.quiet += 3;
+  if (card === "spare") p.cash += 100;
+  if (card === "swap") p.cash += 80;
+  if (card === "blueprint") p.cash += 100;
+  if (card === "rezone") p.cash += 120;
+  if (card === "openhouse") {
+    const held = brands(state).filter((c) => state.companies[c.id].owner === p.id).length;
+    const bonus = Math.min(180, Math.max(60, held * 30));
+    p.cash += bonus;
+    say(state, `${p.name} earns $${bonus} from Brand Promo.`);
+  }
+  if (card === "quiet") {
+    if (state.mode === "moves" && p.moves < MOVE_CAP) {
+      p.moves += 1;
+      say(state, `${p.name} gains +1 free Move from Express Pass!`);
+    } else {
+      p.cash += 100;
+      say(state, `${p.name} collects $100 from Express Pass.`);
+    }
+  }
+  if (card === "roof") {
+    const upgradable = brands(state).find(
+      (co) => state.companies[co.id].owner === p.id && hasSet(state, p.id, co.set) && state.companies[co.id].level < 2,
+    );
+    if (upgradable) {
+      state.companies[upgradable.id].level = (state.companies[upgradable.id].level + 1) as 1 | 2;
+      say(state, `${p.name} gets a free upgrade on ${upgradable.name}!`);
+    } else {
+      p.cash += 100;
+      say(state, `${p.name} collects $100 Upgrade Grant.`);
+    }
+  }
   if (card === "split") {
     p.cash += 80;
     const other = living(state)
@@ -1043,8 +1196,14 @@ function resolveCard(state: State, p: Player) {
       .sort((a, b) => a.cash - b.cash)[0];
     if (other) other.cash += 80;
   }
-  if (card === "nudge") p.nudge = true;
-  if (card === "insurance") p.insurance = true;
+  if (card === "nudge") {
+    p.stand = wrapIndex(p.stand + 3);
+    say(state, `${p.name} boosts 3 spaces ahead → ${labelOf(state, spaceId(p))}.`);
+  }
+  if (card === "insurance") {
+    p.insurance = true;
+    say(state, `${p.name} activates Rent Insurance (next rent free).`);
+  }
   if (card === "tax") {
     const giant = living(state).find((x) => hasSet(state, x.id, "giants"));
     if (giant && giant.id !== p.id) payCash(state, giant, p, 80, false);
@@ -1052,39 +1211,46 @@ function resolveCard(state: State, p: Player) {
   }
   if (card === "bundle") {
     const n = shops(state).filter((s) => state.stores[s.id] === p.id).length;
-    p.cash += Math.min(100, n * 25 || 0);
-    if (!n) {
+    if (n > 0) {
+      const bonus = n * 35;
+      p.cash += bonus;
+      say(state, `${p.name} collects $${bonus} Store Bonus.`);
+    } else {
       const free = shops(state).find((s) => !state.stores[s.id]);
-      if (free) state.stores[free.id] = p.id;
+      if (free) {
+        state.stores[free.id] = p.id;
+        say(state, `${p.name} claims ${free.name} for free!`);
+      } else {
+        p.cash += 75;
+        say(state, `${p.name} collects $75 Store Bonus.`);
+      }
     }
   }
   if (card === "fair") {
-    let got = 0;
+    let total = 0;
     for (const o of living(state)) {
-      if (o.id === p.id || got >= 100) continue;
-      const pay = Math.min(15, state.mode === "moves" ? o.cash : 15);
+      if (o.id === p.id) continue;
+      const pay = Math.min(25, Math.max(0, o.cash));
       o.cash -= pay;
       p.cash += pay;
-      got += pay;
+      total += pay;
     }
-    p.cash = Math.max(0, p.cash - 40);
+    say(state, `${p.name} collects $${total} from Grand Gala.`);
   }
-  if (card === "crowd") p.cash += Math.min(100, 40 * living(state).length);
+  if (card === "crowd") {
+    const bonus = 30 * living(state).length;
+    p.cash += bonus;
+    say(state, `${p.name} collects $${bonus} Table Bonus.`);
+  }
   if (card === "late") {
     const rich = living(state)
       .filter((x) => x.id !== p.id)
       .sort((a, b) => b.cash - a.cash)[0];
-    if (rich) payCash(state, rich, p, 40, false);
-  }
-  if (card === "openhouse") {
-    const set = (["social", "music", "watch", "cloud", "ai", "ride", "chips", "giants"] as SetId[]).find((s) =>
-      companiesIn(s, state.world).some((co) => state.companies[co.id].owner === p.id),
-    );
-    if (set) p.openHouse = set;
+    if (rich) payCash(state, rich, p, 50, false);
   }
   if (card === "detour") {
     p.stand = wrapIndex(p.stand + 4);
-    say(state, `${p.name} detours to ${labelOf(state, spaceId(p))}.`);
+    say(state, `${p.name} jumps 4 spaces ahead → ${labelOf(state, spaceId(p))}.`);
   }
   if (card === "casino_trip") {
     p.stand = TRACK_ORDER.indexOf("dream");
@@ -1093,6 +1259,8 @@ function resolveCard(state: State, p: Player) {
   if (card === "jail") {
     p.stand = TRACK_ORDER.indexOf("rest");
     p.jailTurns = 3;
+    state.bonusRoll = false;
+    state.doublesStreak = 0;
     say(state, `${p.name} is sent to Jail!`);
   }
   if (card === "jailfree") {
@@ -1138,6 +1306,9 @@ function resolveLanding(state: State, p: Player, id: string) {
   if (id === "dream") {
     state.phase = "casino";
     state.casinoResult = null;
+    state.casinoSpins = 0;
+    state.casinoNet = 0;
+    state.casinoStreak = 0;
     say(state, `${p.name} steps into the Casino.`);
     return;
   }
@@ -1149,6 +1320,8 @@ function resolveLanding(state: State, p: Player, id: string) {
   }
   if (id === "rest") {
     p.jailTurns = 3;
+    state.bonusRoll = false;
+    state.doublesStreak = 0;
     say(state, `${p.name} is locked in Jail — pay $${JAIL_FINE}, use a pass, or roll doubles next turn.`);
     restOnSpace(state, p);
     return;
@@ -1182,9 +1355,9 @@ function resolveLanding(state: State, p: Player, id: string) {
 }
 
 function takeRent(state: State, from: Player, to: Player, printed: number, stackSplit: boolean, set?: SetId, place?: string) {
-  if (state.mode === "moves" && from.insurance) {
+  if (from.insurance) {
     from.insurance = false;
-    say(state, `${from.name} uses Insurance — no rent on ${place ?? "this tile"}.`);
+    say(state, `${from.name} uses Rent Insurance — no rent on ${place ?? "this tile"}.`);
     return 0;
   }
   if (from.cash >= printed || state.mode === "classic") {
@@ -1284,6 +1457,6 @@ export function describePhase(state: State): string {
     }
     return `Paid $${state.lastPay.amount} to ${who.name}`;
   }
-  if (state.phase === "extra") return `On ${here}`;
+  if (state.phase === "extra") return state.bonusRoll ? `Doubles! Free bonus roll ready` : `On ${here}`;
   return "";
 }

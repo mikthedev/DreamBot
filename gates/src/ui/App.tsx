@@ -4,6 +4,7 @@ import { TRACK_ORDER } from "../engine/track";
 import { botAction, stepBot } from "../engine/bot";
 import { runScenarios, type ScenarioResult } from "../engine/scenarios";
 import {
+  CASINO_MAX_SPINS,
   JAIL_FINE,
   actor,
   apply,
@@ -205,6 +206,8 @@ export function App() {
   const isHost = hostSeatRef.current === seatId || (!!hostId && (hostId === youId || hostId === seatId));
   const [testOn, setTestOn] = useState(() => localStorage.getItem(TEST_KEY) === "on");
   const [sheet, setSheet] = useState<null | "more" | "test" | "log">(null);
+  const [ledgerTab, setLedgerTab] = useState<"mine" | "all">("mine");
+  const [endZeroConfirm, setEndZeroConfirm] = useState(false);
   const [trading, setTrading] = useState(false);
   const skipMarketOpen = useRef(false);
   const lowWarn = useRef(false);
@@ -261,7 +264,7 @@ export function App() {
   const [groupOwners, setGroupOwners] = useState(false);
   const [seatHover, setSeatHover] = useState<string | null>(null);
   const [showRoster, setShowRoster] = useState(true);
-  const [showFeed, setShowFeed] = useState(true);
+  const [showFeed, setShowFeed] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= 980 : true));
   const prevRanksRef = useRef<Record<string, number>>({});
   const [rankDelta, setRankDelta] = useState<Record<string, "up" | "down">>({});
   const [compareId, setCompareId] = useState<string | null>(null);
@@ -357,7 +360,7 @@ export function App() {
       offerBot ? 900 : 720,
     );
     return () => window.clearTimeout(t);
-  }, [state, revealing, isHost, roomId]);
+  }, [state, revealing, isHost, roomId, wsMode]);
 
   const me =
     state?.players.find((p) => p.id === youId || p.id === seatId || p.id === discord.user?.id) ??
@@ -1102,6 +1105,12 @@ export function App() {
   useEffect(() => {
     if (!roomId) return;
     const bail = () => {
+      if (wsLiveRef.current) {
+        if (!isHostRef.current || screenRef.current === "play") {
+          wsRef.current?.send({ t: "leave", id: youIdRef.current });
+        }
+        return;
+      }
       if (isHostRef.current) {
         void writeRoom(
           roomId,
@@ -1274,7 +1283,7 @@ export function App() {
         resetLocalTable();
       }
     }
-  }, [discord.people, discord.instanceId, youId, hostId, roomId, isHost]);
+  }, [discord.people, discord.instanceId, youId, hostId, roomId, isHost, wsMode]);
 
   useEffect(() => {
     if (!isHost || !discord.people.length) return;
@@ -1504,7 +1513,7 @@ export function App() {
       handle.close();
       if (netRef.current === handle) netRef.current = null;
     };
-  }, [roomId, isHost, isHost ? true : !!hostId]);
+  }, [roomId, isHost, wsMode, isHost ? true : !!hostId]);
 
   const lastNetSelf = useRef(youId);
   useEffect(() => {
@@ -1543,7 +1552,7 @@ export function App() {
       publishHost();
     }, 180);
     return () => window.clearTimeout(pushTimer.current);
-  }, [roomId, isHost, hostId, youId, screen, pickedMode, joined, spectators, state]);
+  }, [roomId, isHost, wsMode, hostId, youId, screen, pickedMode, joined, spectators, state]);
 
   // Guests poll the shared room — Discord docs: instanceId + server state, not WebRTC.
   useEffect(() => {
@@ -1591,7 +1600,7 @@ export function App() {
       stop = true;
       window.clearInterval(t);
     };
-  }, [roomId, isHost]);
+  }, [roomId, isHost, wsMode]);
 
   // Host pulls guest sits + pending moves from the room (Discord has no WebRTC).
   useEffect(() => {
@@ -1649,7 +1658,7 @@ export function App() {
       stop = true;
       window.clearInterval(t);
     };
-  }, [roomId, isHost]);
+  }, [roomId, isHost, wsMode]);
 
   const primary = useMemo(
     () => (view ? buttonsFor(view, viewMine, revealing) : []),
@@ -1798,74 +1807,80 @@ export function App() {
     }
   }, [sortedCashPlayers]);
 
+  const isFocus = !pregame && !showRoster && !showFeed;
+  const toggleFocus = () => {
+    sfx("click");
+    if (isFocus) {
+      setShowRoster(true);
+      if (typeof window === "undefined" || window.innerWidth >= 980) setShowFeed(true);
+    } else {
+      setShowRoster(false);
+      setShowFeed(false);
+    }
+  };
+  const playTools = (
+    <div className="play-tools" role="group" aria-label="Table controls">
+      <ThemeDesk theme={theme} onTheme={setTheme} />
+      <AudioMix mix={mix} onMix={setMix} />
+      <button
+        type="button"
+        className="mix-icon on"
+        title={look === "pawn" ? "Characters — switch to Discord icons" : "Discord icons — switch to characters"}
+        aria-label={look === "pawn" ? "Showing characters. Switch to Discord icons" : "Showing Discord icons. Switch to characters"}
+        aria-pressed={look === "pawn"}
+        onClick={() => { sfx("click"); applyLooks({ look: look === "pawn" ? "icon" : "pawn" }); }}
+      >
+        {look === "pawn" ? <PawnIcon /> : <FaceIcon />}
+      </button>
+      <button
+        type="button"
+        className={`mix-icon${isFocus ? " is-focus-on" : ""}`}
+        title={isFocus ? "Show side panels" : "Focus mode — expand board"}
+        aria-label={isFocus ? "Exit focus mode and show side panels" : "Focus mode — hide side panels to expand board"}
+        aria-pressed={isFocus}
+        onClick={toggleFocus}
+      >
+        <HudIcon kind="focus" />
+      </button>
+      {showTest ? (
+        <button className="ghost tiny" onClick={() => { sfx("click"); setSheet("test"); }}>
+          {testOn ? "Test" : "Off"}
+        </button>
+      ) : null}
+    </div>
+  );
   return (
-    <div className={`app ${pregame ? "pregame" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""} ${pocket && !booting ? "is-pocket" : ""}`}>
+    <div className={`app ${pregame ? "pregame" : ""} ${isFocus ? "is-focus" : ""} ${dive !== "idle" ? `is-dive is-${dive}` : ""} ${pocket && !booting ? "is-pocket" : ""}`}>
       {booting ? <BootCurtain lines={["Setting the table"]} /> : null}
       {!booting && pocket ? <PocketDesk /> : null}
       {fate && !booting && !pocket ? (
         <FateBanner fate={fate} onDismiss={() => setFate(null)} onLeave={leaveTable} />
       ) : null}
-      <header className="top">
-        <div className="brand">DreamPoly</div>
-        {!pregame && viewMe ? (
-          <div className="hud-switch" role="group" aria-label="Panel layout">
+      {pregame ? (
+        <header className="top">
+          <div className="brand">DreamPoly</div>
+          <span />
+          <div className="top-tools">
+            <ThemeDesk theme={theme} onTheme={setTheme} />
+            <AudioMix mix={mix} onMix={setMix} />
             <button
               type="button"
-              className={`hud-btn${showRoster ? " on" : ""}`}
-              aria-pressed={showRoster}
-              title={showRoster ? "Hide Players list (Cash stays visible)" : "Show Players list"}
-              onClick={() => { sfx("click"); setShowRoster((v) => !v); }}
+              className="mix-icon on"
+              title={look === "pawn" ? "Characters" : "Discord icons"}
+              aria-label={look === "pawn" ? "Showing characters. Switch to Discord icons" : "Showing Discord icons. Switch to characters"}
+              aria-pressed={look === "pawn"}
+              onClick={() => { sfx("click"); applyLooks({ look: look === "pawn" ? "icon" : "pawn" }); }}
             >
-              <HudIcon kind="players" />
-              <span>Players</span>
+              {look === "pawn" ? <PawnIcon /> : <FaceIcon />}
             </button>
-            <button
-              type="button"
-              className={`hud-btn hud-feed${showFeed ? " on" : ""}`}
-              aria-pressed={showFeed}
-              title={showFeed ? "Hide Activity & Progress" : "Show Activity & Progress"}
-              onClick={() => { sfx("click"); setShowFeed((v) => !v); }}
-            >
-              <HudIcon kind="activity" />
-              <span>Activity</span>
-            </button>
-            <button
-              type="button"
-              className={`hud-btn hud-focus${!showRoster && !showFeed ? " on" : ""}`}
-              aria-pressed={!showRoster && !showFeed}
-              title={!showRoster && !showFeed ? "Show Players & Activity" : "Focus Mode (keep Cash visible, hide Players & Activity)"}
-              onClick={() => {
-                sfx("click");
-                const allHidden = !showRoster && !showFeed;
-                setShowRoster(allHidden);
-                setShowFeed(allHidden);
-              }}
-            >
-              <HudIcon kind="focus" />
-              <span>{!showRoster && !showFeed ? "Show all" : "Focus"}</span>
-            </button>
+            {showTest ? (
+              <button className="ghost tiny" onClick={() => { sfx("click"); setSheet("test"); }}>
+                {testOn ? "Test tools" : "Test off"}
+              </button>
+            ) : null}
           </div>
-        ) : <span />}
-        <div className="top-tools">
-          <ThemeDesk theme={theme} onTheme={setTheme} />
-          <AudioMix mix={mix} onMix={setMix} />
-          <button
-            type="button"
-            className="mix-icon on"
-            title={look === "pawn" ? "Characters" : "Discord icons"}
-            aria-label={look === "pawn" ? "Showing characters. Switch to Discord icons" : "Showing Discord icons. Switch to characters"}
-            aria-pressed={look === "pawn"}
-            onClick={() => { sfx("click"); applyLooks({ look: look === "pawn" ? "icon" : "pawn" }); }}
-          >
-            {look === "pawn" ? <PawnIcon /> : <FaceIcon />}
-          </button>
-          {showTest ? (
-            <button className="ghost tiny" onClick={() => { sfx("click"); setSheet("test"); }}>
-              {testOn ? "Test tools" : "Test off"}
-            </button>
-          ) : null}
-        </div>
-      </header>
+        </header>
+      ) : null}
       {dive !== "idle" ? (
         <div className={`dive ${dive}`} aria-hidden>
           <div className="dive-bars">
@@ -1897,7 +1912,12 @@ export function App() {
             isHost={isHost}
             joined={joined}
             onStart={() => startTable()}
-            onMode={(next) => setPickedMode(next)}
+            onMode={(next) => {
+              setPickedMode(next);
+              if (roomId && wsLiveRef.current && wsRef.current?.live()) {
+                wsRef.current.send({ t: "lobby", mode: next });
+              }
+            }}
             onLeave={leaveTable}
             onSit={() => joinSeat(youId)}
             onAddBot={() => seatBots(1)}
@@ -1928,101 +1948,167 @@ export function App() {
         )
       ) : (
         <div className={`play${!showRoster ? " is-roster-hidden" : ""}${!showFeed ? " is-feed-hidden" : ""}`}>
-      <div className={`roster${!showRoster ? " is-compact" : ""}`}>
-        {showRoster ? (
-        <div className="seat-list">
-        {(view ?? state).players.map((p) => (
-          <div
-            key={p.id}
-            className={`seat ${viewWho?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id ? "peek" : ""}`}
-            style={{ "--player": p.color } as CSSProperties}
-            onMouseEnter={() => setSeatHover(p.id)}
-            onMouseLeave={() => setSeatHover(null)}
-          >
-            <Portrait player={p} size={26} />
-            <b>{p.name}</b>
-            <span>
-              {p.out ? "Out" : (view ?? state).mode === "moves" ? `${p.moves}m` : `$${p.cash}`}
-              {!p.out && p.jailTurns > 0 ? <em className="seat-jail">Jail</em> : null}
-            </span>
-            {p.id === hostId ? (
-              <em className="seat-link is-host">host</em>
-            ) : p.bot ? null : (
-              <em className={`seat-link ${((linkPeers.find((x) => x.id === p.id)?.ping) ?? (p.id === youId ? linkPing : null)) != null && ((linkPeers.find((x) => x.id === p.id)?.ping) ?? linkPing ?? 0) >= 180 ? "is-bad" : ""}`}>
-                {p.id === youId && linkRole === "guest"
-                  ? pingLabel(linkPing)
-                  : pingLabel(linkPeers.find((x) => x.id === p.id)?.ping ?? null)}
-              </em>
-            )}
+      <div className={`rail-slot is-left ${showRoster ? "is-open" : "is-slim"}`}>
+        <div className="roster rail-full" aria-hidden={!showRoster}>
+          <div className="rail-bar">
+            <span className="rail-brand">DreamPoly</span>
+            <button
+              type="button"
+              className="rail-collapse"
+              title="Hide Players sidebar"
+              aria-label="Hide Players sidebar"
+              onClick={() => { sfx("click"); setShowRoster(false); }}
+            >
+              ‹
+            </button>
           </div>
-        ))}
-        </div>
-        ) : null}
-        <div className={`wallet ${(payShare(view?.lastPay, viewMe?.id) != null || tillGain != null) && !revealing ? "is-paid" : ""}`}>
-          <div className="till-head">
-            <PixelBill />
-            <small>CASH</small>
-          </div>
-          <div className="till-readout">
-            <b>${shownCash}</b>
-            {(payShare(view?.lastPay, viewMe?.id) ?? tillGain) != null && !revealing ? (
-              <em className="till-plus" key={`${view?.rollTick}-got-${payShare(view?.lastPay, viewMe?.id) ?? tillGain}`}>+${payShare(view?.lastPay, viewMe?.id) ?? tillGain}</em>
-            ) : null}
-            {(payShare(view?.lastPay, viewMe?.id) ?? tillGain) != null && !revealing ? (
-              <span className="till-fly" aria-hidden>
-                <i style={{ "--i": 0 } as CSSProperties}><PixelBill /></i>
-                <i style={{ "--i": 1 } as CSSProperties}><PixelBill /></i>
-                <i style={{ "--i": 2 } as CSSProperties}><PixelBill /></i>
+          <div className="seat-list">
+          {(view ?? state).players.map((p) => (
+            <div
+              key={p.id}
+              className={`seat ${viewWho?.id === p.id ? "on" : ""} ${p.out ? "out" : ""} ${seatHover === p.id ? "peek" : ""}`}
+              style={{ "--player": p.color } as CSSProperties}
+              onMouseEnter={() => setSeatHover(p.id)}
+              onMouseLeave={() => setSeatHover(null)}
+            >
+              <Portrait player={p} size={26} />
+              <b>{p.name}</b>
+              <span>
+                {p.out ? "Out" : (view ?? state).mode === "moves" ? `${p.moves}m` : `$${p.cash}`}
+                {!p.out && p.jailTurns > 0 ? <em className="seat-jail">Jail</em> : null}
               </span>
+              {p.id === hostId ? (
+                <em className="seat-link is-host">host</em>
+              ) : p.bot ? null : (
+                <em className={`seat-link ${((linkPeers.find((x) => x.id === p.id)?.ping) ?? (p.id === youId ? linkPing : null)) != null && ((linkPeers.find((x) => x.id === p.id)?.ping) ?? linkPing ?? 0) >= 180 ? "is-bad" : ""}`}>
+                  {p.id === youId && linkRole === "guest"
+                    ? pingLabel(linkPing)
+                    : pingLabel(linkPeers.find((x) => x.id === p.id)?.ping ?? null)}
+                </em>
+              )}
+            </div>
+          ))}
+          </div>
+          <div className={`wallet ${(payShare(view?.lastPay, viewMe?.id) != null || tillGain != null) && !revealing ? "is-paid" : ""}`}>
+            <div className="till-head">
+              <PixelBill />
+              <small>CASH</small>
+            </div>
+            <div className="till-readout">
+              <b>${shownCash}</b>
+              {(payShare(view?.lastPay, viewMe?.id) ?? tillGain) != null && !revealing ? (
+                <em className="till-plus" key={`${view?.rollTick}-got-${payShare(view?.lastPay, viewMe?.id) ?? tillGain}`}>+${payShare(view?.lastPay, viewMe?.id) ?? tillGain}</em>
+              ) : null}
+              {(payShare(view?.lastPay, viewMe?.id) ?? tillGain) != null && !revealing ? (
+                <span className="till-fly" aria-hidden>
+                  <i style={{ "--i": 0 } as CSSProperties}><PixelBill /></i>
+                  <i style={{ "--i": 1 } as CSSProperties}><PixelBill /></i>
+                  <i style={{ "--i": 2 } as CSSProperties}><PixelBill /></i>
+                </span>
+              ) : null}
+            </div>
+            {state.mode === "moves" ? (
+              <span
+                className={`till-fuel${moveGain && !revealing ? " is-up" : ""}${shownMoves === 0 ? " is-crit" : shownMoves <= 4 ? " is-low" : ""}`}
+                key={`moves-${shownMoves}`}
+              >
+                {shownMoves === 0 ? "0 moves · LAST!" : `${shownMoves} moves`}
+                {moveGain && !revealing ? <em>+{moveGain}</em> : null}
+              </span>
+            ) : (
+              <span className="till-fuel">Classic table</span>
+            )}
+            <ul>
+              {sortedCashPlayers.map((p, idx) => {
+                const delta = rankDelta[p.id];
+                return (
+                  <li
+                    key={p.id}
+                    className={`${payShare(view?.lastPay, p.id) != null && !revealing ? "is-got" : ""} ${delta === "up" ? "is-rank-up" : delta === "down" ? "is-rank-down" : ""}`}
+                    style={{ "--player": p.color } as CSSProperties}
+                    onMouseEnter={() => setSeatHover(p.id)}
+                    onMouseLeave={() => setSeatHover(null)}
+                  >
+                    <b className="rank-num">{idx + 1}</b>
+                    <i />
+                    <span>{p.name}</span>
+                    <em>${p.cash}</em>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <nav className="rail-nav-acts is-bottom" aria-label="Table navigation">
+            <button
+              type="button"
+              className={`nav-exit${sheet === "more" ? " is-return" : ""}`}
+              title={sheet === "more" ? "Return to the game board" : "Leave this table and return to menu"}
+              onClick={() => {
+                if (sheet === "more") {
+                  sfx("back");
+                  setSheet(null);
+                } else {
+                  sfx("warning");
+                  setLeaveWarn(true);
+                }
+              }}
+            >
+              <ExitDoorIcon back={sheet === "more"} />
+              <span>{sheet === "more" ? "Back to board" : "Leave table"}</span>
+            </button>
+            <button type="button" className="nav-help" title="How to play & rules" aria-label="How to play" onClick={() => { sfx("click"); setHelpOpen(true); }}>
+              ?
+            </button>
+          </nav>
+        </div>
+        <div className="slim-rail is-left" aria-hidden={showRoster}>
+          <div className="slim-top">
+            <button
+              type="button"
+              className="edge-tab"
+              title="Show Players & Cash sidebar"
+              onClick={() => { sfx("click"); setShowRoster(true); }}
+            >
+              <HudIcon kind="players" />
+              <span>Players</span>
+              <em>›</em>
+            </button>
+            {viewMe ? (
+              <div className={`edge-wallet${state.mode === "moves" && shownMoves <= 1 ? " is-crit" : state.mode === "moves" && shownMoves <= 4 ? " is-low" : ""}`}>
+                <b>${shownCash}</b>
+                {state.mode === "moves" ? <em>{shownMoves === 0 ? "0m!" : `${shownMoves}m`}</em> : null}
+              </div>
             ) : null}
           </div>
-          {state.mode === "moves" ? (
-            <span className={`till-fuel${moveGain && !revealing ? " is-up" : ""}`} key={`moves-${shownMoves}`}>
-              {shownMoves} moves{moveGain && !revealing ? <em>+{moveGain}</em> : null}
-            </span>
-          ) : (
-            <span className="till-fuel">Classic table</span>
-          )}
-          <ul>
-            {sortedCashPlayers.map((p, idx) => {
-              const delta = rankDelta[p.id];
-              return (
-                <li
-                  key={p.id}
-                  className={`${payShare(view?.lastPay, p.id) != null && !revealing ? "is-got" : ""} ${delta === "up" ? "is-rank-up" : delta === "down" ? "is-rank-down" : ""}`}
-                  style={{ "--player": p.color } as CSSProperties}
-                  onMouseEnter={() => setSeatHover(p.id)}
-                  onMouseLeave={() => setSeatHover(null)}
-                >
-                  <b className="rank-num">{idx + 1}</b>
-                  <i />
-                  <span>{p.name}</span>
-                  <em>${p.cash}</em>
-                </li>
-              );
-            })}
-          </ul>
-          <button type="button" className="help-go" title="How this table works" onClick={() => { sfx("click"); setHelpOpen(true); }}>
-            ?
-          </button>
+          <nav className="slim-bottom" aria-label="Table navigation">
+            <button
+              type="button"
+              className={`edge-exit${sheet === "more" ? " is-return" : ""}`}
+              title={sheet === "more" ? "Return to the board" : "Leave this table"}
+              onClick={() => {
+                if (sheet === "more") {
+                  sfx("back");
+                  setSheet(null);
+                } else {
+                  sfx("warning");
+                  setLeaveWarn(true);
+                }
+              }}
+            >
+              <ExitDoorIcon back={sheet === "more"} />
+              <span>{sheet === "more" ? "Board" : "Leave"}</span>
+            </button>
+            <button
+              type="button"
+              className="edge-icon-btn"
+              title="How to play & rules"
+              aria-label="How to play"
+              onClick={() => { sfx("click"); setHelpOpen(true); }}
+            >
+              ?
+            </button>
+          </nav>
         </div>
-        <button
-          type="button"
-          className="board-close"
-          title={sheet === "more" ? "Back to the board" : "Leave table"}
-          onClick={() => {
-            if (sheet === "more") {
-              sfx("back");
-              setSheet(null);
-            } else {
-              sfx("warning");
-              setLeaveWarn(true);
-            }
-          }}
-        >
-          <span>◀</span>
-          <span className="close-copy">{sheet === "more" ? "Board" : "Leave"}</span>
-        </button>
       </div>
 
       <div className="stage">
@@ -2090,7 +2176,13 @@ export function App() {
               ) : casinoShowing ? (
                 <CasinoDesk
                   cash={shownCash}
-                  result={casinoHold ? state.casinoResult ?? null : null}
+                  liveCash={me.cash}
+                  phase={state.phase}
+                  spins={state.casinoSpins || 0}
+                  maxSpins={CASINO_MAX_SPINS}
+                  net={state.casinoNet || 0}
+                  streak={state.casinoStreak || 0}
+                  result={state.casinoResult ?? null}
                   onSpin={(bet) => {
                     if (bet <= 0) {
                       setCasinoHold(null);
@@ -2100,11 +2192,16 @@ export function App() {
                     setCasinoHold({ preCash: me.cash, holding: true });
                     act({ type: "casino", bet });
                   }}
+                  onDouble={() => {
+                    setCasinoHold({ preCash: me.cash, holding: true });
+                    act({ type: "casino", bet: 0, double: true });
+                  }}
                   onReveal={() => {
                     setCasinoHold((cur) => (cur ? { ...cur, holding: false } : null));
                   }}
                   onDone={() => {
                     setCasinoHold(null);
+                    if (state.phase === "casino") act({ type: "casino", bet: 0 });
                   }}
                 />
               ) : (
@@ -2124,12 +2221,20 @@ export function App() {
                   More
                 </button>
               </header>
-              {card ? (
-                <article className="chance" key={card}>
-                  <span>Chance</span>
-                  <b>{CARD_LABEL[card]}</b>
-                </article>
-              ) : (viewMine || viewWho?.id === viewMe?.id) || revealing ? (
+              {card ? (() => {
+                const isBox = TRACK_ORDER[view?.players.find((p) => p.id === viewWho?.id)?.stand ?? 0]?.startsWith("chest");
+                const full = CARD_LABEL[card] || "";
+                const parts = full.split(" — ");
+                const head = parts[0] || full;
+                const body = parts.slice(1).join(" — ");
+                return (
+                  <article className={`chance${isBox ? " is-mystery" : ""}`} key={card}>
+                    <span>{isBox ? "Mystery Box" : "Chance"}</span>
+                    <b>{head}</b>
+                    {body ? <p className="chance-desc">{body}</p> : null}
+                  </article>
+                );
+              })() : (viewMine || viewWho?.id === viewMe?.id) || revealing ? (
                 <div className="desk-stage">
                   {!diceDrop && (walking || (view ?? state).phase === "path" || (view ?? state).phase === "jail" || (choiceLock && (view ?? state).phase !== "card" && (view ?? state).phase !== "home" && (view ?? state).phase !== "vault" && (view ?? state).phase !== "casino")) ? (
                     <div className={`dice-row${choiceLock ? " is-mini" : ""}${!revealing ? " is-land" : ""}`} key={state.rollTick}>
@@ -2137,22 +2242,33 @@ export function App() {
                       <PixelDie n={centerDie?.[1] ?? 5} />
                     </div>
                   ) : null}
-                  {!revealing && (view ?? state).casinoResult && (view ?? state).casinoResult?.outcome !== "skip" && (view ?? state).phase === "extra" ? (
-                    <div className={`casino-result is-${(view ?? state).casinoResult!.outcome}`}>
-                      <span className="casino-reels-mini">
-                        {(view ?? state).casinoResult!.reels.map((r, i) => (
-                          <PixelCasinoSymbol id={r} key={i} />
-                        ))}
-                      </span>
-                      <b>
-                        {(view ?? state).casinoResult!.outcome === "jackpot"
-                          ? `JACKPOT +$${(view ?? state).casinoResult!.payout}`
-                          : (view ?? state).casinoResult!.outcome === "pair"
-                            ? `PAIR +$${(view ?? state).casinoResult!.payout}`
-                            : `LOST $${(view ?? state).casinoResult!.bet}`}
-                      </b>
-                    </div>
-                  ) : null}
+                  {!revealing && (view ?? state).casinoResult && (view ?? state).casinoResult?.outcome !== "skip" && (view ?? state).phase === "extra" ? (() => {
+                    const cr = (view ?? state).casinoResult!;
+                    const isWin = cr.outcome === "mega" || cr.outcome === "super" || cr.outcome === "jackpot" || cr.outcome === "pair" || cr.outcome === "double_win";
+                    const tone = cr.outcome === "mega" || cr.outcome === "super" || cr.outcome === "jackpot" || cr.outcome === "double_win" ? "jackpot" : isWin ? "pair" : "loss";
+                    const label =
+                      cr.outcome === "mega"
+                        ? `MEGA 777 +$${cr.payout}`
+                        : cr.outcome === "super"
+                          ? `DIAMONDS +$${cr.payout}`
+                          : cr.outcome === "jackpot"
+                            ? `JACKPOT +$${cr.payout}`
+                            : cr.outcome === "double_win"
+                              ? `DOUBLED +$${cr.payout}`
+                              : cr.outcome === "pair"
+                                ? `PAIR +$${cr.payout}`
+                                : `CASINO -$${cr.bet}`;
+                    return (
+                      <div className={`casino-result is-${tone}`}>
+                        <span className="casino-reels-mini">
+                          {cr.reels.map((r, i) => (
+                            <PixelCasinoSymbol id={r} key={i} />
+                          ))}
+                        </span>
+                        <b>{label}</b>
+                      </div>
+                    );
+                  })() : null}
                   {!revealing && (view ?? state).lastPay && viewMine && (view ?? state).lastPay?.to !== viewMe?.id && (view ?? state).phase === "extra" ? (
                     <div className="pay-chip" key={`${(view ?? state).rollTick}-pay`}>
                       -${(view ?? state).lastPay!.amount}
@@ -2174,6 +2290,36 @@ export function App() {
                       </div>
                     );
                   })()}
+                  {viewMine && !revealing && (view ?? state).mode === "moves" && viewMe && !viewMe.out && viewMe.moves === 0 && ((view ?? state).phase === "path" || (view ?? state).phase === "extra") ? (() => {
+                    const price = fuelPrice(viewMe);
+                    const canBuy = !state.movesBoughtThisTurn && viewMe.cash >= price;
+                    return (
+                      <div className="last-move-alert" role="alert">
+                        <div className="last-move-head">
+                          <PixelCaution />
+                          <b>{state.phase === "path" ? "FINAL MOVE — 0 LEFT!" : "0 MOVES — ELIMINATION WARNING!"}</b>
+                        </div>
+                        <p>
+                          {state.phase === "path"
+                            ? "This is your last roll! Pass GO (+2 moves), hit Vault, or buy +1 move before ending your turn."
+                            : state.bonusRoll
+                              ? "You earned a free Doubles roll! Use it to reach GO/Vault, or buy +1 move below."
+                              : "Ending your turn with 0 moves eliminates you next turn. Buy a move, sell a brand, or take a bank note!"}
+                        </p>
+                        <div className="last-move-acts">
+                          {canBuy ? (
+                            <button type="button" className="last-move-buy" onClick={() => act({ type: "fuel" })}>
+                              Buy +1 Move (${price})
+                            </button>
+                          ) : (
+                            <button type="button" className="last-move-more" onClick={() => { sfx("click"); setSheet("more"); }}>
+                              {state.movesBoughtThisTurn ? "Open More (Trade / Notes)" : `Need $${price} — Sell or Note in More`}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })() : null}
                 </div>
               ) : (
                 <div className="idle-mark">
@@ -2181,22 +2327,31 @@ export function App() {
                   <div className="logo-sub">{viewWho ? `${viewWho.name} is playing` : "Table open"}</div>
                 </div>
               )}
-              {viewMine && (view ?? state).phase === "extra" && !revealing ? (
+              {viewMine && ((view ?? state).phase === "extra" || (view ?? state).phase === "path") && !revealing ? (
                 <div className="desk-tools">
-                  <button type="button" className="desk-chip" onMouseEnter={sfxPlayHover} onClick={() => { sfx("click"); setTrading(true); }}>
-                    Trade
-                  </button>
-                  {state.mode === "moves" && me.moves < MOVE_CAP ? (
-                    <button
-                      type="button"
-                      className="desk-chip"
-                      onMouseEnter={sfxPlayHover}
-                      onClick={() => act({ type: "fuel" })}
-                    >
-                      Move
-                      <em>${fuelPrice(me)}</em>
+                  {(view ?? state).phase === "extra" ? (
+                    <button type="button" className="desk-chip" onMouseEnter={sfxPlayHover} onClick={() => { sfx("click"); setTrading(true); }}>
+                      Trade
                     </button>
                   ) : null}
+                  {state.mode === "moves" && me.moves < MOVE_CAP ? (() => {
+                    const price = fuelPrice(me);
+                    const bought = !!state.movesBoughtThisTurn;
+                    const cantAfford = me.cash < price;
+                    return (
+                      <button
+                        type="button"
+                        className={`desk-chip${me.moves <= 1 && !bought && !cantAfford ? " is-urgent" : ""}`}
+                        disabled={bought || cantAfford}
+                        title={bought ? "Already bought 1 move this turn" : cantAfford ? `Need $${price} cash` : `Buy +1 move for $${price}`}
+                        onMouseEnter={sfxPlayHover}
+                        onClick={() => act({ type: "fuel" })}
+                      >
+                        {bought ? "Bought" : "Buy move"}
+                        <em>{bought ? "1/turn" : `$${price}`}</em>
+                      </button>
+                    );
+                  })() : null}
                 </div>
               ) : null}
               <div className={`center-actions${choiceLock ? " is-choice" : ""}`}>
@@ -2220,6 +2375,16 @@ export function App() {
                             sfx("warning");
                             setBrokeShake(0);
                             window.requestAnimationFrame(() => setBrokeShake(1));
+                            return;
+                          }
+                          if (
+                            b.action.type === "end" &&
+                            state.mode === "moves" &&
+                            me.moves === 0 &&
+                            !state.bonusRoll
+                          ) {
+                            sfx("warning");
+                            setEndZeroConfirm(true);
                             return;
                           }
                           if (b.roll) rollThen(b.action);
@@ -2339,22 +2504,26 @@ export function App() {
               key={diceDrop.tick}
               roll={diceDrop.roll}
               rollKey={diceDrop.tick}
-              doublesLabel={diceDrop.jail ? "JAIL BREAK!" : "DOUBLES!"}
+              doublesLabel={
+                diceDrop.jail
+                  ? "JAIL BREAK!"
+                  : state.land === "rest" && (state.doublesStreak ?? 0) === 0
+                    ? "3× DOUBLES → JAIL!"
+                    : "DOUBLES · FREE ROLL!"
+              }
               onSettled={(tick) => setDiceSettledTick(tick)}
             />
           ) : null}
-          <div className="board-alerts" aria-live="polite">
-            {(view ?? state).mode === "moves" && viewMe && !viewMe.out && viewMe.moves <= 4 ? (
-              <div className="dock-hint is-warn is-pinned" key="low-moves">
-                <span className="dock-hint-icon" aria-hidden><PixelCaution /></span>
-                <div className="dock-hint-copy">
-                  <b>Low moves ({viewMe.moves} left)</b>
-                  <small>Pass GO for +2 moves or buy 1 in More (${fuelPrice(viewMe)}).</small>
-                </div>
-              </div>
-            ) : null}
-            {moneyTip ? (
-              <div className={`dock-hint is-${moneyTip.tone || "info"}`} key={moneyTip.id} role="status">
+          {!stallOpen && !casinoShowing && !vaultShowing && !openGroup && !compareId && !sheet && moneyTip ? (
+            <div className="board-alerts" aria-live="polite">
+              <button
+                type="button"
+                className={`dock-hint is-${moneyTip.tone || "info"}`}
+                key={moneyTip.id}
+                role="status"
+                title="Tap to dismiss"
+                onClick={() => setMoneyTip(null)}
+              >
                 <span className="dock-hint-icon" aria-hidden>
                   {moneyTip.tone === "warn" ? <PixelCaution /> : <PixelBill />}
                 </span>
@@ -2362,77 +2531,104 @@ export function App() {
                   <b>{moneyTip.title}</b>
                   {moneyTip.detail ? <small>{moneyTip.detail}</small> : null}
                 </div>
-              </div>
-            ) : null}
-          </div>
+              </button>
+            </div>
+          ) : null}
           <BoardFx boardRef={boardRef} walking={revealing} state={view ?? state} />
         </div>
       </div>
-      {showFeed ? (
-      <aside className="rail-feed" aria-label="Table activity">
-        <div className="feed-card">
-          <div className="feed-head">
-            <span className="feed-head-label">
-              <i className="feed-live-dot" aria-hidden />
-              <small>Live</small>
-            </span>
-            <b>Activity</b>
+      <div className={`rail-slot is-right ${showFeed ? "is-open" : "is-slim"}`}>
+        <aside className="rail-feed rail-full" aria-label="Table activity" aria-hidden={!showFeed}>
+          <div className="rail-bar is-tools">
+            {showFeed ? playTools : null}
+            <button
+              type="button"
+              className="rail-collapse"
+              title="Hide Activity panel"
+              aria-label="Hide Activity panel"
+              onClick={() => { sfx("click"); setShowFeed(false); }}
+            >
+              ›
+            </button>
           </div>
-          <ul className="feed-list">
-            {[...(view ?? state).log].reverse().slice(0, 12).map((line, i) => {
-              const p = parseLog(line);
-              const beat = logBeat(p.body);
-              return (
-                <li key={`${i}-${line}`} className={`is-${beat}${i === 0 ? " is-new" : ""}`}>
-                  <div className="feed-item-top">
-                    <small>{p.when || "Table"}</small>
-                    <span className="feed-beat">{beat}</span>
+          <div className="feed-card">
+            <div className="feed-head">
+              <span className="feed-head-label">
+                <i className="feed-live-dot" aria-hidden />
+                <small>Live</small>
+              </span>
+              <b>Activity</b>
+            </div>
+            <ul className="feed-list">
+              {[...(view ?? state).log].reverse().slice(0, 12).map((line, i) => {
+                const p = parseLog(line);
+                const beat = logBeat(p.body);
+                return (
+                  <li key={`${i}-${line}`} className={`is-${beat}${i === 0 ? " is-new" : ""}`}>
+                    <div className="feed-item-top">
+                      <small>{p.when || "Table"}</small>
+                      <span className="feed-beat">{beat}</span>
+                    </div>
+                    <span>{p.body}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <div className="feed-card">
+            <div className="feed-head">
+              <small>Progress</small>
+              <b>Sets</b>
+            </div>
+            <div className="feed-sets">
+              {setsFor(view ?? state).map((s) => {
+                const shown = view ?? state;
+                const cos = companiesIn(s.id, shown.world);
+                const ownedCount = cos.filter((c) => !!shown.companies[c.id]?.owner).length;
+                const complete = cos.length > 0 && ownedCount === cos.length && cos.every((c) => shown.companies[c.id]?.owner === shown.companies[cos[0].id]?.owner);
+                const pct = cos.length ? Math.round((ownedCount / cos.length) * 100) : 0;
+                return (
+                  <div className={`feed-set-row${complete ? " is-complete" : ""}`} key={s.id} style={{ "--set": s.color } as CSSProperties}>
+                    <i className="feed-set-dot" />
+                    <span>{s.label}</span>
+                    <div className="feed-pips">
+                      {cos.map((c) => {
+                        const own = shown.players.find((pl) => pl.id === shown.companies[c.id]?.owner);
+                        return (
+                          <em
+                            key={c.id}
+                            title={`${c.name}${own ? ` · ${own.name}` : ""}`}
+                            style={own ? { background: own.color, borderColor: own.color } : undefined}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div className="feed-set-bar" aria-hidden>
+                      <i style={{ width: `${pct}%` }} />
+                    </div>
+                    <em className="feed-set-count">{complete ? "FULL" : `${ownedCount}/${cos.length}`}</em>
                   </div>
-                  <span>{p.body}</span>
-                </li>
-              );
-            })}
-          </ul>
+                );
+              })}
+            </div>
+          </div>
+        </aside>
+        <div className="slim-rail is-right" role="region" aria-label="Controls and activity" aria-hidden={showFeed}>
+          <div className="slim-tools-box">
+            {!showFeed ? playTools : null}
+          </div>
+          <button
+            type="button"
+            className="edge-tab"
+            title="Show Activity & Sets panel"
+            onClick={() => { sfx("click"); setShowFeed(true); }}
+          >
+            <em>‹</em>
+            <HudIcon kind="activity" />
+            <span>Activity</span>
+          </button>
         </div>
-        <div className="feed-card">
-          <div className="feed-head">
-            <small>Progress</small>
-            <b>Sets</b>
-          </div>
-          <div className="feed-sets">
-            {setsFor(view ?? state).map((s) => {
-              const shown = view ?? state;
-              const cos = companiesIn(s.id, shown.world);
-              const ownedCount = cos.filter((c) => !!shown.companies[c.id]?.owner).length;
-              const complete = cos.length > 0 && ownedCount === cos.length && cos.every((c) => shown.companies[c.id]?.owner === shown.companies[cos[0].id]?.owner);
-              const pct = cos.length ? Math.round((ownedCount / cos.length) * 100) : 0;
-              return (
-                <div className={`feed-set-row${complete ? " is-complete" : ""}`} key={s.id} style={{ "--set": s.color } as CSSProperties}>
-                  <i className="feed-set-dot" />
-                  <span>{s.label}</span>
-                  <div className="feed-pips">
-                    {cos.map((c) => {
-                      const own = shown.players.find((pl) => pl.id === shown.companies[c.id]?.owner);
-                      return (
-                        <em
-                          key={c.id}
-                          title={`${c.name}${own ? ` · ${own.name}` : ""}`}
-                          style={own ? { background: own.color, borderColor: own.color } : undefined}
-                        />
-                      );
-                    })}
-                  </div>
-                  <div className="feed-set-bar" aria-hidden>
-                    <i style={{ width: `${pct}%` }} />
-                  </div>
-                  <em className="feed-set-count">{complete ? "FULL" : `${ownedCount}/${cos.length}`}</em>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </aside>
-      ) : null}
+      </div>
       </div>
       )}
 
@@ -2450,7 +2646,7 @@ export function App() {
             <p className="start-kicker">Caution</p>
             <h2>Leave this table?</h2>
             <p>
-              {isHost
+              {isHost && !(wsMode === "live" && screen === "play")
                 ? "You’re the host. Leaving closes the table for everyone."
                 : state?.phase === "over"
                   ? "Head back to the menu. The table is finished."
@@ -2479,8 +2675,9 @@ export function App() {
       {sheet && (
         <div className={`sheet ${sheet === "more" || sheet === "log" ? "is-stall" : ""}`} onClick={() => { sfx("back"); setSheet(null); }}>
           {sheet === "more" || sheet === "log" ? (
-            <button type="button" className="board-close overlay-close" title="Back to the board" onClick={(e) => { e.stopPropagation(); sfx("back"); setSheet(null); }}>
-              ◀
+            <button type="button" className="overlay-back" title="Return to the board" onClick={(e) => { e.stopPropagation(); sfx("back"); setSheet(null); }}>
+              <ExitDoorIcon back />
+              <span>Back to board</span>
             </button>
           ) : null}
           <article className={sheet === "more" || sheet === "log" ? `stall-menu${sheet === "more" ? " is-more" : ""}` : ""} onClick={(e) => e.stopPropagation()}>
@@ -2509,23 +2706,66 @@ export function App() {
             {sheet === "log" && (view ?? state) && (() => {
               const logState = view ?? state!;
               const logMe = viewMe ?? me;
+              const rawSeat = joined.find((j) => j.id === logMe?.id || j.id === youId || j.id === seatId);
+              const nameAliases = Array.from(
+                new Set(
+                  [
+                    logMe?.name,
+                    rawSeat?.name,
+                    discord.user?.name,
+                    profile?.username,
+                    ...(logMe?.name ? [logMe.name.split(" (")[0]] : []),
+                  ]
+                    .map((n) => (n || "").trim().toLowerCase())
+                    .filter((n) => n && n !== "you" && n !== "player" && n !== "guest"),
+                ),
+              );
+              const allLogs = [...logState.log].reverse();
               const myLogs = logMe
-                ? [...logState.log].reverse().filter((line) => {
+                ? allLogs.filter((line) => {
                     const p = parseLog(line);
-                    return p.who === logMe.name || p.body.includes(logMe.name);
+                    const whoL = (p.who || "").trim().toLowerCase();
+                    const bodyL = p.body.toLowerCase();
+                    if (nameAliases.some((a) => whoL === a || whoL.includes(a) || bodyL.includes(a))) return true;
+                    return !!(logMe.name && (p.who === logMe.name || p.body.includes(logMe.name)));
                   })
                 : [];
+              const shownLogs = ledgerTab === "all" ? allLogs : myLogs;
               return (
                 <>
                   <header className="stall-head">
-                    <p className="start-kicker">Personal</p>
-                    <h2>Your Ledger</h2>
+                    <p className="start-kicker">{ledgerTab === "all" ? "Table history" : "Personal"}</p>
+                    <h2>{ledgerTab === "all" ? "Table Ledger" : "Your Ledger"}</h2>
                   </header>
+                  <div className="ledger-tabs" role="tablist">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={ledgerTab === "mine"}
+                      className={ledgerTab === "mine" ? "on" : ""}
+                      onClick={() => { sfx("click"); setLedgerTab("mine"); }}
+                    >
+                      Your turns ({myLogs.length})
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={ledgerTab === "all"}
+                      className={ledgerTab === "all" ? "on" : ""}
+                      onClick={() => { sfx("click"); setLedgerTab("all"); }}
+                    >
+                      Full table ({allLogs.length})
+                    </button>
+                  </div>
                   <ul className="ledger">
-                    {myLogs.length ? (
-                      myLogs.map((line, i) => <LedgerRow key={`${line}-${i}`} line={line} />)
+                    {shownLogs.length ? (
+                      shownLogs.map((line, i) => <LedgerRow key={`${line}-${i}`} line={line} />)
                     ) : (
-                      <li className="ledger-empty">No actions recorded for you yet.</li>
+                      <li className="ledger-empty">
+                        {ledgerTab === "mine"
+                          ? "No personal actions recorded yet — switch to Full table to see everyone."
+                          : "No actions recorded yet."}
+                      </li>
                     )}
                   </ul>
                   <button type="button" className="stall-act log" onClick={() => { sfx("back"); setSheet("more"); }}>
@@ -2610,6 +2850,60 @@ export function App() {
               </button>
               <button type="button" className="stall-act log" onClick={() => { sfx("back"); setNoteGuide(false); }}>
                 <b>Cancel</b>
+              </button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+      {endZeroConfirm && state && me ? (
+        <div className="sheet is-stall is-top-alert" onClick={() => { sfx("back"); setEndZeroConfirm(false); }}>
+          <article className="warn-card" onClick={(e) => e.stopPropagation()}>
+            <PixelCaution className="warn-mark" />
+            <p className="start-kicker">0 Moves Left</p>
+            <h2>You will be eliminated!</h2>
+            <p>
+              Ending your turn with <b>0 moves</b> knocks you out on your next turn.
+              {!state.movesBoughtThisTurn
+                ? ` You can still buy +1 move for $${fuelPrice(me)}${me.cash < fuelPrice(me) ? " (sell a brand or take a bank note in More first)" : ""}.`
+                : " You can still trade another player for a move in Market before ending!"}
+            </p>
+            <div className="leave-warn-act">
+              {!state.movesBoughtThisTurn && me.cash >= fuelPrice(me) ? (
+                <button
+                  className="stall-act fuel"
+                  type="button"
+                  onClick={() => {
+                    setEndZeroConfirm(false);
+                    act({ type: "fuel" });
+                  }}
+                >
+                  <b>Buy +1 Move</b>
+                  <span>${fuelPrice(me)} · Stay alive!</span>
+                </button>
+              ) : (
+                <button
+                  className="stall-act fuel"
+                  type="button"
+                  onClick={() => {
+                    sfx("click");
+                    setEndZeroConfirm(false);
+                    setSheet("more");
+                  }}
+                >
+                  <b>Open More</b>
+                  <span>Sell, Note, or Trade</span>
+                </button>
+              )}
+              <button
+                className="stall-act leave"
+                type="button"
+                onClick={() => {
+                  setEndZeroConfirm(false);
+                  act({ type: "end" });
+                }}
+              >
+                <b>End anyway</b>
+                <span>Accept elimination</span>
               </button>
             </div>
           </article>
@@ -2852,42 +3146,58 @@ function AudioMix({
 
 function NoteIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-      <rect x="4" y="10" width="5" height="4" fill="currentColor" />
-      <rect x="8" y="3" width="2" height="9" fill="currentColor" />
-      <rect x="10" y="3" width="4" height="2" fill="currentColor" />
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M9 18V5l12-2v13" />
+      <circle cx="6" cy="18" r="3" fill="currentColor" />
+      <circle cx="18" cy="16" r="3" fill="currentColor" />
     </svg>
   );
 }
 
 function NoteOffIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-      <rect x="4" y="10" width="5" height="4" fill="currentColor" />
-      <rect x="8" y="3" width="2" height="9" fill="currentColor" />
-      <rect x="2" y="7" width="12" height="2" fill="#e11d48" />
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M9 18V5l12-2v13" opacity="0.55" />
+      <circle cx="6" cy="18" r="3" fill="currentColor" opacity="0.55" />
+      <circle cx="18" cy="16" r="3" fill="currentColor" opacity="0.55" />
+      <path d="M3 3l18 18" stroke="#f43f5e" strokeWidth="2.4" />
     </svg>
   );
 }
 
 function WaveIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-      <rect x="2" y="6" width="2" height="4" fill="currentColor" />
-      <rect x="5" y="3" width="2" height="10" fill="currentColor" />
-      <rect x="8" y="5" width="2" height="6" fill="currentColor" />
-      <rect x="11" y="2" width="2" height="12" fill="currentColor" />
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+      <path d="M18.8 5.8a9 9 0 0 1 0 12.4" />
     </svg>
   );
 }
 
 function WaveOffIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-      <rect x="2" y="6" width="2" height="4" fill="currentColor" />
-      <rect x="5" y="3" width="2" height="10" fill="currentColor" />
-      <rect x="8" y="5" width="2" height="6" fill="currentColor" />
-      <rect x="2" y="7" width="12" height="2" fill="#e11d48" />
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" opacity="0.55" />
+      <path d="M22 9l-6 6M16 9l6 6" stroke="#f43f5e" strokeWidth="2.3" />
+    </svg>
+  );
+}
+
+function ExitDoorIcon({ back = false }: { back?: boolean }) {
+  if (back) {
+    return (
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <line x1="19" y1="12" x2="5" y2="12" />
+        <polyline points="12 19 5 12 12 5" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
     </svg>
   );
 }
@@ -2972,6 +3282,9 @@ function MoreStall({
   onLog: () => void;
 }) {
   const extra = mine && state.phase === "extra";
+  const canFuelPhase = mine && (state.phase === "extra" || state.phase === "path");
+  const movePrice = fuelPrice(me);
+  const canBuyMove = canFuelPhase && !state.movesBoughtThisTurn && me.moves < MOVE_CAP && me.cash >= movePrice;
   const owned = brands(state).filter((c) => state.companies[c.id].owner === me.id);
   const stores = shops(state).filter((s) => state.stores[s.id] === me.id);
   const licenses = licenseNeeded(state, me.id);
@@ -2983,10 +3296,31 @@ function MoreStall({
       </header>
       <div className="stall-grid">
         {state.mode === "moves" ? (
-          <button className="stall-act is-card fuel" disabled={!extra || me.moves >= MOVE_CAP} onClick={() => onAct({ type: "fuel" })} title="Buy +1 move this turn">
+          <button
+            className="stall-act is-card fuel"
+            disabled={!canBuyMove}
+            onClick={() => onAct({ type: "fuel" })}
+            title={
+              state.movesBoughtThisTurn
+                ? "Already bought 1 move this turn"
+                : me.moves >= MOVE_CAP
+                  ? `At max ${MOVE_CAP} moves`
+                  : me.cash < movePrice
+                    ? `Need $${movePrice} cash (sell a brand or take a bank note)`
+                    : "Buy +1 move this turn (available before or after rolling)"
+            }
+          >
             <span className="stall-ico"><StallIcon kind="fuel" /></span>
             <b>Buy move</b>
-            <em>${fuelPrice(me)}</em>
+            <em>
+              {state.movesBoughtThisTurn
+                ? "Used 1/turn"
+                : me.moves >= MOVE_CAP
+                  ? "At cap"
+                  : me.cash < movePrice
+                    ? `Need $${movePrice}`
+                    : `$${movePrice}`}
+            </em>
           </button>
         ) : null}
         <button
@@ -3274,13 +3608,16 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
               )}
             </li>
             <li>
-              <b>Casino</b> — spin the 3-reel slots with $50–$200 for 1.8× pairs or 3× triple payouts.
+              <b>Doubles (free extra roll!)</b> — roll matching dice to earn a <b>free bonus roll</b> this turn without spending a Move! Rolling 3 doubles in a row sends you to Jail.
+            </li>
+            <li>
+              <b>Casino</b> — 3-reel slot machine (up to {CASINO_MAX_SPINS} spins per visit, $50 to All-In). Pairs pay 1.5–2×, triples pay 3–6×, plus <b>Double or Nothing</b> after any win!
             </li>
             <li>
               <b>Jail</b> — pay <b>${JAIL_FINE}</b> fine, use a <b>Get Out of Jail Free</b> card, or try rolling doubles (3 turns, boosted odds — each turn still spends 1 move).
             </li>
           </ul>
-          <p>Then you get extras (build, fuel, trade) and hit <b>End turn</b>.</p>
+          <p>Then you get extras (build, buy move, trade) and hit <b>End turn</b> (or <b>Roll again</b> on doubles).</p>
         </section>
 
         {moves ? (
@@ -3296,13 +3633,13 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
                 Pass GO (a full lap): choose <b>${GO_PAY}</b> or <b>+2 moves</b> — never both, never automatic.
               </li>
               <li>
-                Buy a move in More: <b>$100</b>, then $200, then $300. Once per turn.
+                Buy a move before or after rolling: <b>$100</b>, then $200, then $300. Once per turn.
               </li>
               <li>
-                Jail, rent, and buying a brand never give a move.
+                Roll <b>Doubles</b> for a free bonus roll without spending a move!
               </li>
             </ul>
-            <p>Run out of moves and you drop every brand. The table keeps going without you.</p>
+            <p>End a turn with 0 moves and you drop every brand next turn. The table keeps going without you.</p>
           </section>
         ) : (
           <section className="how-panel fuel how-wide">
@@ -3310,8 +3647,8 @@ function HowToPlay({ mode, world, onClose }: { mode: Mode; world?: State["world"
             <h3>Cash only</h3>
             <p>
               Turns do not spend moves and there is no upkeep. Pass GO for <b>${CLASSIC_GO_PAY}</b>.
-              Chance, Surprise, and Casino tiles draw a random card. Pay rent when you land on an
-              owned brand. If you cannot pay, brands sell at half until you cover it — or you go bankrupt.
+              Chance and Mystery Box tiles draw a random card; Casino opens the 3-reel slots; Vault cracks 1 of 3 safes.
+              Pay rent when you land on an owned brand. If you cannot pay, brands sell at half until you cover it — or you go bankrupt.
             </p>
           </section>
         )}
@@ -3735,22 +4072,37 @@ function LedgerIcon({ kind }: { kind: ReturnType<typeof logBeat> }) {
 
 function CasinoDesk({
   cash,
+  liveCash,
+  phase,
+  spins,
+  maxSpins,
+  net,
+  streak,
   result,
   onSpin,
+  onDouble,
   onReveal,
   onDone,
 }: {
   cash: number;
+  liveCash: number;
+  phase: State["phase"];
+  spins: number;
+  maxSpins: number;
+  net: number;
+  streak: number;
   result: State["casinoResult"] | null;
   onSpin: (bet: number) => void;
+  onDouble: () => void;
   onReveal: () => void;
   onDone: () => void;
 }) {
-  const [bet, setBet] = useState(cash >= 100 ? 100 : cash >= 50 ? 50 : 0);
+  const [bet, setBet] = useState(() => (liveCash >= 100 ? 100 : liveCash >= 50 ? 50 : 0));
   const [reels, setReels] = useState<[number, number, number]>([4, 3, 2]);
   const [locked, setLocked] = useState<[boolean, boolean, boolean]>([false, false, false]);
   const [spinning, setSpinning] = useState(false);
-  const [settled, setSettled] = useState(false);
+  const [settledTick, setSettledTick] = useState<number>(0);
+  const [leverPulled, setLeverPulled] = useState(false);
   const lockedRef = useRef<[boolean, boolean, boolean]>([false, false, false]);
   const revealFired = useRef(false);
   const onRevealRef = useRef(onReveal);
@@ -3758,10 +4110,22 @@ function CasinoDesk({
   onRevealRef.current = onReveal;
   onDoneRef.current = onDone;
 
+  // Keep bet affordable after each spin
   useEffect(() => {
-    if (!result || result.outcome === "skip") return;
+    if (spinning) return;
+    if (bet > liveCash) {
+      setBet(liveCash >= 200 ? 200 : liveCash >= 100 ? 100 : liveCash >= 50 ? 50 : 0);
+    } else if (bet === 0 && liveCash >= 50) {
+      setBet(50);
+    }
+  }, [liveCash, spinning, bet]);
+
+  const tick = result?.tick ?? 0;
+  useEffect(() => {
+    if (!result || result.outcome === "skip" || !tick) return;
+    const isDouble = result.outcome === "double_win" || result.outcome === "double_loss";
     setSpinning(true);
-    setSettled(false);
+    setLeverPulled(true);
     lockedRef.current = [false, false, false];
     setLocked([false, false, false]);
     revealFired.current = false;
@@ -3775,19 +4139,20 @@ function CasinoDesk({
         lk[1] ? result.reels[1] : (cur[1] + 2) % 5,
         lk[2] ? result.reels[2] : (cur[2] + 3) % 5,
       ]);
-    }, 85);
+    }, isDouble ? 65 : 78);
+
     const t0 = window.setTimeout(() => {
       sfx("click");
       lockedRef.current = [true, false, false];
       setLocked([true, false, false]);
       setReels((cur) => [result.reels[0], cur[1], cur[2]]);
-    }, 480);
+    }, isDouble ? 240 : 420);
     const t1 = window.setTimeout(() => {
       sfx("click");
       lockedRef.current = [true, true, false];
       setLocked([true, true, false]);
       setReels((cur) => [result.reels[0], result.reels[1], cur[2]]);
-    }, 820);
+    }, isDouble ? 440 : 720);
     const t2 = window.setTimeout(() => {
       window.clearInterval(spinId);
       sfx("click");
@@ -3795,11 +4160,12 @@ function CasinoDesk({
       setLocked([true, true, true]);
       setReels(result.reels);
       setSpinning(false);
-      setSettled(true);
+      setLeverPulled(false);
+      setSettledTick(tick);
       if (!revealFired.current) {
         revealFired.current = true;
         onRevealRef.current();
-        if (result.outcome === "jackpot") {
+        if (result.outcome === "mega" || result.outcome === "super" || result.outcome === "jackpot" || result.outcome === "double_win") {
           sfx("upgrade");
           window.setTimeout(() => sfx("received"), 140);
         } else if (result.outcome === "pair") {
@@ -3808,122 +4174,211 @@ function CasinoDesk({
           sfx("payBank");
         }
       }
-    }, 1180);
-    const t3 = window.setTimeout(() => {
-      onDoneRef.current();
-    }, 2850);
+    }, isDouble ? 660 : 1040);
+
     return () => {
       window.clearInterval(spinId);
       window.clearTimeout(t0);
       window.clearTimeout(t1);
       window.clearTimeout(t2);
-      window.clearTimeout(t3);
     };
-  }, [result]);
+  }, [tick, result]);
+
+  const settled = !spinning && !!result && result.outcome !== "skip" && settledTick === tick;
+  const displayCash = spinning ? cash : liveCash;
+  const spinsLeft = Math.max(0, maxSpins - spins);
+  const canSpinAgain = phase === "casino" && !spinning && spinsLeft > 0 && liveCash >= 50;
+  const canDoubleNow = phase === "casino" && settled && !!result?.canDouble && (result?.payout ?? 0) > 0;
+  const sessionDone = phase !== "casino" && settled;
 
   function spinNow() {
-    if (spinning || settled || bet <= 0 || cash < bet) return;
+    if (spinning || !canSpinAgain || bet < 50 || liveCash < bet) return;
     sfx("click");
     onSpin(bet);
   }
 
   const matched =
-    settled && result
+    settled && result && result.outcome !== "double_loss" && result.outcome !== "loss"
       ? result.reels.map((r, i) => result.reels.filter((x, j) => x === r && j !== i).length > 0)
       : [false, false, false];
-  const stateClass = settled && result ? ` is-${result.outcome}` : "";
-  const busy = spinning || settled;
+  const winTone =
+    settled && result
+      ? result.outcome === "mega" || result.outcome === "super" || result.outcome === "jackpot" || result.outcome === "double_win"
+        ? " is-jackpot"
+        : result.outcome === "pair"
+          ? " is-pair"
+          : " is-loss"
+      : "";
+
+  const halfBet = Math.max(50, Math.floor((liveCash / 2) / 10) * 10);
+  const allInBet = Math.floor(liveCash / 10) * 10;
+  const presetBets = [
+    { label: "$50", val: 50 },
+    { label: "$100", val: 100 },
+    { label: "$200", val: 200 },
+    { label: "$400", val: 400 },
+    ...(liveCash >= 120 ? [{ label: "Half", val: halfBet }] : []),
+    ...(liveCash >= 50 ? [{ label: "All-In", val: allInBet, hot: true }] : []),
+  ];
+
+  const marqueeText = spinning
+    ? "Reels Rolling..."
+    : settled && result
+      ? result.outcome === "mega"
+        ? "TRIPLE 7s MEGA 6×!"
+        : result.outcome === "super"
+          ? "TRIPLE DIAMONDS 4.5×!"
+          : result.outcome === "jackpot"
+            ? "TRIPLE JACKPOT 3×!"
+            : result.outcome === "double_win"
+              ? "DOUBLED UP! 2×!"
+              : result.outcome === "double_loss"
+                ? "BUSTED ON DOUBLE"
+                : result.outcome === "pair"
+                  ? "LUCKY PAIR WIN!"
+                  : "HOUSE TAKES IT"
+      : "ROYAL HIGH ROLLER";
 
   return (
-    <div className={`trade-desk casino-desk${spinning ? " is-spinning" : ""}${stateClass}`}>
+    <div className={`trade-desk casino-desk${spinning ? " is-spinning" : ""}${winTone}`}>
       <div className="trade-banner casino-banner">
-        <b>Casino</b>
-        <em>Cash ${cash}</em>
+        <div className="casino-brand">
+          <b>ROYAL SLOTS</b>
+          <span className="casino-spins-pill">Spin {Math.min(maxSpins, spins)}/{maxSpins}</span>
+          {spins > 0 ? (
+            <span className={`casino-net-pill${net > 0 ? " is-up" : net < 0 ? " is-down" : ""}`}>
+              {net >= 0 ? `+$${net}` : `-$${Math.abs(net)}`}
+            </span>
+          ) : null}
+          {streak >= 2 ? <span className="casino-streak-pill">🔥 {streak} streak</span> : null}
+        </div>
+        <em>${displayCash}</em>
       </div>
+
       <div className="casino-stage">
-        <div className="casino-cabinet">
-          <div className="casino-marquee" aria-hidden>
-            <i />
-            <span>{settled && result ? (result.outcome === "jackpot" ? "Triple Jackpot!" : result.outcome === "pair" ? "Lucky Pair!" : "House Wins") : spinning ? "Spinning Reels" : "High Roller Slots"}</span>
-            <i />
-          </div>
-          <div className="casino-reels" aria-hidden>
-            {reels.map((sym, idx) => (
-              <span
-                className={`casino-reel${spinning && !locked[idx] ? " is-blur" : ""}${locked[idx] ? " is-locked" : ""}${matched[idx] ? " is-match" : ""}`}
-                key={idx}
-              >
-                <PixelCasinoSymbol id={sym} />
-              </span>
-            ))}
-          </div>
-          {settled && result ? (
-            <div className={`casino-outcome is-${result.outcome}`}>
-              {result.outcome === "jackpot"
-                ? `JACKPOT +$${result.payout}`
-                : result.outcome === "pair"
-                  ? `PAIR WIN +$${result.payout}`
-                  : `NO MATCH -$${result.bet}`}
+        <div className="casino-machine-wrap">
+          <div className="casino-cabinet">
+            <div className="casino-bulbs" aria-hidden>
+              {Array.from({ length: 9 }, (_, i) => (
+                <i key={i} style={{ "--b": i } as CSSProperties} />
+              ))}
             </div>
-          ) : (
-            <div className="casino-payouts">
-              <div className="payout-pill">
-                <small>Triple Match</small>
-                <b>3.0×</b>
-              </div>
-              <div className="payout-pill">
-                <small>Any Pair</small>
-                <b>1.8×</b>
-              </div>
+            <div className="casino-marquee" aria-hidden>
+              <i />
+              <span>{marqueeText}</span>
+              <i />
             </div>
-          )}
-        </div>
-        <div className="casino-wager-box">
-          <small>{settled ? `Stake $${result?.bet ?? bet}` : "Choose stake"}</small>
-          <div className="casino-stakes">
-            {[50, 100, 200].map((amt) => (
-              <button
-                key={amt}
-                type="button"
-                className={`casino-chip${(settled && result ? result.bet === amt : bet === amt) ? " on" : ""}`}
-                disabled={busy || cash < amt}
-                onClick={() => { sfx("click"); setBet(amt); }}
-              >
-                ${amt}
-              </button>
-            ))}
+            <div className="casino-paytable">
+              <span><b>777</b> 6×</span>
+              <span><b>💎×3</b> 4.5×</span>
+              <span><b>3×</b> 3×</span>
+              <span><b>Pair</b> 1.5–2×</span>
+            </div>
+            <div className="casino-reels" aria-hidden>
+              <div className="casino-payline" />
+              {reels.map((sym, idx) => (
+                <span
+                  className={`casino-reel${spinning && !locked[idx] ? " is-blur" : ""}${locked[idx] ? " is-locked" : ""}${matched[idx] ? " is-match" : ""}`}
+                  key={idx}
+                >
+                  <PixelCasinoSymbol id={sym} />
+                </span>
+              ))}
+            </div>
+            {settled && result ? (
+              <div className={`casino-outcome${winTone}`}>
+                {result.outcome === "mega"
+                  ? `MEGA 777! +$${result.payout}`
+                  : result.outcome === "super"
+                    ? `DIAMONDS! +$${result.payout}`
+                    : result.outcome === "jackpot"
+                      ? `JACKPOT! +$${result.payout}`
+                      : result.outcome === "double_win"
+                        ? `DOUBLED! TOTAL +$${result.payout}`
+                        : result.outcome === "double_loss"
+                          ? `DOUBLE LOST -$${result.bet}`
+                          : result.outcome === "pair"
+                            ? `PAIR WIN +$${result.payout}`
+                            : `NO MATCH -$${result.bet}`}
+              </div>
+            ) : (
+              <div className="casino-subhint">
+                {spinning ? "Good luck…" : `Pick a wager & pull the lever · ${spinsLeft} spin${spinsLeft === 1 ? "" : "s"} left`}
+              </div>
+            )}
           </div>
+          <button
+            type="button"
+            className={`casino-lever${leverPulled ? " is-pulled" : ""}`}
+            disabled={!canSpinAgain || bet < 50 || liveCash < bet}
+            title="Pull lever to spin"
+            aria-label="Pull slot lever"
+            onClick={spinNow}
+          >
+            <span className="lever-arm" />
+            <span className="lever-knob" />
+          </button>
         </div>
+
+        {!sessionDone ? (
+          <div className="casino-wager-box">
+            <div className="casino-stakes">
+              {presetBets.map((chip) => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  className={`casino-chip${chip.hot ? " is-allin" : ""}${bet === chip.val ? " on" : ""}`}
+                  disabled={spinning || liveCash < chip.val || !canSpinAgain}
+                  onClick={() => { sfx("click"); setBet(chip.val); }}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
+
       <div className="trade-bar casino-bar">
         <p className="deal-ok">
-          {settled && result
-            ? result.outcome === "jackpot"
-              ? `Triple hit! Collected +$${result.payout}.`
-              : result.outcome === "pair"
-                ? `Matched a pair! Collected +$${result.payout}.`
-                : `No pair this spin (-$${result.bet}).`
-            : spinning
-              ? "Locking reels…"
-              : bet > 0 && cash >= bet
-                ? `Win $${Math.round(bet * 1.8)} on a pair or $${bet * 3} on a triple.`
-                : "Not enough cash to place a bet."}
+          {canDoubleNow
+            ? `Risk your $${result!.payout} win on a 50/50 Double or Nothing, spin again, or cash out!`
+            : sessionDone
+              ? `Session complete (${net >= 0 ? `+$${net}` : `-$${Math.abs(net)}`}). Back to the board.`
+              : spinning
+                ? "Locking reels…"
+                : canSpinAgain && bet >= 50
+                  ? `Bet $${bet} → win up to $${bet * 6} on Triple 7s.`
+                  : "Not enough cash ($50 min) to keep spinning."}
         </p>
         <div className="trade-actions">
-          {settled ? (
-            <button type="button" className="casino-spin-btn" onClick={() => { sfx("confirm"); onDone(); }}>
-              Continue
+          {canDoubleNow ? (
+            <button
+              type="button"
+              className="casino-double-btn"
+              onClick={() => { sfx("click"); onDouble(); }}
+            >
+              2× Gamble (${result!.payout})
             </button>
-          ) : (
-            <>
-              <button type="button" className="casino-spin-btn" disabled={busy || bet <= 0 || cash < bet} onClick={spinNow}>
-                {spinning ? "Spinning…" : `Spin $${bet}`}
-              </button>
-              <button type="button" className="ghost" disabled={busy} onClick={() => onSpin(0)}>
-                Walk away
-              </button>
-            </>
-          )}
+          ) : null}
+          {canSpinAgain ? (
+            <button
+              type="button"
+              className="casino-spin-btn"
+              disabled={spinning || bet < 50 || liveCash < bet}
+              onClick={spinNow}
+            >
+              {spinning ? "Spinning…" : spins > 0 ? `Spin Again $${bet}` : `Spin $${bet}`}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={sessionDone ? "casino-spin-btn" : "ghost"}
+            disabled={spinning}
+            onClick={() => { sfx("confirm"); onDone(); }}
+          >
+            {sessionDone ? "Continue" : spins > 0 ? "Cash Out" : "Walk Away"}
+          </button>
         </div>
       </div>
     </div>
@@ -4166,6 +4621,13 @@ function buttonsFor(
     ];
   }
   if (state.phase === "extra") {
+    const p = actor(state);
+    if (state.bonusRoll && p && !p.out && p.jailTurns === 0) {
+      return [{ label: "Roll again (Free!)", price: "Doubles", action: { type: "path", pick: "walk" }, needsYou: true, roll: true }];
+    }
+    if (state.mode === "moves" && p && p.moves === 0) {
+      return [{ label: "End turn (0 moves!)", action: { type: "end" }, warn: true, needsYou: true }];
+    }
     return [{ label: "End turn", action: { type: "end" }, needsYou: true }];
   }
   return [];
@@ -5433,10 +5895,10 @@ function cellBox(col: number, row: number) {
 }
 
 function lane(space: (typeof TRACK)[number]) {
-  if (space.id === "home") return { cx: 0.7, cy: 0.28 };
-  if (space.id === "market") return { cx: 0.3, cy: 0.28 };
-  if (space.id === "dream") return { cx: 0.3, cy: 0.72 };
-  if (space.id === "rest") return { cx: 0.7, cy: 0.72 };
+  if (space.id === "home") return { cx: 0.66, cy: 0.44 };
+  if (space.id === "market") return { cx: 0.34, cy: 0.44 };
+  if (space.id === "dream") return { cx: 0.34, cy: 0.72 };
+  if (space.id === "rest") return { cx: 0.66, cy: 0.72 };
   if (space.side === "bottom") return { cx: 0.5, cy: 0.2 };
   if (space.side === "top") return { cx: 0.5, cy: 0.8 };
   if (space.side === "left") return { cx: 0.8, cy: 0.5 };
@@ -5448,6 +5910,99 @@ function slotOffset(index: number, count: number, side: (typeof TRACK)[number]["
   const t = (index - (count - 1) / 2) * Math.min(0.16, 0.52 / Math.max(1, count - 1));
   if (side === "bottom" || side === "top") return [t, 0];
   return [0, t];
+}
+
+function OfferDeedList({
+  state,
+  ids,
+  cash,
+  move,
+  empty,
+}: {
+  state: State;
+  ids: string[];
+  cash: number;
+  move: boolean;
+  empty: string;
+}) {
+  const deeds = ids
+    .map((id) => {
+      const co = companiesOf(state.world).find((c) => c.id === id);
+      if (co) {
+        const own = state.companies[co.id];
+        const set = setOf(co.set, state.world);
+        return {
+          id: co.id,
+          name: co.name,
+          logo: logoOf(co),
+          color: set.color,
+          tag: set.label,
+          value: co.price,
+          rent: co.rent[own?.level ?? 0],
+          level: own?.level ?? 0,
+        };
+      }
+      const st = storesOf(state.world).find((s) => s.id === id);
+      if (st) {
+        return {
+          id: st.id,
+          name: st.name,
+          logo: logoOf(st),
+          color: "#64748b",
+          tag: "Store",
+          value: 150,
+          rent: 25,
+          level: 0,
+        };
+      }
+      return null;
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
+  if (!deeds.length && !cash && !move) {
+    return <div className="offer-empty">{empty}</div>;
+  }
+
+  return (
+    <div className="offer-items">
+      {(cash > 0 || move) ? (
+        <div className="offer-tenders">
+          {cash > 0 ? (
+            <span className="offer-pill is-cash">
+              <PixelBill />
+              <b>${cash}</b>
+              <small>Cash</small>
+            </span>
+          ) : null}
+          {move ? (
+            <span className="offer-pill is-move">
+              <b>+1 Move</b>
+              <small>Ticket</small>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {deeds.length ? (
+        <div className="offer-deed-grid">
+          {deeds.map((d) => (
+            <div className="offer-deed" key={d.id} style={{ "--set": d.color } as CSSProperties}>
+              <span className="offer-deed-logo">
+                <BrandLogo id={d.logo} label={d.name} />
+              </span>
+              <div className="offer-deed-info">
+                <b>{d.name}</b>
+                <span>
+                  {d.tag} · ${d.value}
+                  {d.level === 2 ? " · Hotel" : d.level === 1 ? " · House" : ""}
+                </span>
+              </div>
+              <em className="offer-deed-rent">${d.rent}</em>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function OfferStall({
@@ -5466,56 +6021,92 @@ function OfferStall({
   const mineToTake = you.id === offer.to;
   const mineToSend = you.id === offer.from;
   if (!mineToTake && !mineToSend) return null;
+
+  const estValue = (ids: string[], cash: number, move: boolean) =>
+    ids.reduce((sum, id) => {
+      const co = companiesOf(state.world).find((c) => c.id === id);
+      if (co) return sum + co.price + (state.companies[co.id]?.level ?? 0) * Math.floor(co.price / 2);
+      return sum + (storesOf(state.world).some((s) => s.id === id) ? 150 : 0);
+    }, 0) + cash + (move ? 120 : 0);
+
+  const fromVal = estValue(offer.giveCompanies, offer.giveCash, offer.giveMove);
+  const toVal = estValue(offer.getCompanies, offer.getCash, offer.getMove);
+
   return (
     <div className="trade-desk offer-stall" onMouseEnter={sfxPlayHover}>
-      <div className="trade-banner">
-        <b>Private stall</b>
-        <em className={offer.fee ? "" : "free"}>{offer.fee ? `Desk $${offer.fee}` : "Free stall"}</em>
+      <div className="trade-banner offer-banner">
+        <div className="offer-banner-title">
+          <b>Private Stall</b>
+          <span>{mineToTake ? "Incoming Trade Offer" : "Offer Sent"}</span>
+        </div>
+        <em className="free">{offer.fee ? `Fee $${offer.fee}` : "$0 Fee"}</em>
       </div>
-      <div className="offer-heads">
-        <div>
-          <Portrait player={from} size={48} />
-          <small>Offers</small>
+
+      <div className="offer-board">
+        <section className="offer-col" style={{ "--player": from.color } as CSSProperties}>
+          <header className="offer-col-head">
+            <Portrait player={from} size={32} />
+            <div className="offer-col-who">
+              <small>{mineToSend ? "You offer" : "They offer"}</small>
+              <b>{from.name}</b>
+            </div>
+            <em className="offer-col-val">~${fromVal}</em>
+          </header>
+          <OfferDeedList
+            state={state}
+            ids={offer.giveCompanies}
+            cash={offer.giveCash}
+            move={offer.giveMove}
+            empty="Nothing offered"
+          />
+        </section>
+
+        <div className="offer-mid" aria-hidden>
+          <span className="offer-mid-badge">⇄</span>
         </div>
-        <span className="trade-swap"><span>⇄</span></span>
-        <div>
-          <Portrait player={to} size={48} />
-          <small>Must answer</small>
-        </div>
+
+        <section className="offer-col" style={{ "--player": to.color } as CSSProperties}>
+          <header className="offer-col-head">
+            <Portrait player={to} size={32} />
+            <div className="offer-col-who">
+              <small>{mineToTake ? "You give" : "You ask for"}</small>
+              <b>{to.name}</b>
+            </div>
+            <em className="offer-col-val">~${toVal}</em>
+          </header>
+          <OfferDeedList
+            state={state}
+            ids={offer.getCompanies}
+            cash={offer.getCash}
+            move={offer.getMove}
+            empty="Nothing requested"
+          />
+        </section>
       </div>
-      <div className="trade-slip offer-slip">
-        <div className="slip-side">
-          <small>{from.name}</small>
-          <DealBits ids={offer.giveCompanies} cash={offer.giveCash} move={offer.giveMove} empty="Nothing offered" world={state.world} />
-        </div>
-        <span className="slip-swap" aria-hidden>⇄</span>
-        <div className="slip-side">
-          <small>{to.name}</small>
-          <DealBits ids={offer.getCompanies} cash={offer.getCash} move={offer.getMove} empty="Nothing asked" world={state.world} />
-        </div>
-      </div>
-      {mineToSend ? (
-        <>
-          <p className="deal-ok">Waiting for an answer. Only you two can see this.</p>
-          <div className="trade-actions">
-            <button className="ghost" onClick={() => onPick("decline")}>
+
+      <div className="trade-bar offer-bar">
+        <p className="deal-ok">
+          {mineToSend
+            ? `Waiting for ${to.name} to accept or decline. Only you two see this stall.`
+            : `${from.name} wants to trade (~$${fromVal} for ~$${toVal}). Private between you two.`}
+        </p>
+        <div className="trade-actions">
+          {mineToSend ? (
+            <button type="button" className="ghost" onClick={() => onPick("decline")}>
               Pull deal
             </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="deal-ok">Accept or decline. Nobody else sees this stall.</p>
-          <div className="trade-actions">
-            <button className="go" onMouseEnter={sfxPlayHover} onClick={() => onPick("accept")}>
-              Accept
-            </button>
-            <button className="warn" onMouseEnter={sfxPlayHover} onClick={() => onPick("decline")}>
-              Decline
-            </button>
-          </div>
-        </>
-      )}
+          ) : (
+            <>
+              <button type="button" className="go" onMouseEnter={sfxPlayHover} onClick={() => onPick("accept")}>
+                Accept deal
+              </button>
+              <button type="button" className="warn" onMouseEnter={sfxPlayHover} onClick={() => onPick("decline")}>
+                Decline
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

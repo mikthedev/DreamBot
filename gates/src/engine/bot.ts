@@ -34,7 +34,7 @@ export function botAction(state: State): Action {
     return { type: "vault", pick };
   }
   if (state.phase === "casino") {
-    if (p.cash >= 600) return { type: "casino", bet: 50 };
+    if ((state.casinoSpins || 0) === 0 && p.cash >= 600) return { type: "casino", bet: 50 };
     return { type: "casino", bet: 0 };
   }
   if (state.phase === "card") return { type: "card" };
@@ -56,6 +56,7 @@ export function botAction(state: State): Action {
     return p.cash - cost >= 300;
   });
   if (build) return { type: "build", companyId: build.id };
+  if (state.bonusRoll && !p.out && p.jailTurns === 0) return { type: "path", pick: "walk" };
   return { type: "end" };
 }
 

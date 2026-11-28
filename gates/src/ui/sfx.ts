@@ -139,7 +139,9 @@ let sfxLevel = readLevel(SFX_VOL_KEY, DEFAULT_SFX);
 let armed = false;
 
 function readLevel(key: string, fallback: number) {
-  const n = Number(localStorage.getItem(key));
+  const raw = localStorage.getItem(key);
+  if (raw === null || raw.trim() === "") return fallback;
+  const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(1, Math.max(0, n));
 }
@@ -408,4 +410,5 @@ async function startTrack(kind: Kind) {
 
 if (typeof window !== "undefined") {
   window.addEventListener("pointerdown", armAudio, { once: true });
+  window.addEventListener("keydown", armAudio, { once: true });
 }
